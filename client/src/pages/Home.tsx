@@ -7,9 +7,18 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Search, BookOpen, Table2, Sparkles, ChevronRight } from "lucide-react";
+import { Search, BookOpen, Sparkles, TrendingUp } from "lucide-react";
 
 type VerbType = "GODAN" | "ICHIDAN" | "SURU" | "KURU";
+
+// 热门动词列表（模拟热词）
+const trendingVerbs = [
+  { verb: "推す", meaning: "推（偶像）", trend: "🔥" },
+  { verb: "バズる", meaning: "爆红", trend: "⚡" },
+  { verb: "映える", meaning: "上镜", trend: "📸" },
+  { verb: "盛る", meaning: "美化（照片）", trend: "✨" },
+  { verb: "エモい", meaning: "有情绪感", trend: "💫" },
+];
 
 export default function Home() {
   const [verbInput, setVerbInput] = useState("");
@@ -55,19 +64,17 @@ export default function Home() {
             <span className="text-2xl">🇯🇵</span>
             <h1 className="text-xl font-bold">Japanese Verb Master</h1>
           </div>
-          <nav className="hidden md:flex items-center gap-6 text-sm">
-            <a href="#tool" className="text-muted-foreground hover:text-foreground transition-colors">查询工具</a>
-            <a href="#guide" className="text-muted-foreground hover:text-foreground transition-colors">分类指南</a>
-            <a href="#table" className="text-muted-foreground hover:text-foreground transition-colors">对照表</a>
-            <a href="#examples" className="text-muted-foreground hover:text-foreground transition-colors">示例动词</a>
-          </nav>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="container py-8 md:py-12">
-        <Tabs defaultValue="tool" className="space-y-8">
-          <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-4">
+        <Tabs defaultValue="examples" className="space-y-8">
+          <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-3">
+            <TabsTrigger value="examples" className="gap-2">
+              <Sparkles className="h-4 w-4" />
+              <span className="hidden sm:inline">示例</span>
+            </TabsTrigger>
             <TabsTrigger value="tool" className="gap-2">
               <Search className="h-4 w-4" />
               <span className="hidden sm:inline">查询</span>
@@ -76,15 +83,84 @@ export default function Home() {
               <BookOpen className="h-4 w-4" />
               <span className="hidden sm:inline">指南</span>
             </TabsTrigger>
-            <TabsTrigger value="table" className="gap-2">
-              <Table2 className="h-4 w-4" />
-              <span className="hidden sm:inline">对照表</span>
-            </TabsTrigger>
-            <TabsTrigger value="examples" className="gap-2">
-              <Sparkles className="h-4 w-4" />
-              <span className="hidden sm:inline">示例</span>
-            </TabsTrigger>
           </TabsList>
+
+          {/* Examples Tab - 放在第一位 */}
+          <TabsContent value="examples" id="examples">
+            <div className="space-y-6">
+              {/* 热词推荐 */}
+              <Card className="border-primary/20 bg-primary/5">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <TrendingUp className="h-5 w-5 text-primary" />
+                    时下热词
+                  </CardTitle>
+                  <CardDescription>
+                    当下流行的日语动词，点击查看活用
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                    {trendingVerbs.map((item) => (
+                      <Button
+                        key={item.verb}
+                        variant="outline"
+                        className="h-auto py-4 flex-col items-start relative"
+                        onClick={() => handleExampleClick(item.verb)}
+                      >
+                        <span className="absolute top-2 right-2 text-lg">{item.trend}</span>
+                        <span className="text-lg font-medium">{item.verb}</span>
+                        <span className="text-xs text-muted-foreground mt-1">
+                          {item.meaning}
+                        </span>
+                      </Button>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* 常用动词示例 */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>常用动词示例</CardTitle>
+                  <CardDescription>
+                    按类型分类的常见动词，点击查看活用形式
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-6">
+                    {verbTypes?.map((type) => {
+                      const typeExamples = exampleVerbs?.filter(ex => ex.type === type.id);
+                      if (!typeExamples?.length) return null;
+                      return (
+                        <div key={type.id}>
+                          <h3 className="font-medium mb-3 flex items-center gap-2">
+                            <Badge variant="outline">{type.name}</Badge>
+                          </h3>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                            {typeExamples.map((ex) => (
+                              <Button
+                                key={ex.verb}
+                                variant="outline"
+                                className="h-auto py-3 flex-col items-start"
+                                onClick={() => handleExampleClick(ex.verb)}
+                              >
+                                <span className="text-lg font-medium">{ex.verb}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  {ex.meaning}
+                                </span>
+                              </Button>
+                            ))}
+                          </div>
+                          {type.id !== 'KURU' && <Separator className="mt-6" />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
 
           {/* Tool Tab */}
           <TabsContent value="tool" id="tool">
@@ -201,200 +277,158 @@ export default function Home() {
             </div>
           </TabsContent>
 
-          {/* Guide Tab */}
+          {/* Guide Tab - 合并指南和对照表 */}
           <TabsContent value="guide" id="guide">
-            <div className="max-w-4xl mx-auto mb-6">
-              <Card className="bg-primary/5 border-primary/20">
-                <CardContent className="pt-6">
-                  <p className="text-center text-muted-foreground">
-                    日语动词分为四种类型，系统会根据词尾自动识别。了解这些规则有助于更好地理解日语动词变化。
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
-            <div className="grid md:grid-cols-2 gap-6">
-              {verbTypes?.map((type) => (
-                <Card key={type.id} className="overflow-hidden">
-                  <CardHeader className="bg-muted/50">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg">{type.name}</CardTitle>
-                      <Badge variant="outline">{type.nameJa}</Badge>
-                    </div>
+            <div className="space-y-8">
+              {/* 动词分类指南 */}
+              <div>
+                <h2 className="text-2xl font-bold mb-4">动词分类指南</h2>
+                <div className="max-w-4xl mb-6">
+                  <Card className="bg-primary/5 border-primary/20">
+                    <CardContent className="pt-6">
+                      <p className="text-center text-muted-foreground">
+                        日语动词分为四种类型，系统会根据词尾自动识别。了解这些规则有助于更好地理解日语动词变化。
+                      </p>
+                    </CardContent>
+                  </Card>
+                </div>
+                <div className="grid md:grid-cols-2 gap-6">
+                  {verbTypes?.map((type) => (
+                    <Card key={type.id} className="overflow-hidden">
+                      <CardHeader className="bg-muted/50">
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-lg">{type.name}</CardTitle>
+                          <Badge variant="outline">{type.nameJa}</Badge>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pt-6 space-y-4">
+                        <p className="text-muted-foreground">{type.description}</p>
+                        <div>
+                          <p className="text-sm font-medium mb-2">词尾特征：</p>
+                          <div className="flex flex-wrap gap-2">
+                            {type.endings.map((ending) => (
+                              <Badge key={ending} variant="secondary">{ending}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <Separator />
+                        <div>
+                          <p className="text-sm font-medium mb-2">常见例词：</p>
+                          <div className="flex flex-wrap gap-2">
+                            {type.examples.slice(0, 5).map((ex) => (
+                              <span key={ex} className="text-sm text-muted-foreground">
+                                {ex}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+
+              <Separator className="my-8" />
+
+              {/* 活用形式对照表 */}
+              <div>
+                <h2 className="text-2xl font-bold mb-4">活用形式对照表</h2>
+                <Card>
+                  <CardHeader>
+                    <CardDescription>
+                      所有活用形式的详细说明和用法对比
+                    </CardDescription>
                   </CardHeader>
-                  <CardContent className="pt-6 space-y-4">
-                    <p className="text-muted-foreground">{type.description}</p>
-                    <div>
-                      <p className="text-sm font-medium mb-2">词尾特征：</p>
-                      <div className="flex flex-wrap gap-2">
-                        {type.endings.map((ending) => (
-                          <Badge key={ending} variant="secondary">{ending}</Badge>
-                        ))}
-                      </div>
-                    </div>
-                    <Separator />
-                    <div>
-                      <p className="text-sm font-medium mb-2">常见例词：</p>
-                      <div className="flex flex-wrap gap-2">
-                        {type.examples.map((ex) => (
-                          <Button
-                            key={ex}
-                            variant="ghost"
-                            size="sm"
-                            className="h-auto py-1"
-                            onClick={() => handleExampleClick(ex)}
-                          >
-                            {ex}
-                            <ChevronRight className="h-3 w-3 ml-1" />
-                          </Button>
-                        ))}
-                      </div>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b bg-muted/50">
+                            <th className="text-left p-4 font-medium">活用形式</th>
+                            <th className="text-left p-4 font-medium">日语名称</th>
+                            <th className="text-left p-4 font-medium">用途说明</th>
+                            <th className="text-left p-4 font-medium">五段例 (飲む)</th>
+                            <th className="text-left p-4 font-medium">一段例 (食べる)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr className="border-b hover:bg-muted/30">
+                            <td className="p-4 font-medium">原形</td>
+                            <td className="p-4 text-muted-foreground">辞書形</td>
+                            <td className="p-4">字典形式，基本形</td>
+                            <td className="p-4">飲む</td>
+                            <td className="p-4">食べる</td>
+                          </tr>
+                          <tr className="border-b hover:bg-muted/30">
+                            <td className="p-4 font-medium">否定式</td>
+                            <td className="p-4 text-muted-foreground">ない形</td>
+                            <td className="p-4">表示否定含义</td>
+                            <td className="p-4">飲まない</td>
+                            <td className="p-4">食べない</td>
+                          </tr>
+                          <tr className="border-b hover:bg-muted/30">
+                            <td className="p-4 font-medium">礼貌式</td>
+                            <td className="p-4 text-muted-foreground">ます形</td>
+                            <td className="p-4">正式、礼貌的表达</td>
+                            <td className="p-4">飲みます</td>
+                            <td className="p-4">食べます</td>
+                          </tr>
+                          <tr className="border-b hover:bg-muted/30">
+                            <td className="p-4 font-medium">て形</td>
+                            <td className="p-4 text-muted-foreground">て形</td>
+                            <td className="p-4">连接动作、请求</td>
+                            <td className="p-4">飲んで</td>
+                            <td className="p-4">食べて</td>
+                          </tr>
+                          <tr className="border-b hover:bg-muted/30">
+                            <td className="p-4 font-medium">过去式</td>
+                            <td className="p-4 text-muted-foreground">た形</td>
+                            <td className="p-4">表示过去的动作</td>
+                            <td className="p-4">飲んだ</td>
+                            <td className="p-4">食べた</td>
+                          </tr>
+                          <tr className="border-b hover:bg-muted/30">
+                            <td className="p-4 font-medium">可能形</td>
+                            <td className="p-4 text-muted-foreground">可能形</td>
+                            <td className="p-4">表示能力或可能性</td>
+                            <td className="p-4">飲める</td>
+                            <td className="p-4">食べられる</td>
+                          </tr>
+                          <tr className="border-b hover:bg-muted/30">
+                            <td className="p-4 font-medium">被动形</td>
+                            <td className="p-4 text-muted-foreground">受身形</td>
+                            <td className="p-4">表示被动语态</td>
+                            <td className="p-4">飲まれる</td>
+                            <td className="p-4">食べられる</td>
+                          </tr>
+                          <tr className="border-b hover:bg-muted/30">
+                            <td className="p-4 font-medium">使役形</td>
+                            <td className="p-4 text-muted-foreground">使役形</td>
+                            <td className="p-4">表示使役关系</td>
+                            <td className="p-4">飲ませる</td>
+                            <td className="p-4">食べさせる</td>
+                          </tr>
+                          <tr className="border-b hover:bg-muted/30">
+                            <td className="p-4 font-medium">命令形</td>
+                            <td className="p-4 text-muted-foreground">命令形</td>
+                            <td className="p-4">表示命令或指示</td>
+                            <td className="p-4">飲め</td>
+                            <td className="p-4">食べろ</td>
+                          </tr>
+                          <tr className="hover:bg-muted/30">
+                            <td className="p-4 font-medium">意向形</td>
+                            <td className="p-4 text-muted-foreground">意向形</td>
+                            <td className="p-4">表示意图或推测</td>
+                            <td className="p-4">飲もう</td>
+                            <td className="p-4">食べよう</td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+              </div>
             </div>
-          </TabsContent>
-
-          {/* Table Tab */}
-          <TabsContent value="table" id="table">
-            <Card>
-              <CardHeader>
-                <CardTitle>活用形式对照表</CardTitle>
-                <CardDescription>
-                  所有活用形式的详细说明和用法
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b bg-muted/50">
-                        <th className="text-left p-4 font-medium">活用形式</th>
-                        <th className="text-left p-4 font-medium">日语名称</th>
-                        <th className="text-left p-4 font-medium">用途说明</th>
-                        <th className="text-left p-4 font-medium">五段例 (飲む)</th>
-                        <th className="text-left p-4 font-medium">一段例 (食べる)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr className="border-b hover:bg-muted/30">
-                        <td className="p-4 font-medium">原形</td>
-                        <td className="p-4 text-muted-foreground">辞書形</td>
-                        <td className="p-4">字典形式，基本形</td>
-                        <td className="p-4">飲む</td>
-                        <td className="p-4">食べる</td>
-                      </tr>
-                      <tr className="border-b hover:bg-muted/30">
-                        <td className="p-4 font-medium">否定式</td>
-                        <td className="p-4 text-muted-foreground">ない形</td>
-                        <td className="p-4">表示否定含义</td>
-                        <td className="p-4">飲まない</td>
-                        <td className="p-4">食べない</td>
-                      </tr>
-                      <tr className="border-b hover:bg-muted/30">
-                        <td className="p-4 font-medium">礼貌式</td>
-                        <td className="p-4 text-muted-foreground">ます形</td>
-                        <td className="p-4">正式、礼貌的表达</td>
-                        <td className="p-4">飲みます</td>
-                        <td className="p-4">食べます</td>
-                      </tr>
-                      <tr className="border-b hover:bg-muted/30">
-                        <td className="p-4 font-medium">て形</td>
-                        <td className="p-4 text-muted-foreground">て形</td>
-                        <td className="p-4">连接动作、请求</td>
-                        <td className="p-4">飲んで</td>
-                        <td className="p-4">食べて</td>
-                      </tr>
-                      <tr className="border-b hover:bg-muted/30">
-                        <td className="p-4 font-medium">过去式</td>
-                        <td className="p-4 text-muted-foreground">た形</td>
-                        <td className="p-4">表示过去的动作</td>
-                        <td className="p-4">飲んだ</td>
-                        <td className="p-4">食べた</td>
-                      </tr>
-                      <tr className="border-b hover:bg-muted/30">
-                        <td className="p-4 font-medium">可能形</td>
-                        <td className="p-4 text-muted-foreground">可能形</td>
-                        <td className="p-4">表示能力或可能性</td>
-                        <td className="p-4">飲める</td>
-                        <td className="p-4">食べられる</td>
-                      </tr>
-                      <tr className="border-b hover:bg-muted/30">
-                        <td className="p-4 font-medium">被动形</td>
-                        <td className="p-4 text-muted-foreground">受身形</td>
-                        <td className="p-4">表示被动语态</td>
-                        <td className="p-4">飲まれる</td>
-                        <td className="p-4">食べられる</td>
-                      </tr>
-                      <tr className="border-b hover:bg-muted/30">
-                        <td className="p-4 font-medium">使役形</td>
-                        <td className="p-4 text-muted-foreground">使役形</td>
-                        <td className="p-4">表示使役关系</td>
-                        <td className="p-4">飲ませる</td>
-                        <td className="p-4">食べさせる</td>
-                      </tr>
-                      <tr className="border-b hover:bg-muted/30">
-                        <td className="p-4 font-medium">命令形</td>
-                        <td className="p-4 text-muted-foreground">命令形</td>
-                        <td className="p-4">表示命令或指示</td>
-                        <td className="p-4">飲め</td>
-                        <td className="p-4">食べろ</td>
-                      </tr>
-                      <tr className="hover:bg-muted/30">
-                        <td className="p-4 font-medium">意向形</td>
-                        <td className="p-4 text-muted-foreground">意向形</td>
-                        <td className="p-4">表示意图或推测</td>
-                        <td className="p-4">飲もう</td>
-                        <td className="p-4">食べよう</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Examples Tab */}
-          <TabsContent value="examples" id="examples">
-            <Card>
-              <CardHeader>
-                <CardTitle>示例动词库</CardTitle>
-                <CardDescription>
-                  点击任意动词快速查看其活用形式
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-6">
-                  {verbTypes?.map((type) => {
-                    const typeExamples = exampleVerbs?.filter(ex => ex.type === type.id);
-                    if (!typeExamples?.length) return null;
-                    return (
-                      <div key={type.id}>
-                        <h3 className="font-medium mb-3 flex items-center gap-2">
-                          <Badge variant="outline">{type.name}</Badge>
-                        </h3>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                          {typeExamples.map((ex) => (
-                            <Button
-                              key={ex.verb}
-                              variant="outline"
-                              className="h-auto py-3 flex-col items-start"
-                              onClick={() => handleExampleClick(ex.verb)}
-                            >
-                              <span className="text-lg font-medium">{ex.verb}</span>
-                              <span className="text-xs text-muted-foreground">
-                                {ex.meaning} ({ex.romaji})
-                              </span>
-                            </Button>
-                          ))}
-                        </div>
-                        <Separator className="mt-6" />
-                      </div>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
           </TabsContent>
         </Tabs>
       </main>

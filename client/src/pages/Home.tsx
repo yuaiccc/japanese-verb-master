@@ -3,13 +3,6 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -20,26 +13,24 @@ type VerbType = "GODAN" | "ICHIDAN" | "SURU" | "KURU";
 
 export default function Home() {
   const [verbInput, setVerbInput] = useState("");
-  const [selectedType, setSelectedType] = useState<VerbType | "">("");
-  const [queryParams, setQueryParams] = useState<{ verb: string; type: VerbType } | null>(null);
+  const [queryVerb, setQueryVerb] = useState("");
 
   const { data: verbTypes } = trpc.verb.getTypes.useQuery();
   const { data: exampleVerbs } = trpc.verb.getExamples.useQuery();
   const { data: conjugationResult, isLoading, error } = trpc.verb.conjugate.useQuery(
-    queryParams!,
-    { enabled: !!queryParams }
+    { verb: queryVerb },
+    { enabled: !!queryVerb }
   );
 
   const handleSearch = () => {
-    if (verbInput && selectedType) {
-      setQueryParams({ verb: verbInput, type: selectedType as VerbType });
+    if (verbInput) {
+      setQueryVerb(verbInput);
     }
   };
 
-  const handleExampleClick = (verb: string, type: VerbType) => {
+  const handleExampleClick = (verb: string) => {
     setVerbInput(verb);
-    setSelectedType(type);
-    setQueryParams({ verb, type });
+    setQueryVerb(verb);
   };
 
   // 活用形式名称映射
@@ -73,21 +64,8 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Hero Section */}
-      <section className="container py-12 md:py-20">
-        <div className="text-center max-w-3xl mx-auto">
-          <Badge variant="secondary" className="mb-4">精准 · 高效 · 专业</Badge>
-          <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">
-            日语动词活用专家
-          </h2>
-          <p className="text-lg text-muted-foreground mb-8">
-            输入任意日语动词，即时获取所有活用形式。支持五段、一段、サ变、カ变四种动词类型。
-          </p>
-        </div>
-      </section>
-
       {/* Main Content */}
-      <main className="container pb-20">
+      <main className="container py-8 md:py-12">
         <Tabs defaultValue="tool" className="space-y-8">
           <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-4">
             <TabsTrigger value="tool" className="gap-2">
@@ -119,7 +97,7 @@ export default function Home() {
                     动词活用查询
                   </CardTitle>
                   <CardDescription>
-                    输入动词原形并选择类型，获取完整活用形式
+                    输入动词原形，系统自动识别类型并显示所有活用形式
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
@@ -127,33 +105,18 @@ export default function Home() {
                     <Label htmlFor="verb">动词原形</Label>
                     <Input
                       id="verb"
-                      placeholder="例如：飲む、食べる、勉強する"
+                      placeholder="例如：飲む、食べる、勉強する、来る"
                       value={verbInput}
                       onChange={(e) => setVerbInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleSearch()}
                       className="text-lg"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="type">动词类型</Label>
-                    <Select value={selectedType} onValueChange={(v) => setSelectedType(v as VerbType)}>
-                      <SelectTrigger id="type">
-                        <SelectValue placeholder="选择动词类型" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {verbTypes?.map((type) => (
-                          <SelectItem key={type.id} value={type.id}>
-                            {type.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
                   <Button 
                     onClick={handleSearch} 
                     className="w-full" 
                     size="lg"
-                    disabled={!verbInput || !selectedType}
+                    disabled={!verbInput}
                   >
                     <Search className="mr-2 h-4 w-4" />
                     查询活用
@@ -163,12 +126,12 @@ export default function Home() {
                   <div className="pt-4">
                     <p className="text-sm text-muted-foreground mb-3">快速示例：</p>
                     <div className="flex flex-wrap gap-2">
-                      {exampleVerbs?.slice(0, 6).map((ex) => (
+                      {exampleVerbs?.slice(0, 8).map((ex) => (
                         <Button
                           key={ex.verb}
                           variant="outline"
                           size="sm"
-                          onClick={() => handleExampleClick(ex.verb, ex.type)}
+                          onClick={() => handleExampleClick(ex.verb)}
                         >
                           {ex.verb}
                         </Button>
@@ -203,14 +166,17 @@ export default function Home() {
                   {!conjugationResult && !isLoading && !error && (
                     <div className="text-center py-12 text-muted-foreground">
                       <Search className="h-12 w-12 mx-auto mb-4 opacity-20" />
-                      <p>请输入动词并选择类型</p>
+                      <p>请输入动词原形</p>
+                      <p className="text-sm mt-2">系统将自动识别动词类型</p>
                     </div>
                   )}
                   {conjugationResult && (
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 mb-4">
                         <span className="text-2xl font-bold">{conjugationResult.dictionaryForm}</span>
-                        <Badge>{verbTypes?.find(t => t.id === conjugationResult.verbType)?.name}</Badge>
+                        <Badge variant="secondary">
+                          {verbTypes?.find(t => t.id === conjugationResult.verbType)?.name}
+                        </Badge>
                       </div>
                       <div className="grid gap-2">
                         {Object.entries(conjugationLabels).map(([key, label]) => (
@@ -237,6 +203,15 @@ export default function Home() {
 
           {/* Guide Tab */}
           <TabsContent value="guide" id="guide">
+            <div className="max-w-4xl mx-auto mb-6">
+              <Card className="bg-primary/5 border-primary/20">
+                <CardContent className="pt-6">
+                  <p className="text-center text-muted-foreground">
+                    日语动词分为四种类型，系统会根据词尾自动识别。了解这些规则有助于更好地理解日语动词变化。
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
             <div className="grid md:grid-cols-2 gap-6">
               {verbTypes?.map((type) => (
                 <Card key={type.id} className="overflow-hidden">
@@ -266,11 +241,7 @@ export default function Home() {
                             variant="ghost"
                             size="sm"
                             className="h-auto py-1"
-                            onClick={() => {
-                              setVerbInput(ex);
-                              setSelectedType(type.id);
-                              setQueryParams({ verb: ex, type: type.id });
-                            }}
+                            onClick={() => handleExampleClick(ex)}
                           >
                             {ex}
                             <ChevronRight className="h-3 w-3 ml-1" />
@@ -408,7 +379,7 @@ export default function Home() {
                               key={ex.verb}
                               variant="outline"
                               className="h-auto py-3 flex-col items-start"
-                              onClick={() => handleExampleClick(ex.verb, ex.type)}
+                              onClick={() => handleExampleClick(ex.verb)}
                             >
                               <span className="text-lg font-medium">{ex.verb}</span>
                               <span className="text-xs text-muted-foreground">
@@ -432,7 +403,7 @@ export default function Home() {
       <footer className="border-t py-8 bg-muted/30">
         <div className="container text-center text-sm text-muted-foreground">
           <p>Japanese Verb Master - 日语动词活用专家</p>
-          <p className="mt-2">精准计算日语动词的所有活用形式</p>
+          <p className="mt-2">自动识别动词类型，精准计算所有活用形式</p>
         </div>
       </footer>
     </div>

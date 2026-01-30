@@ -208,6 +208,59 @@ function conjugateKuru(dictionaryForm: string): ConjugationResult {
   };
 }
 
+// 自动识别动词类型
+export function detectVerbType(verb: string): VerbType {
+  // 特殊情况：来る
+  if (verb === '来る' || verb.endsWith('来る')) {
+    return 'KURU';
+  }
+  
+  // サ变动词：以する结尾
+  if (verb.endsWith('する')) {
+    return 'SURU';
+  }
+  
+  // 不以る结尾的都是五段动词
+  if (!verb.endsWith('る')) {
+    return 'GODAN';
+  }
+  
+  // 先检查常见的一段动词（汉字+る）
+  const ichidanCommon = [
+    '見る', '寝る', '着る', '降りる', '足りる', '信じる', '感じる'
+  ];
+  
+  if (ichidanCommon.includes(verb)) {
+    return 'ICHIDAN';
+  }
+  
+  // 检查常见的五段例外（以いる/える结尾但是五段）
+  const godanExceptions = [
+    '切る', '走る', '帰る', '入る', '知る', '要る', '減る', '焦る',
+    '限る', '蹴る', '滑る', '握る', '練る', '参る', '交じる', '嘲る'
+  ];
+  
+  if (godanExceptions.includes(verb)) {
+    return 'GODAN';
+  }
+  
+  // 检查是否以いる或える结尾（假名）
+  if (verb.endsWith('いる') || verb.endsWith('きる') || verb.endsWith('ぎる') || 
+      verb.endsWith('しる') || verb.endsWith('じる') || verb.endsWith('ちる') || 
+      verb.endsWith('にる') || verb.endsWith('ひる') || verb.endsWith('びる') || 
+      verb.endsWith('ぴる') || verb.endsWith('みる') || verb.endsWith('りる') ||
+      verb.endsWith('える') || verb.endsWith('ける') || verb.endsWith('げる') || 
+      verb.endsWith('せる') || verb.endsWith('ぜる') || verb.endsWith('てる') || 
+      verb.endsWith('でる') || verb.endsWith('ねる') || verb.endsWith('へる') || 
+      verb.endsWith('べる') || verb.endsWith('ぺる') || verb.endsWith('める') || 
+      verb.endsWith('れる')) {
+    return 'ICHIDAN';
+  }
+  
+  // 其他以る结尾的都是五段动词
+  return 'GODAN';
+}
+
 // 主活用函数
 export function conjugate(dictionaryForm: string, verbType: VerbType): ConjugationResult {
   switch (verbType) {

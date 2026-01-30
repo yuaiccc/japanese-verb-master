@@ -3,7 +3,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
-import { conjugate, verbTypes, exampleVerbs, VerbType } from "./conjugation";
+import { conjugate, verbTypes, exampleVerbs, VerbType, detectVerbType } from "./conjugation";
 
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
@@ -21,14 +21,24 @@ export const appRouter = router({
 
   // 动词活用 API
   verb: router({
-    // 获取动词活用结果
+    // 自动识别并获取动词活用结果
     conjugate: publicProcedure
       .input(z.object({
         verb: z.string().min(1),
-        type: z.enum(['GODAN', 'ICHIDAN', 'SURU', 'KURU'])
+        type: z.enum(['GODAN', 'ICHIDAN', 'SURU', 'KURU']).optional()
       }))
       .query(({ input }) => {
-        return conjugate(input.verb, input.type as VerbType);
+        const verbType = input.type || detectVerbType(input.verb);
+        return conjugate(input.verb, verbType as VerbType);
+      }),
+    
+    // 仅识别动词类型
+    detectType: publicProcedure
+      .input(z.object({
+        verb: z.string().min(1)
+      }))
+      .query(({ input }) => {
+        return { verb: input.verb, type: detectVerbType(input.verb) };
       }),
     
     // 获取动词类型列表

@@ -63,6 +63,10 @@
             </div>
           </div>
           
+          <div v-if="loadingAi || (aiProgress > 0 && aiProgress < 100)" class="ai-progress-container">
+            <div class="ai-progress-bar" :style="{ width: aiProgress + '%' }"></div>
+          </div>
+
           <div v-if="loadingAi && !aiRawExplanation" class="ai-loading">
             <div class="spinner"></div>
             <p>Ollama 正在思考中，请稍候...</p>
@@ -194,7 +198,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, computed } from 'vue';
+import { ref, watch, onMounted, computed, onUnmounted } from 'vue';
 import axios from 'axios';
 import { marked } from 'marked';
 
@@ -207,6 +211,8 @@ const aiRawExplanation = ref('');
 const verificationStatus = ref({});
 const loading = ref(false);
 const loadingAi = ref(false);
+const aiProgress = ref(0);
+let aiProgressInterval = null;
 const error = ref('');
 const aiError = ref('');
 const showSuggestions = ref(false);
@@ -288,6 +294,29 @@ const hideSuggestionsWithDelay = () => {
   }, 200);
 };
 
+const startProgress = () => {
+  aiProgress.value = 0;
+  if (aiProgressInterval) clearInterval(aiProgressInterval);
+  // 假设通常响应在 6-10 秒左右
+  aiProgressInterval = setInterval(() => {
+    if (aiProgress.value < 90) {
+      aiProgress.value += (90 - aiProgress.value) * 0.1;
+    }
+  }, 500);
+};
+
+const completeProgress = () => {
+  if (aiProgressInterval) clearInterval(aiProgressInterval);
+  aiProgress.value = 100;
+  setTimeout(() => {
+    aiProgress.value = 0;
+  }, 500);
+};
+
+onUnmounted(() => {
+  if (aiProgressInterval) clearInterval(aiProgressInterval);
+});
+
 const conjugate = async () => {
   error.value = '';
   result.value = null;
@@ -312,6 +341,11 @@ const conjugate = async () => {
       }
     });
     result.value = response.data;
+    
+    // 如果返回了合法的 dictionaryForm，将其同步回输入框（包含汉字转换）
+    if (result.value.dictionaryForm) {
+      form.value.verb = result.value.dictionaryForm;
+    }
     
     // 自动触发 AI 解析
     fetchAiExplanation();
@@ -338,6 +372,7 @@ const fetchAiExplanation = async () => {
   verificationStatus.value = {};
   
   try {
+    startProgress();
     const response = await fetch('/api/ai-explain', {
       method: 'POST',
       headers: {
@@ -375,29 +410,57 @@ const fetchAiExplanation = async () => {
         if (eventStr.startsWith('data: ')) {
           const dataStr = eventStr.slice(6);
           if (dataStr === '[DONE]') {
+            completeProgress();
             break;
           }
           try {
             const data = JSON.parse(dataStr);
             if (data.error) {
               aiError.value = data.error;
+              completeProgress();
             } else if (data.content) {
               fullAiText += data.content;
               
               // 尝试匹配 AI 返回的 JSON 代码块
-              const jsonMatch = fullAiText.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
+              const jsonMatch = fullAiText.match(/```(?:json)?\s*\n([\s\S]*?)(?:\n```|$)/i);
               if (jsonMatch) {
                 try {
-                  verificationStatus.value = JSON.parse(jsonMatch[1]);
-                  // JSON 之后的内容作为解释显示
-                  aiRawExplanation.value = fullAiText.substring(jsonMatch.index + jsonMatch[0].length).trim();
+                  // 如果代码块完整，直接解析
+                  const parsed = JSON.parse(jsonMatch[1]);
+                  verificationStatus.value = parsed;
+                  aiRawExplanation.value = fullAiText.substring(0, jsonMatch.index).trim();
                 } catch (e) {
-                  // JSON 解析失败说明还在流式输出 JSON，忽略
+                  // JSON 解析失败说明还在流式输出 JSON，尝试用部分匹配提前点亮 ✅
+                  const partialJson = jsonMatch[1];
+                  const items = partialJson.split(/},?/);
+                  for (let item of items) {
+                    const keyMatch = item.match(/"([a-zA-Z]+)"\s*:\s*\{/);
+                    const isCorrectMatch = item.match(/"isCorrect"\s*:\s*(true|false)/);
+                    if (keyMatch && isCorrectMatch) {
+                      const key = keyMatch[1];
+                      const isCorrect = isCorrectMatch[1] === 'true';
+                      // 简单提取 correction（如果不完整可能提取不到，但主要是为了尽早显示正确状态）
+                      const correctionMatch = item.match(/"correction"\s*:\s*"([^"]*)"/);
+                      const correction = correctionMatch ? correctionMatch[1] : "";
+                      
+                      if (!verificationStatus.value[key]) {
+                        verificationStatus.value = {
+                          ...verificationStatus.value,
+                          [key]: { isCorrect, correction }
+                        };
+                      }
+                    }
+                  }
+                  aiRawExplanation.value = fullAiText.substring(0, jsonMatch.index).trim();
                 }
               } else {
-                // 如果还没有完整的 JSON 块，且不是以 JSON 块开头，直接显示
-                if (!fullAiText.trim().startsWith('```')) {
+                // 如果还没有遇到 JSON 块开头，直接显示当前所有内容
+                if (!fullAiText.includes('```')) {
                   aiRawExplanation.value = fullAiText;
+                } else {
+                  // 如果遇到了块开头，但还没闭合，只显示开头前面的部分
+                  const blockStart = fullAiText.indexOf('```');
+                  aiRawExplanation.value = fullAiText.substring(0, blockStart).trim();
                 }
               }
             }
@@ -409,6 +472,7 @@ const fetchAiExplanation = async () => {
     }
   } catch (err) {
     aiError.value = err.message || 'AI 解析请求失败';
+    completeProgress();
   } finally {
     loadingAi.value = false;
   }
@@ -683,6 +747,22 @@ const fetchAiExplanation = async () => {
 }
 
 /* AI 解释区域样式 */
+.ai-progress-container {
+  width: 100%;
+  height: 4px;
+  background-color: #edf2f7;
+  border-radius: 2px;
+  margin-bottom: 15px;
+  overflow: hidden;
+}
+
+.ai-progress-bar {
+  height: 100%;
+  background-color: #667eea;
+  transition: width 0.3s ease;
+  border-radius: 2px;
+}
+
 .ai-loading {
   display: flex;
   align-items: center;
@@ -752,8 +832,15 @@ const fetchAiExplanation = async () => {
   color: #999;
 }
 
+@keyframes popIn {
+  0% { transform: scale(0.5); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
 .success-check {
   color: #38a169;
+  animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  display: inline-block;
 }
 
 .error-correction {
@@ -763,6 +850,8 @@ const fetchAiExplanation = async () => {
   padding: 2px 6px;
   border-radius: 4px;
   border: 1px solid #fed7d7;
+  animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  display: inline-block;
 }
 
 .model-select {

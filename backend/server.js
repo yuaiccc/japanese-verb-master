@@ -3,6 +3,15 @@ import cors from 'cors';
 import kuromoji from 'kuromoji';
 import * as wanakana from 'wanakana';
 import { conjugate } from './conjugationEngine.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// 读取动词库
+const commonVerbs = JSON.parse(fs.readFileSync(path.join(__dirname, 'common-verbs.json'), 'utf8'));
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -69,6 +78,28 @@ function detectVerbType(verb) {
 // 健康检查
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', dictionaryReady: !!tokenizer });
+});
+
+// 动词自动补全 API
+app.get('/api/suggest', (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim() === '') {
+      return res.json([]);
+    }
+
+    const query = q.toLowerCase().trim();
+    const suggestions = commonVerbs.filter(verb => {
+      return verb.kanji.includes(query) || 
+             verb.kana.includes(query) || 
+             verb.romaji.includes(query) ||
+             verb.meaning.includes(query);
+    }).slice(0, 8); // 最多返回8条记录，避免前端渲染过大
+
+    res.json(suggestions);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch suggestions' });
+  }
 });
 
 // 动词活用 API

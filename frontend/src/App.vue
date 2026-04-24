@@ -180,9 +180,8 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, watch } from 'vue';
 import axios from 'axios';
-import commonVerbs from './common-verbs.json';
 
 const form = ref({
   verb: ''
@@ -192,6 +191,8 @@ const result = ref(null);
 const loading = ref(false);
 const error = ref('');
 const showSuggestions = ref(false);
+const suggestions = ref([]);
+let suggestTimeout = null;
 
 const verbTypeMap = {
   GODAN: '五段动词',
@@ -200,18 +201,27 @@ const verbTypeMap = {
   KURU: 'カ变动词'
 };
 
-// 联想补全计算属性
-const suggestions = computed(() => {
-  const query = form.value.verb.toLowerCase().trim();
-  if (!query) return [];
+// 监听输入，从后端获取联想补全
+watch(() => form.value.verb, (newVal) => {
+  if (suggestTimeout) clearTimeout(suggestTimeout);
   
-  // 匹配 kanji, kana 或 romaji 中包含用户输入的动词
-  return commonVerbs.filter(verb => {
-    return verb.kanji.includes(query) || 
-           verb.kana.includes(query) || 
-           verb.romaji.includes(query) ||
-           verb.meaning.includes(query);
-  }).slice(0, 8); // 最多显示8个建议
+  if (!newVal || newVal.trim() === '') {
+    suggestions.value = [];
+    return;
+  }
+
+  // 防抖，避免每次击键都发请求
+  suggestTimeout = setTimeout(async () => {
+    try {
+      const response = await axios.get('/api/suggest', {
+        params: { q: newVal }
+      });
+      suggestions.value = response.data;
+    } catch (err) {
+      console.error('获取联想失败', err);
+      suggestions.value = [];
+    }
+  }, 200);
 });
 
 const selectSuggestion = (item) => {

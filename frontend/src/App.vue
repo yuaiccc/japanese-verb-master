@@ -88,41 +88,21 @@
               <span class="label">动词类型</span>
               <span class="value">{{ verbTypeMap[result.verbType] || result.verbType }}</span>
             </div>
-            <div class="result-item">
-              <span class="label">否定式</span>
-              <span class="value">{{ result.negative }}</span>
-            </div>
-            <div class="result-item">
-              <span class="label">礼貌式</span>
-              <span class="value">{{ result.polite }}</span>
-            </div>
-            <div class="result-item">
-              <span class="label">て形</span>
-              <span class="value">{{ result.teForm }}</span>
-            </div>
-            <div class="result-item">
-              <span class="label">过去式</span>
-              <span class="value">{{ result.taForm }}</span>
-            </div>
-            <div class="result-item">
-              <span class="label">可能形</span>
-              <span class="value">{{ result.potential }}</span>
-            </div>
-            <div class="result-item">
-              <span class="label">被动形</span>
-              <span class="value">{{ result.passive }}</span>
-            </div>
-            <div class="result-item">
-              <span class="label">使役形</span>
-              <span class="value">{{ result.causative }}</span>
-            </div>
-            <div class="result-item">
-              <span class="label">命令形</span>
-              <span class="value">{{ result.imperative }}</span>
-            </div>
-            <div class="result-item">
-              <span class="label">意向形</span>
-              <span class="value">{{ result.volitional }}</span>
+            
+            <div class="result-item" v-for="item in conjugationItems" :key="item.key">
+              <span class="label">{{ item.label }}</span>
+              <span class="value">
+                <span :class="{ 'text-strike': verificationStatus[item.key] && !verificationStatus[item.key].isCorrect }">
+                  {{ result[item.key] }}
+                </span>
+                <span class="verify-badge" v-if="loadingAi && !verificationStatus[item.key]">
+                  <span class="spinner-small" title="AI 正在核对..."></span>
+                </span>
+                <span class="verify-badge" v-else-if="verificationStatus[item.key]">
+                  <span v-if="verificationStatus[item.key].isCorrect" title="AI 核对正确" class="success-check">✅</span>
+                  <span v-else title="AI 发现错误" class="error-correction">❌ 修正为: {{ verificationStatus[item.key].correction }}</span>
+                </span>
+              </span>
             </div>
           </div>
         </div>
@@ -216,6 +196,7 @@ const form = ref({
 
 const result = ref(null);
 const aiRawExplanation = ref('');
+const verificationStatus = ref({});
 const loading = ref(false);
 const loadingAi = ref(false);
 const error = ref('');
@@ -225,6 +206,18 @@ const suggestions = ref([]);
 const availableModels = ref([]);
 const selectedModel = ref('');
 let suggestTimeout = null;
+
+const conjugationItems = [
+  { key: 'negative', label: '否定式' },
+  { key: 'polite', label: '礼貌式' },
+  { key: 'teForm', label: 'て形' },
+  { key: 'taForm', label: '过去式' },
+  { key: 'potential', label: '可能形' },
+  { key: 'passive', label: '被动形' },
+  { key: 'causative', label: '使役形' },
+  { key: 'imperative', label: '命令形' },
+  { key: 'volitional', label: '意向形' }
+];
 
 const aiExplanation = computed(() => {
   return aiRawExplanation.value ? marked(aiRawExplanation.value) : '';
@@ -289,6 +282,7 @@ const conjugate = async () => {
   result.value = null;
   aiExplanation.value = null;
   aiError.value = '';
+  verificationStatus.value = {};
 
   if (!form.value.verb) {
     error.value = '请输入动词';
@@ -319,6 +313,7 @@ const fetchAiExplanation = async () => {
   loadingAi.value = true;
   aiError.value = '';
   aiRawExplanation.value = '';
+  verificationStatus.value = {};
   
   try {
     const response = await fetch('/api/ai-explain', {
@@ -340,6 +335,7 @@ const fetchAiExplanation = async () => {
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
+    let fullAiText = '';
     
     loadingAi.value = false; // 流式请求开始接收，停止显示 loading spinner
 
@@ -364,7 +360,24 @@ const fetchAiExplanation = async () => {
             if (data.error) {
               aiError.value = data.error;
             } else if (data.content) {
-              aiRawExplanation.value += data.content;
+              fullAiText += data.content;
+              
+              // 尝试匹配 AI 返回的 JSON 代码块
+              const jsonMatch = fullAiText.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
+              if (jsonMatch) {
+                try {
+                  verificationStatus.value = JSON.parse(jsonMatch[1]);
+                  // JSON 之后的内容作为解释显示
+                  aiRawExplanation.value = fullAiText.substring(jsonMatch.index + jsonMatch[0].length).trim();
+                } catch (e) {
+                  // JSON 解析失败说明还在流式输出 JSON，忽略
+                }
+              } else {
+                // 如果还没有完整的 JSON 块，且不是以 JSON 块开头，直接显示
+                if (!fullAiText.trim().startsWith('```')) {
+                  aiRawExplanation.value = fullAiText;
+                }
+              }
             }
           } catch (e) {
             console.error('JSON Parse Error', e);
@@ -674,6 +687,42 @@ const fetchAiExplanation = async () => {
 
 .btn-secondary:hover {
   background: #e4e4e4;
+}
+
+/* AI 核对徽章样式 */
+.verify-badge {
+  margin-left: 8px;
+  font-size: 0.9em;
+  display: inline-flex;
+  align-items: center;
+}
+
+.spinner-small {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e0e0e0;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+.text-strike {
+  text-decoration: line-through;
+  color: #999;
+}
+
+.success-check {
+  color: #38a169;
+}
+
+.error-correction {
+  color: #e53e3e;
+  font-weight: 600;
+  background: #fff5f5;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #fed7d7;
 }
 
 .model-select {

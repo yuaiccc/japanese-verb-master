@@ -110,11 +110,24 @@ app.post('/api/ai-explain', async (req, res) => {
 ${JSON.stringify(conjugationResult, null, 2)}
 \`\`\`
 
-请你执行以下两个任务：
-1. **核对纠错**：快速核对上方 JSON 中的变形结果（特别是て形、た形等特殊音变）。如果变形完全正确，请简短地给出一句肯定评价（如"系统生成的变形结果正确"）；如果发现错误，请明确指出哪里错了，并给出正确的变形形式。
-2. **释义与例句**：用中文简明扼要地解释该动词的含义，并提供2个实用的日常例句（必须包含日文原文、平假名注音和精准的中文翻译）。
+请你严格按照以下结构执行任务：
 
-注意：直接输出结构化的 Markdown 格式内容，不需要任何多余的开场白或寒暄。`;
+第一步：逐个核对上述 JSON 中的变形结果。必须且只能以一个 JSON 代码块开始你的回答，不要有任何前置文本。格式如下：
+\`\`\`json
+{
+  "negative": { "isCorrect": true, "correction": "" },
+  "polite": { "isCorrect": true, "correction": "" },
+  "teForm": { "isCorrect": false, "correction": "正确的变形" },
+  "taForm": { "isCorrect": true, "correction": "" },
+  "potential": { "isCorrect": true, "correction": "" },
+  "passive": { "isCorrect": true, "correction": "" },
+  "causative": { "isCorrect": true, "correction": "" },
+  "imperative": { "isCorrect": true, "correction": "" },
+  "volitional": { "isCorrect": true, "correction": "" }
+}
+\`\`\`
+
+第二步：在 JSON 代码块之后，用中文简明扼要地解释该动词的含义，并提供2个实用的日常例句（必须包含日文原文、平假名注音和精准的中文翻译）。支持使用 Markdown 格式加粗、高亮。`;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');

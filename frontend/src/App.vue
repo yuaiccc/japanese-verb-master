@@ -17,7 +17,7 @@
               id="verb"
               v-model="form.verb"
               type="text"
-              placeholder="例如：飲む、食べる、勉強する"
+              placeholder="例如：飲む、食べる、nomu、taberu"
               @keyup.enter="conjugate"
             >
           </div>
@@ -36,8 +36,9 @@
           <h3>活用结果</h3>
           <div class="result-grid">
             <div class="result-item">
-              <span class="label">原形</span>
+              <span class="label">原形 (解析为)</span>
               <span class="value">{{ result.dictionaryForm }}</span>
+              <span v-if="result.originalInput !== result.parsedAs" class="example" style="margin-top: 4px; font-size: 0.8em">从罗马音 "{{ result.originalInput }}" 转换</span>
             </div>
             <div class="result-item">
               <span class="label">动词类型</span>

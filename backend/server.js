@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import kuromoji from 'kuromoji';
+import * as wanakana from 'wanakana';
 import { conjugate } from './conjugationEngine.js';
 
 const app = express();
@@ -26,7 +27,15 @@ kuromoji.builder({ dicPath: 'node_modules/kuromoji/dict' }).build((err, _tokeniz
 function detectVerbType(verb) {
   if (!tokenizer) throw new Error('Tokenizer not ready');
   
-  const tokens = tokenizer.tokenize(verb);
+  // 处理罗马音输入，将其转换为平假名
+  const hiraganaVerb = wanakana.toHiragana(verb);
+
+  // 特殊情况硬编码：カ变动词（来る / くる）
+  if (hiraganaVerb === 'くる' || hiraganaVerb === '来る') {
+    return 'KURU';
+  }
+
+  const tokens = tokenizer.tokenize(hiraganaVerb);
   if (tokens.length === 0) return null;
   
   // 对于像 勉強する 这样的词，动词部分在最后
@@ -60,21 +69,31 @@ app.get('/api/conjugate', (req, res) => {
       });
     }
 
+    // 处理罗马音，转换成平假名
+    // 比如：nomu -> のむ，taberu -> たべる
+    // 原有的汉字会被保留（如 飲む 不变）
+    const processedVerb = wanakana.toHiragana(verb);
+
     // 如果前端没有传 type，就用 kuromoji 自动推断
     if (!type) {
       if (!tokenizer) {
         return res.status(503).json({ error: 'Dictionary is initializing, please try again later.' });
       }
-      type = detectVerbType(verb);
+      type = detectVerbType(processedVerb);
       if (!type) {
         return res.status(400).json({ 
-          error: `Could not automatically detect verb type for '${verb}'. Please ensure it is a valid dictionary form Japanese verb or provide the type manually.` 
+          error: `Could not automatically detect verb type for '${verb}' (parsed as '${processedVerb}'). Please ensure it is a valid dictionary form Japanese verb or provide the type manually.` 
         });
       }
     }
 
-    const result = conjugate(verb, type);
-    res.json(result);
+    const result = conjugate(processedVerb, type);
+    // 如果转换后有变化，可以在返回结果里告诉前端这是基于罗马音解析的
+    res.json({
+      ...result,
+      originalInput: verb,
+      parsedAs: processedVerb
+    });
   } catch (error) {
     res.status(400).json({
       error: error.message

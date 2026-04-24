@@ -96,15 +96,25 @@ app.get('/api/ai-models', async (req, res) => {
 });
 
 // AI 动词解析及例句生成 API
-app.get('/api/ai-explain', async (req, res) => {
+app.post('/api/ai-explain', async (req, res) => {
   try {
-    const { verb, model } = req.query;
+    const { verb, model, conjugationResult } = req.body;
     if (!verb) {
       return res.status(400).json({ error: 'Missing required parameter: verb' });
     }
     const selectedModel = model || 'qwen2.5:7b';
 
-    const prompt = `你是一个日语语言学专家。请你用中文简明扼要地解释日语动词 "${verb}" 的含义，并提供2个实用的日常例句（包含日文、平假名注音和中文翻译）。不要输出多余的寒暄，直接输出结构化的内容。`;
+    const prompt = `你是一个严谨的日语语言学专家。
+我为你提供了一个日语动词 "${verb}" 以及程序自动生成的活用变形结果：
+\`\`\`json
+${JSON.stringify(conjugationResult, null, 2)}
+\`\`\`
+
+请你执行以下两个任务：
+1. **核对纠错**：快速核对上方 JSON 中的变形结果（特别是て形、た形等特殊音变）。如果变形完全正确，请简短地给出一句肯定评价（如"系统生成的变形结果正确"）；如果发现错误，请明确指出哪里错了，并给出正确的变形形式。
+2. **释义与例句**：用中文简明扼要地解释该动词的含义，并提供2个实用的日常例句（必须包含日文原文、平假名注音和精准的中文翻译）。
+
+注意：直接输出结构化的 Markdown 格式内容，不需要任何多余的开场白或寒暄。`;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');

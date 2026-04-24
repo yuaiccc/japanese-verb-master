@@ -321,7 +321,17 @@ const fetchAiExplanation = async () => {
   aiRawExplanation.value = '';
   
   try {
-    const response = await fetch(`/api/ai-explain?verb=${encodeURIComponent(result.value.dictionaryForm)}&model=${encodeURIComponent(selectedModel.value || 'qwen2.5:7b')}`);
+    const response = await fetch('/api/ai-explain', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        verb: result.value.dictionaryForm,
+        model: selectedModel.value || 'qwen2.5:7b',
+        conjugationResult: result.value // 把前端拿到的变形结果也发给后端
+      })
+    });
     
     if (!response.ok) {
       throw new Error('网络请求失败');

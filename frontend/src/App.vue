@@ -17,7 +17,8 @@
               id="verb"
               v-model="form.verb"
               type="text"
-              placeholder="例如：飲む、食べる、nomu、taberu"
+              :placeholder="error ? error : '例如：飲む、食べる、nomu、taberu'"
+              :class="{ 'input-error': error, 'input-success': result }"
               @keyup.enter="conjugate"
               @input="error = ''"
               @focus="showSuggestions = true"
@@ -43,7 +44,7 @@
             {{ loading ? '处理中...' : '活用' }}
           </button>
 
-          <div v-if="error" class="error-message">
+          <div v-if="error" class="error-message" style="display: none;">
             {{ error }}
           </div>
         </div>
@@ -290,12 +291,16 @@ const hideSuggestionsWithDelay = () => {
 const conjugate = async () => {
   error.value = '';
   result.value = null;
-  aiExplanation.value = null;
+  aiRawExplanation.value = '';
   aiError.value = '';
   verificationStatus.value = {};
 
-  if (!form.value.verb) {
+  if (!form.value.verb || !form.value.verb.trim()) {
     error.value = '请输入动词';
+    // 当错误时，让输入框获取焦点
+    setTimeout(() => {
+      document.getElementById('verb')?.focus();
+    }, 50);
     return;
   }
 
@@ -312,6 +317,13 @@ const conjugate = async () => {
     fetchAiExplanation();
   } catch (err) {
     error.value = err.response?.data?.error || '请求失败，请检查输入';
+    // 错误时重置结果状态
+    result.value = null;
+    // 错误时让输入框获取焦点，并清空用户的错误输入以便显示 placeholder 的错误提示
+    form.value.verb = '';
+    setTimeout(() => {
+      document.getElementById('verb')?.focus();
+    }, 50);
   } finally {
     loading.value = false;
   }
@@ -540,13 +552,30 @@ const fetchAiExplanation = async () => {
   border: 2px solid #e0e0e0;
   border-radius: 8px;
   font-size: 1em;
-  transition: border-color 0.3s;
+  transition: all 0.3s ease;
 }
 
 .form-group input:focus,
 .form-group select:focus {
   outline: none;
   border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.input-error {
+  background-color: #fff5f5 !important;
+  border-color: #fc8181 !important;
+  color: #c53030 !important;
+}
+
+.input-error::placeholder {
+  color: #feb2b2;
+}
+
+.input-success {
+  background-color: #f0fff4 !important;
+  border-color: #68d391 !important;
+  color: #2f855a !important;
 }
 
 .btn-primary {
@@ -572,12 +601,13 @@ const fetchAiExplanation = async () => {
 }
 
 .error-message {
-  margin-top: 15px;
+  color: #e53e3e;
+  background-color: #fff5f5;
+  border: 1px solid #fed7d7;
   padding: 12px;
-  background: #fee;
-  color: #c33;
   border-radius: 8px;
-  border-left: 4px solid #c33;
+  margin-top: 15px;
+  font-size: 0.9em;
 }
 
 .result-card {

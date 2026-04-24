@@ -108,75 +108,82 @@
         </div>
 
       </section>
+      <!-- 右侧：文档区 -->
       <section class="doc-section">
-        <div class="card">
-          <h2>动词分类指南</h2>
-          
-          <div class="verb-type-guide">
-            <div class="guide-item">
-              <h4>五段动词 (Godan)</h4>
-              <p>动词词尾为：う、く、ぐ、す、つ、ぬ、ふ、ぶ、む、る</p>
-              <p class="example">例：飲む、読む、書く、走る</p>
-            </div>
-
-            <div class="guide-item">
-              <h4>一段动词 (Ichidan)</h4>
-              <p>动词词尾为：える、いる</p>
-              <p class="example">例：食べる、見る、寝る</p>
-            </div>
-
-            <div class="guide-item">
-              <h4>サ变动词</h4>
-              <p>动词词尾为：する</p>
-              <p class="example">例：勉強する、仕事する、愛する</p>
-            </div>
-
-            <div class="guide-item">
-              <h4>カ变动词</h4>
-              <p>动词词尾为：来る</p>
-              <p class="example">例：来る、来ない</p>
-            </div>
+        <div class="card doc-card">
+          <div class="doc-header" @click="showDocs = !showDocs">
+            <h2 style="margin: 0; font-size: 1.2rem; color: #4a5568;">📚 动词分类指南与活用形式说明</h2>
+            <button class="toggle-btn" aria-label="Toggle Documents">
+              <span class="arrow" :class="{ 'down': showDocs, 'right': !showDocs }"></span>
+            </button>
           </div>
-        </div>
+          
+          <div v-show="showDocs" class="doc-content">
+            <div class="guide-group">
+              <h3>🧠 动词分类指南</h3>
+              <ul class="guide-list">
+                <li class="guide-item">
+                  <strong>五段动词 (Group 1)</strong>
+                  <p>词尾为 う段 假名的动词（不包括 える/いる）。<br>
+                  <em>例：飲む (nomu)、書く (kaku)、話す (hanasu)</em></p>
+                </li>
+                <li class="guide-item">
+                  <strong>一段动词 (Group 2)</strong>
+                  <p>词尾为 る，且前一个假名在 い段 或 え段 上。<br>
+                  <em>例：食べる (taberu)、見る (miru)</em></p>
+                </li>
+                <li class="guide-item">
+                  <strong>サ变动词 (Group 3)</strong>
+                  <p>以「する」结尾的动词。<br>
+                  <em>例：勉強する (benkyousuru)</em></p>
+                </li>
+                <li class="guide-item">
+                  <strong>カ变动词 (Group 3)</strong>
+                  <p>只有「来る」(kuru) 一个词。</p>
+                </li>
+              </ul>
+            </div>
 
-        <div class="card">
-          <h2>活用形式说明</h2>
-          <div class="conjugation-guide">
-            <div class="guide-item">
-              <strong>否定式 (ない形)</strong>
-              <p>表示否定含义</p>
-            </div>
-            <div class="guide-item">
-              <strong>礼貌式 (ます形)</strong>
-              <p>用于正式、礼貌的表达</p>
-            </div>
-            <div class="guide-item">
-              <strong>て形</strong>
-              <p>连接两个动作或表示请求</p>
-            </div>
-            <div class="guide-item">
-              <strong>过去式 (た形)</strong>
-              <p>表示过去的动作或状态</p>
-            </div>
-            <div class="guide-item">
-              <strong>可能形</strong>
-              <p>表示能力或可能性</p>
-            </div>
-            <div class="guide-item">
-              <strong>被动形</strong>
-              <p>表示被动语态</p>
-            </div>
-            <div class="guide-item">
-              <strong>使役形</strong>
-              <p>表示使役关系</p>
-            </div>
-            <div class="guide-item">
-              <strong>命令形</strong>
-              <p>表示命令或指示</p>
-            </div>
-            <div class="guide-item">
-              <strong>意向形</strong>
-              <p>表示意图或推测</p>
+            <div class="guide-group mt-4">
+              <h3>📝 活用形式说明</h3>
+              <ul class="guide-list">
+                <li class="guide-item">
+                  <strong>否定式 (ない形)</strong>
+                  <p>表示否定、不去做某事。</p>
+                </li>
+                <li class="guide-item">
+                  <strong>礼貌式 (ます形)</strong>
+                  <p>对长辈或不熟悉的人使用的礼貌表达。</p>
+                </li>
+                <li class="guide-item">
+                  <strong>て形</strong>
+                  <p>用于连接句子、表示请求或正在进行的状态。</p>
+                </li>
+                <li class="guide-item">
+                  <strong>过去式 (た形)</strong>
+                  <p>表示已经发生过的动作。</p>
+                </li>
+                <li class="guide-item">
+                  <strong>可能形</strong>
+                  <p>表示有能力做到某事（能...、会...）。</p>
+                </li>
+                <li class="guide-item">
+                  <strong>被动形</strong>
+                  <p>表示受到某种动作的影响。</p>
+                </li>
+                <li class="guide-item">
+                  <strong>使役形</strong>
+                  <p>表示让某人做某事（让...、使...）。</p>
+                </li>
+                <li class="guide-item">
+                  <strong>命令形</strong>
+                  <p>强烈的命令语气（去做！）。</p>
+                </li>
+                <li class="guide-item">
+                  <strong>意向形</strong>
+                  <p>表示提议、决心或意志（我们...吧）。</p>
+                </li>
+              </ul>
             </div>
           </div>
         </div>
@@ -206,6 +213,9 @@ const suggestions = ref([]);
 const availableModels = ref([]);
 const selectedModel = ref('');
 let suggestTimeout = null;
+
+// 文档区折叠状态
+const showDocs = ref(false);
 
 const conjugationItems = [
   { key: 'negative', label: '否定式' },
@@ -752,5 +762,67 @@ const fetchAiExplanation = async () => {
 .markdown-body ul, .markdown-body ol {
   padding-left: 20px;
   margin-bottom: 10px;
+}
+
+/* 文档区折叠样式 */
+.doc-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.doc-header {
+  padding: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  background-color: #f8fafc;
+  transition: background-color 0.2s;
+}
+
+.doc-header:hover {
+  background-color: #edf2f7;
+}
+
+.doc-content {
+  padding: 20px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.toggle-btn {
+  background: none;
+  border: none;
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.arrow {
+  border: solid #4a5568;
+  border-width: 0 2px 2px 0;
+  display: inline-block;
+  padding: 4px;
+  transition: transform 0.3s ease;
+}
+
+.arrow.right {
+  transform: rotate(-45deg);
+}
+
+.arrow.down {
+  transform: rotate(45deg);
+}
+
+.guide-group h3 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  color: #2d3748;
+  font-size: 1.1rem;
+}
+
+.mt-4 {
+  margin-top: 1.5rem;
 }
 </style>

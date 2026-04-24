@@ -158,32 +158,44 @@ app.post('/api/ai-explain', async (req, res) => {
 ${JSON.stringify(conjugationResult, null, 2)}
 \`\`\`
 
-请你严格按照以下结构执行任务：
+请你严格按照以下步骤和格式执行任务，优先级顺序为：1. 校对结果 -> 2. 实用例句 -> 3. 词义解析。
 
-第一步：优先逐个核对上述 JSON 中的变形结果。必须且只能以一个 JSON 代码块开始你的回答，不要有任何前置文本。格式要求：
-1. 请只核对这 9 种变形：negative, polite, teForm, taForm, potential, passive, causative, imperative, volitional。
-2. 必须使用给定的英文 key。
-3. 如果结果完全正确，请将 isCorrect 设置为 true，correction 必须为空字符串 ""。
-4. 只有当你 100% 确定系统生成的结果错误时，才将 isCorrect 设置为 false，并在 correction 中给出正确的日文。
-5. 不要因为送气音或汉字/假名的写法不同就认为是错的。
+第一步与第二步：必须且只能以一个 JSON 代码块开始你的回答，包含校对结果（verification）和2个实用例句（examples）。不要有任何前置文本。
+格式要求：
+1. verification 中只核对这 9 种变形：negative, polite, teForm, taForm, potential, passive, causative, imperative, volitional。如果正确，isCorrect 为 true，correction 为 ""。如果错误，isCorrect 为 false，并在 correction 中给出正确日文。不要因为送气音或汉字/假名写法不同算错。
+2. examples 中提供2个实用的日常例句，包含日文原文（japanese）、平假名注音（kana）和中文翻译（chinese）。
 
 返回的 JSON 必须严格遵循如下结构（此为全对的示例）：
 \`\`\`json
 {
-  "negative": { "isCorrect": true, "correction": "" },
-  "polite": { "isCorrect": true, "correction": "" },
-  "teForm": { "isCorrect": true, "correction": "" },
-  "taForm": { "isCorrect": true, "correction": "" },
-  "potential": { "isCorrect": true, "correction": "" },
-  "passive": { "isCorrect": true, "correction": "" },
-  "causative": { "isCorrect": true, "correction": "" },
-  "imperative": { "isCorrect": true, "correction": "" },
-  "volitional": { "isCorrect": true, "correction": "" }
+  "verification": {
+    "negative": { "isCorrect": true, "correction": "" },
+    "polite": { "isCorrect": true, "correction": "" },
+    "teForm": { "isCorrect": true, "correction": "" },
+    "taForm": { "isCorrect": true, "correction": "" },
+    "potential": { "isCorrect": true, "correction": "" },
+    "passive": { "isCorrect": true, "correction": "" },
+    "causative": { "isCorrect": true, "correction": "" },
+    "imperative": { "isCorrect": true, "correction": "" },
+    "volitional": { "isCorrect": true, "correction": "" }
+  },
+  "examples": [
+    {
+      "japanese": "日文例句1",
+      "kana": "平假名注音1",
+      "chinese": "中文翻译1"
+    },
+    {
+      "japanese": "日文例句2",
+      "kana": "平假名注音2",
+      "chinese": "中文翻译2"
+    }
+  ]
 }
 \`\`\`
 
-第二步：在 JSON 代码块之后，用中文简明扼要地解释该动词的含义，并提供2个实用的日常例句（必须包含日文原文、平假名注音和精准的中文翻译）。支持使用 Markdown 格式加粗、高亮。
-重要提示：在解释动词类型时，请务必使用中国国内通用的日语教学术语（如：五段动词、一段动词、サ变动词、カ变动词），绝对不要出现 "Godan"、"Ichidan" 或 "Group 1/2/3" 等英文直译词汇。`;
+第三步：在 JSON 代码块闭合之后，用中文简明扼要地输出该动词的词义解析（支持 Markdown）。
+重要提示：在解释动词类型时，请务必使用中国国内通用的日语教学术语（如：五段动词、一段动词、サ变动词、カ变动词），绝对不要出现 "Godan"、"Ichidan" 等英文直译词汇。`;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');

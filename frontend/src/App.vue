@@ -72,12 +72,26 @@
             <p>Ollama 正在思考中，请稍候...</p>
           </div>
           
-          <div v-else-if="aiError && !aiRawExplanation" class="error-message">
+          <div v-else-if="aiError && !aiRawExplanation && aiExamples.length === 0" class="error-message">
             {{ aiError }}
             <button @click="fetchAiExplanation" style="margin-left: 10px; background: none; border: none; text-decoration: underline; color: inherit; cursor: pointer;">重试</button>
           </div>
           
-          <div v-if="aiRawExplanation" class="ai-content markdown-body" v-html="aiExplanation"></div>
+          <div v-if="aiExamples.length > 0" class="ai-module">
+            <h4 class="module-title">💬 实用例句</h4>
+            <div class="examples-grid">
+              <div v-for="(ex, idx) in aiExamples" :key="idx" class="example-box">
+                <div class="ex-japanese">{{ ex.japanese }}</div>
+                <div class="ex-kana">{{ ex.kana }}</div>
+                <div class="ex-chinese">{{ ex.chinese }}</div>
+              </div>
+            </div>
+          </div>
+          
+          <div v-if="aiRawExplanation" class="ai-module mt-4">
+            <h4 class="module-title">📖 词义解析</h4>
+            <div class="ai-content markdown-body" v-html="aiExplanation"></div>
+          </div>
         </div>
 
         <!-- 结果展示 -->
@@ -209,6 +223,7 @@ const form = ref({
 const result = ref(null);
 const aiRawExplanation = ref('');
 const verificationStatus = ref({});
+const aiExamples = ref([]);
 const loading = ref(false);
 const loadingAi = ref(false);
 const aiProgress = ref(0);
@@ -323,6 +338,7 @@ const conjugate = async () => {
   aiRawExplanation.value = '';
   aiError.value = '';
   verificationStatus.value = {};
+  aiExamples.value = [];
 
   if (!form.value.verb || !form.value.verb.trim()) {
     error.value = '请输入动词';
@@ -333,20 +349,17 @@ const conjugate = async () => {
     return;
   }
 
-  // 记录原始输入，用于后续判断是否需要更新输入框
-  const originalInput = form.value.verb.trim();
-
   loading.value = true;
   try {
     const response = await axios.get('/api/conjugate', {
       params: {
-        verb: originalInput
+        verb: form.value.verb
       }
     });
     result.value = response.data;
     
     // 如果返回了合法的 dictionaryForm，将其同步回输入框（包含汉字转换）
-    if (result.value.dictionaryForm && originalInput !== result.value.dictionaryForm) {
+    if (result.value.dictionaryForm) {
       form.value.verb = result.value.dictionaryForm;
     }
     
@@ -373,6 +386,7 @@ const fetchAiExplanation = async () => {
   aiError.value = '';
   aiRawExplanation.value = '';
   verificationStatus.value = {};
+  aiExamples.value = [];
   
   try {
     startProgress();
@@ -430,7 +444,10 @@ const fetchAiExplanation = async () => {
                 try {
                   // 如果代码块完整，直接解析
                   const parsed = JSON.parse(jsonMatch[1]);
-                  verificationStatus.value = parsed;
+                  verificationStatus.value = parsed.verification || parsed;
+                  if (parsed.examples) {
+                    aiExamples.value = parsed.examples;
+                  }
                   aiRawExplanation.value = fullAiText.substring(jsonMatch.index + jsonMatch[0].length).trim();
                 } catch (e) {
                   // JSON 解析失败说明还在流式输出 JSON，尝试用部分匹配提前点亮 ✅
@@ -441,16 +458,18 @@ const fetchAiExplanation = async () => {
                     const isCorrectMatch = item.match(/"isCorrect"\s*:\s*(true|false)/);
                     if (keyMatch && isCorrectMatch) {
                       const key = keyMatch[1];
-                      const isCorrect = isCorrectMatch[1] === 'true';
-                      // 简单提取 correction（如果不完整可能提取不到，但主要是为了尽早显示正确状态）
-                      const correctionMatch = item.match(/"correction"\s*:\s*"([^"]*)"/);
-                      const correction = correctionMatch ? correctionMatch[1] : "";
-                      
-                      if (!verificationStatus.value[key]) {
-                        verificationStatus.value = {
-                          ...verificationStatus.value,
-                          [key]: { isCorrect, correction }
-                        };
+                      if (key !== 'verification' && key !== 'examples') {
+                        const isCorrect = isCorrectMatch[1] === 'true';
+                        // 简单提取 correction（如果不完整可能提取不到，但主要是为了尽早显示正确状态）
+                        const correctionMatch = item.match(/"correction"\s*:\s*"([^"]*)"/);
+                        const correction = correctionMatch ? correctionMatch[1] : "";
+                        
+                        if (!verificationStatus.value[key]) {
+                          verificationStatus.value = {
+                            ...verificationStatus.value,
+                            [key]: { isCorrect, correction }
+                          };
+                        }
                       }
                     }
                   }
@@ -766,6 +785,50 @@ const fetchAiExplanation = async () => {
   background-color: #667eea;
   transition: width 0.3s ease;
   border-radius: 2px;
+}
+
+.ai-module {
+  margin-top: 20px;
+  border-top: 1px solid #edf2f7;
+  padding-top: 15px;
+}
+
+.module-title {
+  color: #4a5568;
+  font-size: 1.1em;
+  margin-top: 0;
+  margin-bottom: 15px;
+}
+
+.examples-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.example-box {
+  background: #f8fafc;
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 4px solid #667eea;
+}
+
+.ex-japanese {
+  font-size: 1.2em;
+  font-weight: 600;
+  color: #2d3748;
+  margin-bottom: 4px;
+}
+
+.ex-kana {
+  font-size: 0.9em;
+  color: #718096;
+  margin-bottom: 8px;
+}
+
+.ex-chinese {
+  font-size: 1em;
+  color: #4a5568;
 }
 
 .ai-loading {

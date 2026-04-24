@@ -19,6 +19,7 @@
               type="text"
               placeholder="例如：飲む、食べる、nomu、taberu"
               @keyup.enter="conjugate"
+              @input="error = ''"
               @focus="showSuggestions = true"
               @blur="hideSuggestionsWithDelay"
               autocomplete="off"

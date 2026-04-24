@@ -95,7 +95,7 @@ app.get('/api/conjugate', (req, res) => {
       type = detectVerbType(processedVerb);
       if (!type) {
         return res.status(400).json({ 
-          error: `Could not automatically detect verb type for '${verb}' (parsed as '${processedVerb}'). Please ensure it is a valid dictionary form Japanese verb or provide the type manually.` 
+          error: `无法自动识别 "${verb}" (解析为 "${processedVerb}") 的动词类型。请确保输入的是正确的日语动词原形（如：食べる、飲む、勉強する）。` 
         });
       }
     }

@@ -48,6 +48,33 @@
           </div>
         </div>
 
+        <!-- AI 解释区域 -->
+        <div v-if="result || loadingAi || aiError" class="card result-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin-bottom: 0;">✨ AI 深度解析与例句</h3>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <select v-model="selectedModel" class="model-select" v-if="availableModels.length > 0">
+                <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+              </select>
+              <button v-if="(!loadingAi && result) || aiRawExplanation" @click="fetchAiExplanation" class="btn-secondary" :disabled="loadingAi">
+                {{ aiRawExplanation ? '重新生成' : '获取解析' }}
+              </button>
+            </div>
+          </div>
+          
+          <div v-if="loadingAi && !aiRawExplanation" class="ai-loading">
+            <div class="spinner"></div>
+            <p>Ollama 正在思考中，请稍候...</p>
+          </div>
+          
+          <div v-else-if="aiError && !aiRawExplanation" class="error-message">
+            {{ aiError }}
+            <button @click="fetchAiExplanation" style="margin-left: 10px; background: none; border: none; text-decoration: underline; color: inherit; cursor: pointer;">重试</button>
+          </div>
+          
+          <div v-if="aiRawExplanation" class="ai-content markdown-body" v-html="aiExplanation"></div>
+        </div>
+
         <!-- 结果展示 -->
         <div v-if="result" class="card result-card">
           <h3>活用结果</h3>
@@ -99,36 +126,8 @@
             </div>
           </div>
         </div>
-        
-        <!-- AI 解释区域 -->
-        <div v-if="result || loadingAi || aiError" class="card result-card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h3 style="margin-bottom: 0;">✨ AI 深度解析与例句</h3>
-            <div style="display: flex; gap: 10px; align-items: center;">
-              <select v-model="selectedModel" class="model-select" v-if="availableModels.length > 0">
-                <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
-              </select>
-              <button v-if="(!loadingAi && result) || aiRawExplanation" @click="fetchAiExplanation" class="btn-secondary" :disabled="loadingAi">
-                {{ aiRawExplanation ? '重新生成' : '获取解析' }}
-              </button>
-            </div>
-          </div>
-          
-          <div v-if="loadingAi && !aiRawExplanation" class="ai-loading">
-            <div class="spinner"></div>
-            <p>Ollama 正在思考中，请稍候...</p>
-          </div>
-          
-          <div v-else-if="aiError && !aiRawExplanation" class="error-message">
-            {{ aiError }}
-            <button @click="fetchAiExplanation" style="margin-left: 10px; background: none; border: none; text-decoration: underline; color: inherit; cursor: pointer;">重试</button>
-          </div>
-          
-          <div v-if="aiRawExplanation" class="ai-content markdown-body" v-html="aiExplanation"></div>
-        </div>
-      </section>
 
-      <!-- 右侧：文档区 -->
+      </section>
       <section class="doc-section">
         <div class="card">
           <h2>动词分类指南</h2>

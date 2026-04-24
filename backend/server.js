@@ -66,7 +66,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // 中间件
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type']
+}));
 app.use(express.json());
 
 let tokenizer = null;
@@ -111,7 +115,7 @@ function detectVerbType(verb) {
      return null;
   }
   // 还需要检查提取出的动词是否是一个完整的字典形（基本形）
-  if (verbToken.conjugated_form !== '基本形') {
+  if (verbToken.conjugated_form && verbToken.conjugated_form !== '基本形') {
       return null;
   }
 

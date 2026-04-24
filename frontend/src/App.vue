@@ -44,7 +44,7 @@
             {{ loading ? '处理中...' : '活用' }}
           </button>
 
-          <div v-if="error" class="error-message" style="display: none;">
+          <div v-if="error" class="error-message">
             {{ error }}
           </div>
         </div>
@@ -369,8 +369,7 @@ const conjugate = async () => {
     error.value = err.response?.data?.error || '请求失败，请检查输入';
     // 错误时重置结果状态
     result.value = null;
-    // 错误时让输入框获取焦点，并清空用户的错误输入以便显示 placeholder 的错误提示
-    form.value.verb = '';
+    // 错误时让输入框获取焦点，保留用户输入以便修正
     setTimeout(() => {
       document.getElementById('verb')?.focus();
     }, 50);
@@ -415,7 +414,28 @@ const fetchAiExplanation = async () => {
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        // 处理 buffer 中可能残留的最后一条数据
+        if (buffer.trim()) {
+          const eventStr = buffer.trim();
+          if (eventStr.startsWith('data: ')) {
+            const dataStr = eventStr.slice(6);
+            if (dataStr === '[DONE]') {
+              completeProgress();
+            } else {
+              try {
+                const data = JSON.parse(dataStr);
+                if (data.content) {
+                  fullAiText += data.content;
+                }
+              } catch (e) {
+                // ignore incomplete data
+              }
+            }
+          }
+        }
+        break;
+      }
       
       buffer += decoder.decode(value, { stream: true });
       

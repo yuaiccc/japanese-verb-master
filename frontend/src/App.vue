@@ -11,7 +11,7 @@
         <div class="card">
           <h2>动词活用工具</h2>
           
-          <div class="form-group">
+          <div class="form-group position-relative">
             <label for="verb">动词原形</label>
             <input
               id="verb"
@@ -19,7 +19,23 @@
               type="text"
               placeholder="例如：飲む、食べる、nomu、taberu"
               @keyup.enter="conjugate"
+              @focus="showSuggestions = true"
+              @blur="hideSuggestionsWithDelay"
+              autocomplete="off"
             >
+            <!-- 自动补全下拉框 -->
+            <ul v-if="showSuggestions && suggestions.length > 0" class="suggestions-list">
+              <li 
+                v-for="(item, index) in suggestions" 
+                :key="index"
+                @mousedown.prevent="selectSuggestion(item)"
+              >
+                <span class="suggestion-kanji">{{ item.kanji }}</span>
+                <span class="suggestion-kana">{{ item.kana }}</span>
+                <span class="suggestion-romaji">{{ item.romaji }}</span>
+                <span class="suggestion-meaning">{{ item.meaning }}</span>
+              </li>
+            </ul>
           </div>
 
           <button @click="conjugate" class="btn-primary">
@@ -163,8 +179,9 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import axios from 'axios';
+import commonVerbs from './common-verbs.json';
 
 const form = ref({
   verb: ''
@@ -173,12 +190,39 @@ const form = ref({
 const result = ref(null);
 const loading = ref(false);
 const error = ref('');
+const showSuggestions = ref(false);
 
 const verbTypeMap = {
   GODAN: '五段动词',
   ICHIDAN: '一段动词',
   SURU: 'サ变动词',
   KURU: 'カ变动词'
+};
+
+// 联想补全计算属性
+const suggestions = computed(() => {
+  const query = form.value.verb.toLowerCase().trim();
+  if (!query) return [];
+  
+  // 匹配 kanji, kana 或 romaji 中包含用户输入的动词
+  return commonVerbs.filter(verb => {
+    return verb.kanji.includes(query) || 
+           verb.kana.includes(query) || 
+           verb.romaji.includes(query) ||
+           verb.meaning.includes(query);
+  }).slice(0, 8); // 最多显示8个建议
+});
+
+const selectSuggestion = (item) => {
+  form.value.verb = item.kanji;
+  showSuggestions.value = false;
+  conjugate();
+};
+
+const hideSuggestionsWithDelay = () => {
+  setTimeout(() => {
+    showSuggestions.value = false;
+  }, 200);
 };
 
 const conjugate = async () => {
@@ -262,6 +306,71 @@ const conjugate = async () => {
 
 .form-group {
   margin-bottom: 20px;
+}
+
+.position-relative {
+  position: relative;
+}
+
+.suggestions-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  margin-top: 4px;
+  padding: 0;
+  list-style: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  z-index: 10;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.suggestions-list li {
+  padding: 10px 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #f5f5f5;
+  transition: background-color 0.2s;
+}
+
+.suggestions-list li:last-child {
+  border-bottom: none;
+}
+
+.suggestions-list li:hover {
+  background-color: #f8f9fa;
+}
+
+.suggestion-kanji {
+  font-weight: 600;
+  font-size: 1.1em;
+  color: #333;
+  min-width: 60px;
+}
+
+.suggestion-kana {
+  color: #667eea;
+  font-size: 0.9em;
+  margin-left: 10px;
+  min-width: 80px;
+}
+
+.suggestion-romaji {
+  color: #999;
+  font-size: 0.85em;
+  margin-left: 10px;
+  font-family: monospace;
+}
+
+.suggestion-meaning {
+  color: #666;
+  font-size: 0.85em;
+  margin-left: auto;
 }
 
 .form-group label {

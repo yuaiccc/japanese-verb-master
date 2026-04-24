@@ -22,17 +22,6 @@
             >
           </div>
 
-          <div class="form-group">
-            <label for="verb-type">动词类型</label>
-            <select v-model="form.type" id="verb-type">
-              <option value="">-- 选择类型 --</option>
-              <option value="GODAN">五段动词 (Group 1)</option>
-              <option value="ICHIDAN">一段动词 (Group 2)</option>
-              <option value="SURU">サ变动词 (Group 3)</option>
-              <option value="KURU">カ变动词 (Group 3)</option>
-            </select>
-          </div>
-
           <button @click="conjugate" class="btn-primary">
             {{ loading ? '处理中...' : '活用' }}
           </button>
@@ -49,6 +38,10 @@
             <div class="result-item">
               <span class="label">原形</span>
               <span class="value">{{ result.dictionaryForm }}</span>
+            </div>
+            <div class="result-item">
+              <span class="label">动词类型</span>
+              <span class="value">{{ verbTypeMap[result.verbType] || result.verbType }}</span>
             </div>
             <div class="result-item">
               <span class="label">否定式</span>
@@ -173,20 +166,26 @@ import { ref } from 'vue';
 import axios from 'axios';
 
 const form = ref({
-  verb: '',
-  type: ''
+  verb: ''
 });
 
 const result = ref(null);
 const loading = ref(false);
 const error = ref('');
 
+const verbTypeMap = {
+  GODAN: '五段动词',
+  ICHIDAN: '一段动词',
+  SURU: 'サ变动词',
+  KURU: 'カ变动词'
+};
+
 const conjugate = async () => {
   error.value = '';
   result.value = null;
 
-  if (!form.value.verb || !form.value.type) {
-    error.value = '请输入动词和选择类型';
+  if (!form.value.verb) {
+    error.value = '请输入动词';
     return;
   }
 
@@ -194,8 +193,7 @@ const conjugate = async () => {
   try {
     const response = await axios.get('/api/conjugate', {
       params: {
-        verb: form.value.verb,
-        type: form.value.type
+        verb: form.value.verb
       }
     });
     result.value = response.data;

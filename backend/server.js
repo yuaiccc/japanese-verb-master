@@ -84,25 +84,47 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', dictionaryReady: !!tokenizer });
 });
 
+// 获取本地可用模型
+app.get('/api/ai-models', async (req, res) => {
+  try {
+    const response = await ollama.list();
+    res.json(response.models.map(m => m.name));
+  } catch (error) {
+    console.error('Failed to fetch models:', error);
+    res.status(500).json({ error: 'Failed to fetch models' });
+  }
+});
+
 // AI 动词解析及例句生成 API
 app.get('/api/ai-explain', async (req, res) => {
   try {
-    const { verb } = req.query;
+    const { verb, model } = req.query;
     if (!verb) {
       return res.status(400).json({ error: 'Missing required parameter: verb' });
     }
+    const selectedModel = model || 'qwen2.5:7b';
 
     const prompt = `你是一个日语语言学专家。请你用中文简明扼要地解释日语动词 "${verb}" 的含义，并提供2个实用的日常例句（包含日文、平假名注音和中文翻译）。不要输出多余的寒暄，直接输出结构化的内容。`;
 
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
     const response = await ollama.chat({
-      model: 'qwen2.5:7b',
+      model: selectedModel,
       messages: [{ role: 'user', content: prompt }],
+      stream: true,
     });
 
-    res.json({ explanation: response.message.content });
+    for await (const part of response) {
+      res.write(`data: ${JSON.stringify({ content: part.message.content })}\n\n`);
+    }
+    res.write('data: [DONE]\n\n');
+    res.end();
   } catch (error) {
     console.error('Ollama API Error:', error);
-    res.status(500).json({ error: 'AI 服务暂不可用，请确保本地 Ollama 及 qwen2.5 模型已启动。' });
+    res.write(`data: ${JSON.stringify({ error: 'AI 服务暂不可用，请确保本地 Ollama 正在运行且模型存在。' })}\n\n`);
+    res.end();
   }
 });
 

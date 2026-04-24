@@ -103,23 +103,28 @@
         <!-- AI 解释区域 -->
         <div v-if="result || loadingAi || aiError" class="card result-card">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h3 style="margin-bottom: 0;">✨ AI 深度解析与例句 (Qwen2.5)</h3>
-            <button v-if="!aiExplanation && !loadingAi && result" @click="fetchAiExplanation" class="btn-secondary">
-              获取解析
-            </button>
+            <h3 style="margin-bottom: 0;">✨ AI 深度解析与例句</h3>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <select v-model="selectedModel" class="model-select" v-if="availableModels.length > 0">
+                <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
+              </select>
+              <button v-if="(!loadingAi && result) || aiRawExplanation" @click="fetchAiExplanation" class="btn-secondary" :disabled="loadingAi">
+                {{ aiRawExplanation ? '重新生成' : '获取解析' }}
+              </button>
+            </div>
           </div>
           
-          <div v-if="loadingAi" class="ai-loading">
+          <div v-if="loadingAi && !aiRawExplanation" class="ai-loading">
             <div class="spinner"></div>
             <p>Ollama 正在思考中，请稍候...</p>
           </div>
           
-          <div v-else-if="aiError" class="error-message">
+          <div v-else-if="aiError && !aiRawExplanation" class="error-message">
             {{ aiError }}
-            <button @click="fetchAiExplanation" style="margin-left: 10px; background: none; border: underline; color: inherit; cursor: pointer;">重试</button>
+            <button @click="fetchAiExplanation" style="margin-left: 10px; background: none; border: none; text-decoration: underline; color: inherit; cursor: pointer;">重试</button>
           </div>
           
-          <div v-else-if="aiExplanation" class="ai-content markdown-body" v-html="aiExplanation"></div>
+          <div v-if="aiRawExplanation" class="ai-content markdown-body" v-html="aiExplanation"></div>
         </div>
       </section>
 
@@ -202,7 +207,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, watch, onMounted, computed } from 'vue';
 import axios from 'axios';
 import { marked } from 'marked';
 
@@ -211,14 +216,32 @@ const form = ref({
 });
 
 const result = ref(null);
-const aiExplanation = ref(null);
+const aiRawExplanation = ref('');
 const loading = ref(false);
 const loadingAi = ref(false);
 const error = ref('');
 const aiError = ref('');
 const showSuggestions = ref(false);
 const suggestions = ref([]);
+const availableModels = ref([]);
+const selectedModel = ref('');
 let suggestTimeout = null;
+
+const aiExplanation = computed(() => {
+  return aiRawExplanation.value ? marked(aiRawExplanation.value) : '';
+});
+
+onMounted(async () => {
+  try {
+    const res = await axios.get('/api/ai-models');
+    availableModels.value = res.data;
+    if (res.data.length > 0) {
+      selectedModel.value = res.data.includes('qwen2.5:7b') ? 'qwen2.5:7b' : res.data[0];
+    }
+  } catch(e) {
+    console.error('获取模型列表失败', e);
+  }
+});
 
 const verbTypeMap = {
   GODAN: '五段动词',
@@ -296,14 +319,52 @@ const fetchAiExplanation = async () => {
   
   loadingAi.value = true;
   aiError.value = '';
+  aiRawExplanation.value = '';
   
   try {
-    const response = await axios.get('/api/ai-explain', {
-      params: { verb: result.value.dictionaryForm }
-    });
-    aiExplanation.value = marked(response.data.explanation);
+    const response = await fetch(`/api/ai-explain?verb=${encodeURIComponent(result.value.dictionaryForm)}&model=${encodeURIComponent(selectedModel.value || 'qwen2.5:7b')}`);
+    
+    if (!response.ok) {
+      throw new Error('网络请求失败');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    
+    loadingAi.value = false; // 流式请求开始接收，停止显示 loading spinner
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      
+      let eventEndIndex;
+      while ((eventEndIndex = buffer.indexOf('\n\n')) >= 0) {
+        const eventStr = buffer.slice(0, eventEndIndex);
+        buffer = buffer.slice(eventEndIndex + 2);
+        
+        if (eventStr.startsWith('data: ')) {
+          const dataStr = eventStr.slice(6);
+          if (dataStr === '[DONE]') {
+            break;
+          }
+          try {
+            const data = JSON.parse(dataStr);
+            if (data.error) {
+              aiError.value = data.error;
+            } else if (data.content) {
+              aiRawExplanation.value += data.content;
+            }
+          } catch (e) {
+            console.error('JSON Parse Error', e);
+          }
+        }
+      }
+    }
   } catch (err) {
-    aiError.value = err.response?.data?.error || 'AI 解析请求失败';
+    aiError.value = err.message || 'AI 解析请求失败';
   } finally {
     loadingAi.value = false;
   }
@@ -604,6 +665,21 @@ const fetchAiExplanation = async () => {
 
 .btn-secondary:hover {
   background: #e4e4e4;
+}
+
+.model-select {
+  padding: 6px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background-color: white;
+  font-size: 0.9em;
+  color: #333;
+  outline: none;
+  cursor: pointer;
+}
+
+.model-select:focus {
+  border-color: #667eea;
 }
 
 /* 简单的 markdown 样式补充 */

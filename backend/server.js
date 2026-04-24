@@ -112,7 +112,13 @@ ${JSON.stringify(conjugationResult, null, 2)}
 
 请你严格按照以下结构执行任务：
 
-第一步：逐个核对上述 JSON 中的变形结果。必须且只能以一个 JSON 代码块开始你的回答，不要有任何前置文本。格式如下：
+第一步：逐个核对上述 JSON 中的变形结果。必须且只能以一个 JSON 代码块开始你的回答，不要有任何前置文本。格式要求：
+1. 请只核对这 9 种变形：negative, polite, teForm, taForm, potential, passive, causative, imperative, volitional。
+2. 必须使用给定的英文 key。
+3. 如果结果完全正确，请将 isCorrect 设置为 true，correction 必须为空字符串 ""。
+4. 只有当你 100% 确定系统生成的结果错误时，才将 isCorrect 设置为 false，并在 correction 中给出正确的日文（不要加任何标点符号）。
+5. 不要因为送气音（如 て/で）或汉字/假名的写法不同（如 飲んで/のんで）就认为是错的，只要发音和变形规则一致，就是对的。
+
 \`\`\`json
 {
   "negative": { "isCorrect": true, "correction": "" },

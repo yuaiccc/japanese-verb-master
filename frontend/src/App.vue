@@ -92,14 +92,14 @@
             <div class="result-item" v-for="item in conjugationItems" :key="item.key">
               <span class="label">{{ item.label }}</span>
               <span class="value">
-                <span :class="{ 'text-strike': verificationStatus[item.key] && !verificationStatus[item.key].isCorrect }">
+                <span :class="{ 'text-strike': verificationStatus[item.key] && !verificationStatus[item.key].isCorrect && verificationStatus[item.key].correction !== result[item.key] && verificationStatus[item.key].correction.trim() !== result[item.key].trim() + '。' && verificationStatus[item.key].correction.trim() !== result[item.key].trim() + '？' }">
                   {{ result[item.key] }}
                 </span>
                 <span class="verify-badge" v-if="loadingAi && !verificationStatus[item.key]">
                   <span class="spinner-small" title="AI 正在核对..."></span>
                 </span>
                 <span class="verify-badge" v-else-if="verificationStatus[item.key]">
-                  <span v-if="verificationStatus[item.key].isCorrect" title="AI 核对正确" class="success-check">✅</span>
+                  <span v-if="verificationStatus[item.key].isCorrect || verificationStatus[item.key].correction === result[item.key] || verificationStatus[item.key].correction.trim() === result[item.key].trim() + '。' || verificationStatus[item.key].correction.trim() === result[item.key].trim() + '？'" title="AI 核对正确" class="success-check">✅</span>
                   <span v-else title="AI 发现错误" class="error-correction">❌ 修正为: {{ verificationStatus[item.key].correction }}</span>
                 </span>
               </span>

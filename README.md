@@ -1,74 +1,65 @@
-# Japanese Verb Master - 日语动词活用专家
+<div align="center">
 
-一个基于 Vue3 + Express 的精准日语动词活用在线工具和文档网站。
+# 🌸 Japanese Verb Master (日语动词活用专家)
 
-## 项目特色
+[![Vue 3](https://img.shields.io/badge/Vue.js-3.0-4FC08D?style=for-the-badge&logo=vue.js)](https://vuejs.org/)
+[![Express](https://img.shields.io/badge/Express.js-4.x-000000?style=for-the-badge&logo=express)](https://expressjs.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](http://makeapullrequest.com)
 
-- **Vue3 前端**：现代化的前端框架，提供流畅的用户体验
-- **Express 后端**：轻量级的 Node.js 服务器，提供 RESTful API
-- **完整的活用规则**：支持五段、一段及不规则动词的自动变换
-- **交互式文档**：集成动词分类指南和活用形式说明
+**The ultimate, precise Japanese verb conjugation tool and API.**
+<br>
+**一个精准、优雅的日语动词活用在线工具与 RESTful API。**
 
-## 项目结构
+[English](#english) • [简体中文](#简体中文)
 
-```
-japanese-verb-master/
-├── backend/              # Express 后端服务
-│   ├── server.js        # 主服务器文件
-│   ├── conjugationEngine.js  # 动词活用逻辑
-│   └── package.json
-├── frontend/            # Vue3 前端应用
-│   ├── src/
-│   │   ├── App.vue      # 主应用组件
-│   │   └── main.js      # 入口文件
-│   ├── index.html
-│   ├── vite.config.js
-│   └── package.json
-└── README.md
-```
+</div>
 
-## 快速开始
+---
 
-### 安装依赖
+<h2 id="english">🇬🇧 English</h2>
 
+### ✨ Features
+
+- 🎯 **High Accuracy**: Precise conjugation rules for Godan, Ichidan, and Irregular verbs.
+- ⚡ **Real-time**: Instant results powered by a modern Vue 3 frontend.
+- 📚 **Comprehensive**: Covers 10+ forms including Te-form, Ta-form, Passive, Causative, Potential, and more.
+- 🔌 **REST API**: Built-in Express backend providing clean JSON APIs for other developers to build upon.
+- 📱 **Responsive Design**: Works perfectly on mobile and desktop.
+
+### 🚀 Quick Start
+
+#### 1. Clone the repository
 ```bash
-# 后端
-cd backend
-npm install
-
-# 前端
-cd ../frontend
-npm install
+git clone https://github.com/yuaiccc/japanese-verb-master.git
+cd japanese-verb-master
 ```
 
-### 启动开发服务器
-
-**终端 1 - 启动后端：**
+#### 2. Start the Backend API
 ```bash
 cd backend
-npm run dev
-# 或
-npm start
+npm install
+npm run dev # Runs on port 3000
 ```
 
-**终端 2 - 启动前端：**
+#### 3. Start the Frontend
 ```bash
 cd frontend
-npm run dev
+npm install
+npm run dev # Runs on port 5173
 ```
 
-前端将在 `http://localhost:5173` 启动，自动代理 API 请求到后端。
+### 📖 API Reference
 
-## API 文档
+You can easily use our conjugation engine in your own apps!
 
-### 获取动词活用
+**Endpoint:** `GET /api/conjugate`
 
-**请求：**
+```bash
+curl "http://localhost:3000/api/conjugate?verb=飲む&type=GODAN"
 ```
-GET /api/conjugate?verb=飲む&type=GODAN
-```
 
-**响应：**
+**Response:**
 ```json
 {
   "dictionaryForm": "飲む",
@@ -85,85 +76,86 @@ GET /api/conjugate?verb=飲む&type=GODAN
 }
 ```
 
-### 获取支持的动词类型
+---
 
-**请求：**
-```
-GET /api/verb-types
+<h2 id="简体中文">🇨🇳 简体中文</h2>
+
+### ✨ 项目特色
+
+- 🎯 **极高准确率**：完美支持五段动词、一段动词及各类不规则动词（サ变、カ变）的变形规则。
+- ⚡ **极致响应**：基于 Vue 3 + Vite 构建的前端，提供丝滑的实时交互体验。
+- 📚 **全面覆盖**：一键生成 10+ 种常用活用形式（包含て形、た形、被动、使役、可能形等）。
+- 🔌 **开箱即用的 API**：提供轻量级的 Express RESTful API，方便其他开发者接入自己的应用。
+- 📱 **响应式设计**：无论是手机背单词还是电脑查资料，都有完美的视觉体验。
+
+### 🚀 快速开始
+
+#### 1. 克隆项目
+```bash
+git clone https://github.com/yuaiccc/japanese-verb-master.git
+cd japanese-verb-master
 ```
 
-**响应：**
+#### 2. 启动后端服务
+```bash
+cd backend
+npm install
+npm run dev # 默认运行在 3000 端口
+```
+
+#### 3. 启动前端页面
+```bash
+cd frontend
+npm install
+npm run dev # 默认运行在 5173 端口
+```
+
+### 📖 API 接入文档
+
+你可以直接调用本项目的 API 来开发你自己的日语学习工具！
+
+**请求接口：** `GET /api/conjugate`
+
+```bash
+curl "http://localhost:3000/api/conjugate?verb=食べる&type=ICHIDAN"
+```
+
+**返回结果：**
 ```json
 {
-  "types": [
-    {
-      "id": "GODAN",
-      "name": "五段动词 (Group 1)",
-      "description": "Verbs ending in う, く, ぐ, す, つ, ぬ, ふ, ぶ, む, る"
-    },
-    ...
-  ]
+  "dictionaryForm": "食べる",
+  "verbType": "ICHIDAN",
+  "negative": "食べない",
+  "polite": "食べます",
+  "teForm": "食べて",
+  "taForm": "食べた",
+  "potential": "食べられる",
+  "passive": "食べられる",
+  "causative": "食べさせる",
+  "imperative": "食べろ",
+  "volitional": "食べよう"
 }
 ```
 
-## 动词分类
+### 🧠 动词分类指南
 
-### 五段动词 (Godan - Group 1)
-动词词尾为：う、く、ぐ、す、つ、ぬ、ふ、ぶ、む、る
+本项目引擎支持完整的现代日语动词分类体系：
+1. **五段动词 (Godan / Group 1)**：词尾为 う、く、ぐ、す、つ、ぬ、ふ、ぶ、む、る（例：飲む、書く）
+2. **一段动词 (Ichidan / Group 2)**：词尾为 える、いる（例：食べる、見る）
+3. **サ变动词 (Group 3)**：词尾为 する（例：勉強する）
+4. **カ变动词 (Group 3)**：来る
 
-例：飲む、読む、書く、走る
+## 🤝 参与贡献 (Contributing)
 
-### 一段动词 (Ichidan - Group 2)
-动词词尾为：える、いる
+非常欢迎提交 Issue 和 Pull Request！如果你发现了任何动词变形的 Edge Case，或者想添加新的特性（如敬语/谦让语生成），请随时参与进来！
+详细指南请参考 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-例：食べる、見る、寝る
+## 📄 开源协议
 
-### サ变动词 (Group 3)
-动词词尾为：する
+本项目基于 **MIT License** 开源。欢迎自由使用、修改和分发。
 
-例：勉強する、仕事する、愛する
-
-### カ变动词 (Group 3)
-动词词尾为：来る
-
-例：来る
-
-## 活用形式
-
-| 形式 | 说明 | 例子 |
-|------|------|------|
-| 原形 | 字典形式 | 飲む |
-| 否定式 | 表示否定 | 飲まない |
-| 礼貌式 | 正式、礼貌的表达 | 飲みます |
-| て形 | 连接动作或请求 | 飲んで |
-| 过去式 | 过去的动作或状态 | 飲んだ |
-| 可能形 | 能力或可能性 | 飲める |
-| 被动形 | 被动语态 | 飲まれる |
-| 使役形 | 使役关系 | 飲ませる |
-| 命令形 | 命令或指示 | 飲め |
-| 意向形 | 意图或推测 | 飲もう |
-
-## 技术栈
-
-- **前端**：Vue 3, Vite, Axios
-- **后端**：Node.js, Express, CORS
-- **开发工具**：npm, ES6 modules
-
-## 生产构建
-
-### 前端构建
-
-```bash
-cd frontend
-npm run build
-```
-
-构建输出将在 `dist/` 目录中。
-
-### 后端部署
-
-后端可以直接运行 `npm start` 或通过 PM2 等进程管理器部署。
-
-## 许可证
-
-MIT
+---
+<div align="center">
+If you find this tool helpful, please give it a ⭐️! <br>
+如果这个工具对你有帮助，请给它点个 ⭐️ 吧！
+</div>

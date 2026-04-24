@@ -116,14 +116,15 @@ ${JSON.stringify(conjugationResult, null, 2)}
 1. 请只核对这 9 种变形：negative, polite, teForm, taForm, potential, passive, causative, imperative, volitional。
 2. 必须使用给定的英文 key。
 3. 如果结果完全正确，请将 isCorrect 设置为 true，correction 必须为空字符串 ""。
-4. 只有当你 100% 确定系统生成的结果错误时，才将 isCorrect 设置为 false，并在 correction 中给出正确的日文（不要加任何标点符号）。
-5. 不要因为送气音（如 て/で）或汉字/假名的写法不同（如 飲んで/のんで）就认为是错的，只要发音和变形规则一致，就是对的。
+4. 只有当你 100% 确定系统生成的结果错误时，才将 isCorrect 设置为 false，并在 correction 中给出正确的日文。
+5. 不要因为送气音或汉字/假名的写法不同就认为是错的。
 
+返回的 JSON 必须严格遵循如下结构（此为全对的示例）：
 \`\`\`json
 {
   "negative": { "isCorrect": true, "correction": "" },
   "polite": { "isCorrect": true, "correction": "" },
-  "teForm": { "isCorrect": false, "correction": "正确的变形" },
+  "teForm": { "isCorrect": true, "correction": "" },
   "taForm": { "isCorrect": true, "correction": "" },
   "potential": { "isCorrect": true, "correction": "" },
   "passive": { "isCorrect": true, "correction": "" },

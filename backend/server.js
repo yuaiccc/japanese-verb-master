@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Ollama } from 'ollama';
+import https from 'https';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +15,53 @@ const __dirname = path.dirname(__filename);
 // 读取动词库
 const commonVerbs = JSON.parse(fs.readFileSync(path.join(__dirname, 'common-verbs.json'), 'utf8'));
 
+// 调用 Jisho API 获取更多动词补充
+function searchJisho(keyword) {
+  return new Promise((resolve, reject) => {
+    https.get(`https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(keyword)}`, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          const verbs = [];
+          if (!parsed.data) return resolve([]);
+          
+          for (const item of parsed.data) {
+            const senses = item.senses || [];
+            let isVerb = false;
+            let meaning = '';
+            
+            for (const sense of senses) {
+              const pos = sense.parts_of_speech || [];
+              if (pos.some(p => p.toLowerCase().includes('verb'))) {
+                isVerb = true;
+                meaning = sense.english_definitions.slice(0, 2).join(', ');
+                break;
+              }
+            }
+            
+            if (isVerb && item.japanese && item.japanese.length > 0) {
+              const kanji = item.japanese[0].word || item.japanese[0].reading;
+              const kana = item.japanese[0].reading || kanji;
+              verbs.push({
+                kanji,
+                kana,
+                romaji: wanakana.toRomaji(kana),
+                meaning
+              });
+            }
+          }
+          resolve(verbs);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+// 初始化 Ollama
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -159,7 +207,7 @@ ${JSON.stringify(conjugationResult, null, 2)}
 });
 
 // 动词自动补全 API
-app.get('/api/suggest', (req, res) => {
+app.get('/api/suggest', async (req, res) => {
   try {
     const { q } = req.query;
     if (!q || q.trim() === '') {
@@ -167,15 +215,41 @@ app.get('/api/suggest', (req, res) => {
     }
 
     const query = q.toLowerCase().trim();
-    const suggestions = commonVerbs.filter(verb => {
+    
+    // 1. 本地高频词库快速匹配
+    const localSuggestions = commonVerbs.filter(verb => {
       return verb.kanji.includes(query) || 
              verb.kana.includes(query) || 
              verb.romaji.includes(query) ||
              verb.meaning.includes(query);
-    }).slice(0, 8); // 最多返回8条记录，避免前端渲染过大
+    });
 
-    res.json(suggestions);
+    // 2. 并行调用 Jisho API 获取更广泛的词汇（限制等待时间）
+    let jishoSuggestions = [];
+    try {
+      jishoSuggestions = await Promise.race([
+        searchJisho(query),
+        new Promise(resolve => setTimeout(() => resolve([]), 800)) // 800ms 超时，保证输入流畅
+      ]);
+    } catch(e) {
+      console.error('Jisho API fetch failed', e);
+    }
+
+    // 3. 合并去重（以 kanji 作为唯一标识）
+    const merged = [...localSuggestions, ...jishoSuggestions];
+    const unique = [];
+    const seen = new Set();
+    
+    for (const verb of merged) {
+      if (!seen.has(verb.kanji)) {
+        seen.add(verb.kanji);
+        unique.push(verb);
+      }
+    }
+
+    res.json(unique.slice(0, 8)); // 最多返回8条记录
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Failed to fetch suggestions' });
   }
 });

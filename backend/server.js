@@ -6,6 +6,7 @@ import { conjugate } from './conjugationEngine.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { Ollama } from 'ollama';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -75,9 +76,34 @@ function detectVerbType(verb) {
   return null;
 }
 
+// 初始化 Ollama
+const ollama = new Ollama({ host: 'http://127.0.0.1:11434' });
+
 // 健康检查
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', dictionaryReady: !!tokenizer });
+});
+
+// AI 动词解析及例句生成 API
+app.get('/api/ai-explain', async (req, res) => {
+  try {
+    const { verb } = req.query;
+    if (!verb) {
+      return res.status(400).json({ error: 'Missing required parameter: verb' });
+    }
+
+    const prompt = `你是一个日语语言学专家。请你用中文简明扼要地解释日语动词 "${verb}" 的含义，并提供2个实用的日常例句（包含日文、平假名注音和中文翻译）。不要输出多余的寒暄，直接输出结构化的内容。`;
+
+    const response = await ollama.chat({
+      model: 'qwen2.5',
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    res.json({ explanation: response.message.content });
+  } catch (error) {
+    console.error('Ollama API Error:', error);
+    res.status(500).json({ error: 'AI 服务暂不可用，请确保本地 Ollama 及 qwen2.5 模型已启动。' });
+  }
 });
 
 // 动词自动补全 API

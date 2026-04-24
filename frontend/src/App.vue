@@ -99,6 +99,28 @@
             </div>
           </div>
         </div>
+        
+        <!-- AI 解释区域 -->
+        <div v-if="result || loadingAi || aiError" class="card result-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin-bottom: 0;">✨ AI 深度解析与例句 (Qwen2.5)</h3>
+            <button v-if="!aiExplanation && !loadingAi && result" @click="fetchAiExplanation" class="btn-secondary">
+              获取解析
+            </button>
+          </div>
+          
+          <div v-if="loadingAi" class="ai-loading">
+            <div class="spinner"></div>
+            <p>Ollama 正在思考中，请稍候...</p>
+          </div>
+          
+          <div v-else-if="aiError" class="error-message">
+            {{ aiError }}
+            <button @click="fetchAiExplanation" style="margin-left: 10px; background: none; border: underline; color: inherit; cursor: pointer;">重试</button>
+          </div>
+          
+          <div v-else-if="aiExplanation" class="ai-content markdown-body" v-html="aiExplanation"></div>
+        </div>
       </section>
 
       <!-- 右侧：文档区 -->
@@ -182,14 +204,18 @@
 <script setup>
 import { ref, watch } from 'vue';
 import axios from 'axios';
+import { marked } from 'marked';
 
 const form = ref({
   verb: ''
 });
 
 const result = ref(null);
+const aiExplanation = ref(null);
 const loading = ref(false);
+const loadingAi = ref(false);
 const error = ref('');
+const aiError = ref('');
 const showSuggestions = ref(false);
 const suggestions = ref([]);
 let suggestTimeout = null;
@@ -239,6 +265,8 @@ const hideSuggestionsWithDelay = () => {
 const conjugate = async () => {
   error.value = '';
   result.value = null;
+  aiExplanation.value = null;
+  aiError.value = '';
 
   if (!form.value.verb) {
     error.value = '请输入动词';
@@ -253,10 +281,31 @@ const conjugate = async () => {
       }
     });
     result.value = response.data;
+    
+    // 自动触发 AI 解析
+    fetchAiExplanation();
   } catch (err) {
     error.value = err.response?.data?.error || '请求失败，请检查输入';
   } finally {
     loading.value = false;
+  }
+};
+
+const fetchAiExplanation = async () => {
+  if (!result.value?.dictionaryForm) return;
+  
+  loadingAi.value = true;
+  aiError.value = '';
+  
+  try {
+    const response = await axios.get('/api/ai-explain', {
+      params: { verb: result.value.dictionaryForm }
+    });
+    aiExplanation.value = marked(response.data.explanation);
+  } catch (err) {
+    aiError.value = err.response?.data?.error || 'AI 解析请求失败';
+  } finally {
+    loadingAi.value = false;
   }
 };
 </script>
@@ -508,5 +557,66 @@ const conjugate = async () => {
 
 .guide-item strong {
   color: #333;
+}
+
+/* AI 解释区域样式 */
+.ai-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+  padding: 30px;
+  color: #666;
+}
+
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid #e0e0e0;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.ai-content {
+  background: #fdfdfd;
+  padding: 20px;
+  border-radius: 8px;
+  border: 1px solid #eee;
+  line-height: 1.6;
+  color: #333;
+}
+
+.btn-secondary {
+  padding: 6px 12px;
+  background: #f0f0f0;
+  color: #333;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 0.9em;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+  background: #e4e4e4;
+}
+
+/* 简单的 markdown 样式补充 */
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+  margin-top: 10px;
+  margin-bottom: 10px;
+  color: #2c3e50;
+}
+.markdown-body p {
+  margin-bottom: 10px;
+}
+.markdown-body ul, .markdown-body ol {
+  padding-left: 20px;
+  margin-bottom: 10px;
 }
 </style>

@@ -428,7 +428,7 @@ const fetchAiExplanation = async () => {
                   // 如果代码块完整，直接解析
                   const parsed = JSON.parse(jsonMatch[1]);
                   verificationStatus.value = parsed;
-                  aiRawExplanation.value = fullAiText.substring(0, jsonMatch.index).trim();
+                  aiRawExplanation.value = fullAiText.substring(jsonMatch.index + jsonMatch[0].length).trim();
                 } catch (e) {
                   // JSON 解析失败说明还在流式输出 JSON，尝试用部分匹配提前点亮 ✅
                   const partialJson = jsonMatch[1];
@@ -451,14 +451,16 @@ const fetchAiExplanation = async () => {
                       }
                     }
                   }
-                  aiRawExplanation.value = fullAiText.substring(0, jsonMatch.index).trim();
+                  // 由于 JSON 块在最前面，还没解析完时，JSON块之后的内容为空，所以暂不显示
+                  aiRawExplanation.value = '';
                 }
               } else {
-                // 如果还没有遇到 JSON 块开头，直接显示当前所有内容
+                // 如果还没有遇到 JSON 块开头，或者内容中没有 JSON 块，直接显示当前所有内容
+                // 因为我们要求 AI 必须以 JSON 块开头，如果没遇到说明还在生成开头的 ```json 或者 AI 违背了指令
                 if (!fullAiText.includes('```')) {
-                  aiRawExplanation.value = fullAiText;
+                  aiRawExplanation.value = ''; // 等待 JSON 块
                 } else {
-                  // 如果遇到了块开头，但还没闭合，只显示开头前面的部分
+                  // 如果遇到了块开头，但还没闭合，只显示开头前面的部分(理论上应该是空)
                   const blockStart = fullAiText.indexOf('```');
                   aiRawExplanation.value = fullAiText.substring(0, blockStart).trim();
                 }

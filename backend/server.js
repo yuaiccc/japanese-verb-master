@@ -95,7 +95,7 @@ app.get('/api/ai-explain', async (req, res) => {
     const prompt = `你是一个日语语言学专家。请你用中文简明扼要地解释日语动词 "${verb}" 的含义，并提供2个实用的日常例句（包含日文、平假名注音和中文翻译）。不要输出多余的寒暄，直接输出结构化的内容。`;
 
     const response = await ollama.chat({
-      model: 'qwen2.5',
+      model: 'qwen2.5:7b',
       messages: [{ role: 'user', content: prompt }],
     });
 

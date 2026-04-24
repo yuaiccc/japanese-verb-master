@@ -41,9 +41,22 @@ function detectVerbType(verb) {
   // 对于像 勉強する 这样的词，动词部分在最后
   let verbToken = tokens.slice().reverse().find(t => t.pos === '動詞');
   
-  // 如果没有找到动词，可能是输入的词有问题
+  // 如果没有找到动词，说明输入的词并不是一个有效的动词
   if (!verbToken) return null;
   
+  // 严格匹配：确保输入的整个词就是一个动词，或者是以动词结尾的复合词（如勉強する）
+  // 避免像 "tebe" 这种无意义的词被拆分成助词，或者被错误地当作动词的一部分
+  // 检查提取出的动词原形（basic_form）是否能和输入的词（或其后缀）对得上
+  // 因为像 `tabe` 提取出来 basic_form 是 `たべる`，如果输入只有 `tabe` 就不完整
+  // 如果是复合动词如 `勉強する`，verbToken.surface_form 会是 `する`
+  if (!hiraganaVerb.endsWith(verbToken.surface_form)) {
+     return null;
+  }
+  // 还需要检查提取出的动词是否是一个完整的字典形（基本形）
+  if (verbToken.conjugated_form !== '基本形') {
+      return null;
+  }
+
   const cType = verbToken.conjugated_type;
   if (cType.includes('一段')) return 'ICHIDAN';
   if (cType.includes('五段')) return 'GODAN';

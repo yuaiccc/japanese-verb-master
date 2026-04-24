@@ -15,7 +15,35 @@ const __dirname = path.dirname(__filename);
 // 读取动词库
 const commonVerbs = JSON.parse(fs.readFileSync(path.join(__dirname, 'common-verbs.json'), 'utf8'));
 
-// 调用 Jisho API 获取更多动词补充
+// 调用 Jisho API 获取汉字（如果 kuromoji 没有汉字的话）
+function getKanjiFromJisho(verb) {
+  return new Promise((resolve) => {
+    https.get(`https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(verb)}`, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.data && parsed.data.length > 0) {
+            for (const item of parsed.data) {
+              if (item.japanese && item.japanese.length > 0) {
+                // 检查这个词是否能匹配我们输入的读音
+                const reading = item.japanese[0].reading;
+                const word = item.japanese[0].word;
+                if (reading === verb && word) {
+                  return resolve(word);
+                }
+              }
+            }
+          }
+          resolve(verb); // 没找到合适的汉字，返回原词
+        } catch (e) {
+          resolve(verb);
+        }
+      });
+    }).on('error', () => resolve(verb));
+  });
+}
 function searchJisho(keyword) {
   return new Promise((resolve, reject) => {
     https.get(`https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(keyword)}`, (res) => {
@@ -90,10 +118,27 @@ function detectVerbType(verb) {
 
   // 特殊情况硬编码：カ变动词（来る / くる）
   if (hiraganaVerb === 'くる' || hiraganaVerb === '来る') {
-    return 'KURU';
+    return { type: 'KURU', basicForm: '来る' };
+  }
+  // 特殊情况硬编码：サ变动词（する）
+  if (hiraganaVerb === 'する') {
+    return { type: 'SURU', basicForm: 'する' };
   }
 
-  const tokens = tokenizer.tokenize(hiraganaVerb);
+  // 尝试分词，首先用转换后的平假名
+  let tokens = tokenizer.tokenize(hiraganaVerb);
+  
+  // 如果输入包含汉字且能被正确分词，则使用原输入以保留汉字
+  // 但我们需要确保它是一个有效的动词
+  const originalTokens = tokenizer.tokenize(verb);
+  if (originalTokens.length > 0) {
+      const originalVerbToken = originalTokens.slice().reverse().find(t => t.pos === '動詞');
+      if (originalVerbToken && originalVerbToken.conjugated_form === '基本形') {
+          // 如果原输入（可能包含汉字）能被正确解析为基本形动词，则优先使用它
+          tokens = originalTokens;
+      }
+  }
+
   if (tokens.length === 0) return null;
   
   // 对于像 勉強する 这样的词，动词部分在最后
@@ -103,23 +148,51 @@ function detectVerbType(verb) {
   if (!verbToken) return null;
   
   // 严格匹配：确保输入的整个词就是一个动词，或者是以动词结尾的复合词（如勉強する）
-  // 避免像 "tebe" 这种无意义的词被拆分成助词，或者被错误地当作动词的一部分
-  // 检查提取出的动词原形（basic_form）是否能和输入的词（或其后缀）对得上
-  // 因为像 `tabe` 提取出来 basic_form 是 `たべる`，如果输入只有 `tabe` 就不完整
-  // 如果是复合动词如 `勉強する`，verbToken.surface_form 会是 `する`
-  if (!hiraganaVerb.endsWith(verbToken.surface_form)) {
+  // 注意：如果是复合动词，basic_form 可能只包含动词部分（如 する），需要特殊处理
+  const surfaceMatches = verb.endsWith(verbToken.surface_form) || hiraganaVerb.endsWith(verbToken.surface_form);
+  
+  if (!surfaceMatches) {
      return null;
   }
+  
   // 还需要检查提取出的动词是否是一个完整的字典形（基本形）
   if (verbToken.conjugated_form !== '基本形') {
       return null;
   }
 
   const cType = verbToken.conjugated_type;
-  if (cType.includes('一段')) return 'ICHIDAN';
-  if (cType.includes('五段')) return 'GODAN';
-  if (cType.includes('サ変')) return 'SURU';
-  if (cType.includes('カ変')) return 'KURU';
+  
+  // 构建包含汉字的完整基本形
+  // 如果是复合动词（如 勉強する），需要把前面的名词部分拼起来
+  let fullBasicForm = verbToken.basic_form;
+  if (tokens.length > 1) {
+      // 找到动词前的名词部分
+      const nounTokens = tokens.slice(0, tokens.indexOf(verbToken));
+      const prefix = nounTokens.map(t => t.surface_form).join('');
+      // 只有当输入的原始字符串包含这个前缀时，才拼起来
+      if (verb.startsWith(prefix) || hiraganaVerb.startsWith(wanakana.toHiragana(prefix))) {
+          // 如果原输入是以汉字开头的（如 勉強），就用原输入的汉字部分
+          const originalPrefix = verb.substring(0, prefix.length);
+          fullBasicForm = originalPrefix + verbToken.basic_form;
+      }
+  } else if (verbToken.surface_form === verbToken.basic_form) {
+      // 如果 surface_form 和 basic_form 一样，尽量使用输入的表面形式（如果输入是汉字的话）
+      // 比如输入 食べる，verbToken.basic_form 可能是 食べる，也可能是 たべる
+      // 我们倾向于保留用户输入的汉字
+      if (wanakana.toHiragana(verb) === wanakana.toHiragana(verbToken.basic_form)) {
+          fullBasicForm = verb;
+      }
+  }
+
+  let type = null;
+  if (cType.includes('一段')) type = 'ICHIDAN';
+  else if (cType.includes('五段')) type = 'GODAN';
+  else if (cType.includes('サ変')) type = 'SURU';
+  else if (cType.includes('カ変')) type = 'KURU';
+  
+  if (type) {
+      return { type, basicForm: fullBasicForm };
+  }
   
   return null;
 }
@@ -182,7 +255,8 @@ ${JSON.stringify(conjugationResult, null, 2)}
 }
 \`\`\`
 
-第二步：在 JSON 代码块之后，用中文简明扼要地解释该动词的含义，并提供2个实用的日常例句（必须包含日文原文、平假名注音和精准的中文翻译）。支持使用 Markdown 格式加粗、高亮。`;
+第二步：在 JSON 代码块之后，用中文简明扼要地解释该动词的含义，并提供2个实用的日常例句（必须包含日文原文、平假名注音和精准的中文翻译）。支持使用 Markdown 格式加粗、高亮。
+注意：解释动词类型时，请使用中文习惯的称呼（如“五段动词”、“一段动词”、“サ变动词”、“カ变动词”），不要使用英文（如 Godan、Ichidan、Group 1、Group 2）。`;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -255,7 +329,7 @@ app.get('/api/suggest', async (req, res) => {
 });
 
 // 动词活用 API
-app.get('/api/conjugate', (req, res) => {
+app.get('/api/conjugate', async (req, res) => {
   try {
     let { verb, type } = req.query;
     
@@ -271,22 +345,39 @@ app.get('/api/conjugate', (req, res) => {
     const processedVerb = wanakana.toHiragana(verb);
 
     // 如果前端没有传 type，就用 kuromoji 自动推断
+    let finalVerb = processedVerb;
+    
     if (!type) {
       if (!tokenizer) {
         return res.status(503).json({ error: 'Dictionary is initializing, please try again later.' });
       }
-      type = detectVerbType(processedVerb);
-      if (!type) {
+      const detectResult = detectVerbType(verb);
+      if (!detectResult) {
         return res.status(400).json({ 
           error: `无法自动识别 "${verb}" (解析为 "${processedVerb}") 的动词类型。请确保输入的是正确的日语动词原形（如：食べる、飲む、勉強する）。` 
         });
       }
+      type = detectResult.type;
+      finalVerb = detectResult.basicForm;
     }
 
-    const result = conjugate(processedVerb, type);
+    // 检查字符串是否完全没有汉字（wanakana.isKanji 检查是否只包含汉字，所以要手写正则）
+    const hasKanji = (str) => /[\u4e00-\u9faf]/.test(str);
+
+    // 如果推断出来的还是全平假名，尝试用 Jisho 转换成带汉字的常用形式
+    // 只有当输入不包含任何汉字（即只有平假名或罗马音）时才尝试转换
+    if (!hasKanji(verb) && !hasKanji(finalVerb)) {
+        const kanjiVerb = await getKanjiFromJisho(finalVerb);
+        if (kanjiVerb) {
+            finalVerb = kanjiVerb;
+        }
+    }
+
+    const result = conjugate(finalVerb, type);
     // 如果转换后有变化，可以在返回结果里告诉前端这是基于罗马音解析的
     res.json({
       ...result,
+      dictionaryForm: finalVerb, // 覆盖为带汉字的原形
       originalInput: verb,
       parsedAs: processedVerb
     });

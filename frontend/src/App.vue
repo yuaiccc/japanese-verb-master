@@ -333,17 +333,20 @@ const conjugate = async () => {
     return;
   }
 
+  // 记录原始输入，用于后续判断是否需要更新输入框
+  const originalInput = form.value.verb.trim();
+
   loading.value = true;
   try {
     const response = await axios.get('/api/conjugate', {
       params: {
-        verb: form.value.verb
+        verb: originalInput
       }
     });
     result.value = response.data;
     
     // 如果返回了合法的 dictionaryForm，将其同步回输入框（包含汉字转换）
-    if (result.value.dictionaryForm) {
+    if (result.value.dictionaryForm && originalInput !== result.value.dictionaryForm) {
       form.value.verb = result.value.dictionaryForm;
     }
     

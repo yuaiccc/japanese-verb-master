@@ -8,7 +8,9 @@
     <!-- 搜索栏：输入框 + 按钮合一 -->
     <div class="search-wrapper">
       <div class="search-bar" :class="{ 'search-bar--error': error, 'search-bar--success': result }">
-        <span class="search-icon">🔍</span>
+        <span class="search-icon" aria-hidden="true">
+          <Icon name="search" class="icon-search" />
+        </span>
         <input
           id="verb"
           v-model="form.verb"
@@ -31,8 +33,14 @@
         <!-- 查询历史 -->
         <li v-if="showHistory && history.length > 0" class="history-section">
           <div class="suggestion-label">
-            <span>🕐 查询历史</span>
-            <button @mousedown.prevent="clearHistory" class="btn-clear-mini" title="清空历史">清空</button>
+            <span class="label-with-icon">
+              <Icon name="clock" class="icon-clock" />
+              查询历史
+            </span>
+            <button @mousedown.prevent="clearHistory" class="btn-clear-mini" title="清空历史">
+              <Icon name="trash" class="icon-trash" />
+              清空
+            </button>
           </div>
         </li>
         <li
@@ -71,6 +79,9 @@
         <div v-if="result && isVerb" class="card result-card">
           <div class="result-summary">
             <span class="summary-dict" v-html="furiganaDict"></span>
+            <button class="btn-speak" @click="speak(result.dictionaryForm)" title="朗读">
+              <Icon name="volume" class="icon-volume" />
+            </button>
             <span class="summary-tag">{{ verbTypeMap[result.verbType] || result.verbType }}</span>
             <span v-if="result.meaning" class="summary-meaning">{{ result.meaning }}</span>
             <span v-if="result.originalInput !== result.parsedAs" class="summary-romaji">从罗马音 "{{ result.originalInput }}" 转换</span>
@@ -83,12 +94,20 @@
                 <span :class="{ 'text-strike': verificationStatus[item.key] && !verificationStatus[item.key].isCorrect && !isEquivalentCorrection(verificationStatus[item.key].correction, result[item.key]) }">
                   {{ result[item.key] }}
                 </span>
+                <button class="btn-speak btn-speak--sm" @click="speak(result[item.key])" title="朗读">
+                  <Icon name="volume" class="icon-volume" />
+                </button>
                 <span class="verify-badge" v-if="loadingAi && !verificationStatus[item.key]">
                   <span class="spinner-small" title="AI 正在核对..."></span>
                 </span>
                 <span class="verify-badge" v-else-if="verificationStatus[item.key]">
-                  <span v-if="verificationStatus[item.key].isCorrect || isEquivalentCorrection(verificationStatus[item.key].correction, result[item.key])" title="AI 核对正确" class="success-check">✅</span>
-                  <span v-else title="AI 发现错误" class="error-correction">❌ 修正为: {{ verificationStatus[item.key].correction }}</span>
+                  <span v-if="verificationStatus[item.key].isCorrect || isEquivalentCorrection(verificationStatus[item.key].correction, result[item.key])" title="AI 核对正确" class="success-check">
+                    <Icon name="check" class="icon-check" />
+                  </span>
+                  <span v-else title="AI 发现错误" class="error-correction">
+                    <Icon name="error" class="icon-error" />
+                    修正为: {{ verificationStatus[item.key].correction }}
+                  </span>
                 </span>
               </span>
             </div>
@@ -101,6 +120,9 @@
         <div v-if="result && !isVerb" class="card result-card dict-card">
           <div class="dict-header">
             <span class="dict-word" v-html="furiganaWord"></span>
+            <button class="btn-speak btn-speak--lg" @click="speak(result.word)" title="朗读">
+              <Icon name="volume" class="icon-volume" />
+            </button>
           </div>
           <div class="dict-tags">
             <span class="summary-tag">{{ wordTypeDisplayMap[result.wordType] || result.wordType }}</span>
@@ -122,9 +144,14 @@
       <section class="right-section" v-if="result || loadingAi || aiError">
         <transition name="card-fade">
         <div class="card ai-card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h3 style="margin-bottom: 0;">✨ AI 深度解析与例句</h3>
-            <div style="display: flex; gap: 10px; align-items: center;">
+          <div class="ai-header-row">
+            <h3 class="ai-title">
+              <span class="title-with-icon">
+                <Icon name="sparkles" class="icon-sparkles" />
+                AI 深度解析与例句
+              </span>
+            </h3>
+            <div class="ai-actions">
               <select v-model="selectedModel" class="model-select" v-if="availableModels.length > 0">
                 <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
               </select>
@@ -145,21 +172,36 @@
           
           <div v-else-if="aiError && !aiRawExplanation && aiExamples.length === 0" class="error-message">
             {{ aiError }}
-            <button @click="fetchAiExplanation" style="margin-left: 10px; background: none; border: none; text-decoration: underline; color: inherit; cursor: pointer;">重试</button>
+            <button @click="fetchAiExplanation" class="retry-btn">重试</button>
           </div>
           
           <div v-if="aiExamples.length > 0" class="ai-module">
-            <h4 class="module-title">💬 实用例句</h4>
+            <h4 class="module-title">
+              <span class="title-with-icon">
+                <Icon name="chat" class="icon-chat" />
+                实用例句
+              </span>
+            </h4>
             <div class="examples-grid">
               <div v-for="(ex, idx) in aiExamples" :key="idx" class="example-box">
-                <div class="ex-japanese" v-html="furiganaExamples[idx] || ex.japanese"></div>
+                <div class="ex-row">
+                  <div class="ex-japanese" v-html="furiganaExamples[idx] || ex.japanese"></div>
+                  <button class="btn-speak btn-speak--sm" @click="speak(ex.japanese)" title="朗读例句">
+                    <Icon name="volume" class="icon-volume" />
+                  </button>
+                </div>
                 <div class="ex-chinese">{{ ex.chinese }}</div>
               </div>
             </div>
           </div>
           
           <div v-if="aiRawExplanation" class="ai-module mt-4">
-            <h4 class="module-title">🧠 AI 助记</h4>
+            <h4 class="module-title">
+              <span class="title-with-icon">
+                <Icon name="brain" class="icon-brain" />
+                AI 助记
+              </span>
+            </h4>
             <div class="ai-content markdown-body" v-html="aiExplanation"></div>
           </div>
         </div>
@@ -172,15 +214,25 @@
       <section class="doc-section">
         <div class="card doc-card">
           <div class="doc-header" @click="showDocs = !showDocs">
-            <h2 style="margin: 0; font-size: 1.2rem; color: #4a5568;">📚 动词分类指南与活用形式说明</h2>
+            <h2 class="doc-title">
+              <span class="title-with-icon">
+                <Icon name="book" class="icon-book" />
+                动词分类指南与活用形式说明
+              </span>
+            </h2>
             <button class="toggle-btn" aria-label="Toggle Documents">
-              <span class="arrow" :class="{ 'down': showDocs, 'right': !showDocs }"></span>
+              <Icon name="chevron" class="icon-chevron" :class="{ 'down': showDocs, 'right': !showDocs }" />
             </button>
           </div>
           
           <div v-show="showDocs" class="doc-content">
             <div class="guide-group">
-              <h3>🧠 动词分类指南</h3>
+              <h3>
+                <span class="title-with-icon">
+                  <Icon name="brain" class="icon-brain" />
+                  动词分类指南
+                </span>
+              </h3>
               <ul class="guide-list">
                 <li class="guide-item">
                   <strong>五段动词 (Group 1)</strong>
@@ -257,6 +309,7 @@ import { ref, watch, onMounted, computed, onUnmounted } from 'vue';
 import axios from 'axios';
 import { marked } from 'marked';
 import * as wanakana from 'wanakana';
+import Icon from './components/Icon.vue';
 
 const form = ref({
   verb: ''
@@ -426,6 +479,27 @@ const wordTypeDisplayMap = {
   'adverb': '副词'
 };
 
+// 语音朗读（浏览器 SpeechSynthesis API）
+const isSpeaking = ref(false);
+
+const speak = (text) => {
+  if (!text || !window.speechSynthesis) return;
+  // 停止上一次朗读
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = 'ja-JP';
+  utterance.rate = 0.85;
+  utterance.pitch = 1;
+  // 尝试选择日语语音
+  const voices = window.speechSynthesis.getVoices();
+  const jaVoice = voices.find(v => v.lang.startsWith('ja'));
+  if (jaVoice) utterance.voice = jaVoice;
+  utterance.onstart = () => isSpeaking.value = true;
+  utterance.onend = () => isSpeaking.value = false;
+  utterance.onerror = () => isSpeaking.value = false;
+  window.speechSynthesis.speak(utterance);
+};
+
 // 是否为动词结果
 const isVerb = computed(() => {
   return result.value?.wordType === 'verb' || !!result.value?.dictionaryForm;
@@ -477,9 +551,16 @@ watch(aiExamples, async (examples) => {
   furiganaExamples.value = results;
 });
 
-// 监听输入，从后端获取联想补全
+// 监听输入，双轨联想补全：先立即返回本地结果，再异步追加远程结果
+let remoteAbortController = null;
+
 watch(() => form.value.verb, (newVal) => {
   if (suggestTimeout) clearTimeout(suggestTimeout);
+  // 取消上一次远程请求
+  if (remoteAbortController) {
+    remoteAbortController.abort();
+    remoteAbortController = null;
+  }
   
   if (!newVal || newVal.trim() === '') {
     suggestions.value = [];
@@ -488,18 +569,39 @@ watch(() => form.value.verb, (newVal) => {
 
   showDropdown.value = true;
 
-  // 防抖，避免每次击键都发请求
+  // 防抖 150ms
   suggestTimeout = setTimeout(async () => {
+    const query = newVal;
     try {
-      const response = await axios.get('/api/suggest', {
-        params: { q: newVal }
-      });
-      suggestions.value = response.data;
+      // 第一轨：本地结果（秒回）
+      const localRes = await axios.get('/api/suggest', { params: { q: query } });
+      // 确保输入没变（用户可能已继续打字）
+      if (form.value.verb !== query) return;
+      suggestions.value = localRes.data;
+      
+      // 第二轨：异步查询远程结果（本地结果<3时才补充）
+      if (localRes.data.length < 3) {
+        remoteAbortController = new AbortController();
+        try {
+          const remoteRes = await axios.get('/api/suggest', {
+            params: { q: query, remote: 1 },
+            signal: remoteAbortController.signal
+          });
+          if (form.value.verb === query) {
+            suggestions.value = remoteRes.data;
+          }
+        } catch (remoteErr) {
+          if (remoteErr.name !== 'CanceledError' && remoteErr.code !== 'ERR_CANCELED') {
+            console.error('远程联想失败', remoteErr);
+          }
+        }
+        remoteAbortController = null;
+      }
     } catch (err) {
       console.error('获取联想失败', err);
       suggestions.value = [];
     }
-  }, 200);
+  }, 150);
 });
 
 const selectSuggestion = (item) => {
@@ -737,93 +839,124 @@ const fetchAiExplanation = async () => {
   box-sizing: border-box;
 }
 
+:global(body) {
+  margin: 0;
+  background:
+    radial-gradient(1200px 520px at 0% -10%, rgba(99, 102, 241, 0.2), transparent 65%),
+    radial-gradient(920px 460px at 100% 0%, rgba(14, 165, 233, 0.16), transparent 58%),
+    linear-gradient(180deg, #f8fbff 0%, #f4f7fb 55%, #f7f9fd 100%);
+  color: #0f172a;
+}
+
 .container {
+  --surface: rgba(255, 255, 255, 0.86);
+  --surface-soft: rgba(248, 250, 254, 0.9);
+  --surface-border: rgba(214, 221, 233, 0.92);
+  --text-primary: #212836;
+  --text-secondary: #3a4558;
+  --text-muted: #5f6e85;
+  --primary: #2367f4;
+  --primary-hover: #1a59dc;
+  --primary-soft: rgba(35, 103, 244, 0.1);
+  --success: #16a34a;
+  --danger: #dd4444;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
   min-height: 100vh;
-  padding: 40px 20px;
-  max-width: 1400px;
+  padding: 40px 22px 48px;
+  max-width: 1320px;
   margin: 0 auto;
 }
 
 .header {
   text-align: center;
-  color: white;
-  margin-bottom: 32px;
+  color: var(--text-primary);
+  margin-bottom: 34px;
 }
 
 .header h1 {
-  font-size: 2.6em;
+  font-size: clamp(2rem, 3.5vw, 2.7rem);
   margin-bottom: 6px;
-  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-  letter-spacing: 1px;
+  letter-spacing: -0.02em;
+  font-weight: 800;
 }
 
 .subtitle {
-  font-size: 1.05em;
-  opacity: 0.85;
-  font-weight: 300;
+  font-size: 1rem;
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 /* === 搜索栏 === */
 .search-wrapper {
   max-width: 680px;
-  margin: 0 auto 36px;
+  margin: 0 auto 34px;
   position: relative;
 }
 
 .search-bar {
   display: flex;
   align-items: center;
-  background: white;
-  border-radius: 50px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
-  padding: 4px 4px 4px 18px;
-  transition: box-shadow 0.3s, border-color 0.3s;
-  border: 2px solid transparent;
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.09);
+  padding: 2px var(--space-2) 2px var(--space-3);
+  transition: box-shadow 0.25s ease, border-color 0.25s ease, background-color 0.25s ease;
+  border: 1px solid var(--surface-border);
+  backdrop-filter: blur(12px);
 }
 
 .search-bar:focus-within {
-  box-shadow: 0 6px 30px rgba(102, 126, 234, 0.25);
-  border-color: #667eea;
+  box-shadow: 0 22px 42px rgba(79, 70, 229, 0.18);
+  border-color: rgba(79, 70, 229, 0.52);
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .search-bar--error {
-  border-color: #fc8181;
-  box-shadow: 0 4px 20px rgba(252, 129, 129, 0.15);
+  border-color: rgba(220, 38, 38, 0.4);
+  box-shadow: 0 16px 32px rgba(220, 38, 38, 0.12);
 }
 
 .search-bar--success {
-  border-color: #68d391;
+  border-color: rgba(22, 163, 74, 0.38);
 }
 
 .search-icon {
-  font-size: 1.1em;
   margin-right: 8px;
   flex-shrink: 0;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .search-input {
   flex: 1;
   border: none;
   outline: none;
-  font-size: 1.05em;
-  padding: 12px 8px;
+  font-size: 1.02em;
+  padding: var(--space-3) var(--space-2);
   background: transparent;
-  color: #2d3748;
+  color: var(--text-primary);
   min-width: 0;
 }
 
 .search-input::placeholder {
-  color: #a0aec0;
+  color: #94a3b8;
 }
 
 .search-btn {
-  padding: 10px 28px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 0 var(--space-4);
+  background: var(--primary);
   color: white;
   border: none;
-  border-radius: 50px;
+  border-radius: var(--radius-sm);
   font-size: 0.95em;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
   white-space: nowrap;
@@ -831,12 +964,13 @@ const fetchAiExplanation = async () => {
   align-items: center;
   justify-content: center;
   min-width: 72px;
-  height: 42px;
+  height: 40px;
 }
 
 .search-btn:hover {
-  transform: scale(1.03);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
+  background: var(--primary-hover);
+  box-shadow: 0 8px 20px rgba(35, 103, 244, 0.28);
 }
 
 .search-btn:active {
@@ -854,15 +988,16 @@ const fetchAiExplanation = async () => {
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
   padding: 6px 0;
   list-style: none;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+  box-shadow: 0 20px 38px rgba(15, 23, 42, 0.14);
   z-index: 10;
   max-height: 280px;
   overflow-y: auto;
+  backdrop-filter: blur(10px);
 }
 
 .suggestions-list li {
@@ -870,7 +1005,7 @@ const fetchAiExplanation = async () => {
   cursor: pointer;
   display: flex;
   align-items: center;
-  border-bottom: 1px solid #f7fafc;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.62);
   transition: background-color 0.15s;
 }
 
@@ -879,11 +1014,11 @@ const fetchAiExplanation = async () => {
 }
 
 .suggestions-list li:hover {
-  background-color: #f0f4ff;
+  background-color: rgba(79, 70, 229, 0.08);
 }
 
 .suggestions-list li.history-section {
-  background: #f7fafc;
+  background: rgba(248, 250, 252, 0.85);
   padding: 6px 18px;
   cursor: default;
   border-bottom: 1px solid #e2e8f0;
@@ -895,24 +1030,39 @@ const fetchAiExplanation = async () => {
   align-items: center;
   width: 100%;
   font-size: 0.82em;
-  color: #718096;
+  color: var(--text-muted);
   font-weight: 600;
 }
 
+.label-with-icon,
+.title-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .btn-clear-mini {
-  background: none;
-  border: none;
-  color: #a0aec0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
   font-size: 0.82em;
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
   transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .btn-clear-mini:hover {
-  color: #e53e3e;
-  background: #fff5f5;
+  color: var(--danger);
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.btn-clear-mini:active {
+  transform: translateY(1px);
 }
 
 .suggestions-list li.history-row {
@@ -922,26 +1072,26 @@ const fetchAiExplanation = async () => {
 .suggestion-kanji {
   font-weight: 600;
   font-size: 1.05em;
-  color: #2d3748;
+  color: var(--text-primary);
   min-width: 56px;
 }
 
 .suggestion-kana {
-  color: #667eea;
+  color: var(--primary);
   font-size: 0.88em;
   margin-left: 10px;
   min-width: 70px;
 }
 
 .suggestion-romaji {
-  color: #a0aec0;
+  color: #94a3b8;
   font-size: 0.82em;
   margin-left: 10px;
   font-family: monospace;
 }
 
 .suggestion-meaning {
-  color: #718096;
+  color: var(--text-muted);
   font-size: 0.82em;
   margin-left: auto;
 }
@@ -949,9 +1099,9 @@ const fetchAiExplanation = async () => {
 .suggestion-type {
   font-size: 0.72em;
   padding: 1px 8px;
-  background: linear-gradient(135deg, #667eea22, #764ba222);
-  color: #667eea;
-  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.14), rgba(124, 58, 237, 0.14));
+  color: var(--primary);
+  border-radius: var(--radius-sm);
   font-weight: 500;
   margin-left: 8px;
   white-space: nowrap;
@@ -961,7 +1111,7 @@ const fetchAiExplanation = async () => {
 .main-content {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 28px;
+  gap: 22px;
   margin-bottom: 36px;
   animation: fadeIn 0.4s ease;
 }
@@ -973,7 +1123,7 @@ const fetchAiExplanation = async () => {
 
 .right-section {
   position: sticky;
-  top: 20px;
+  top: 18px;
   align-self: start;
 }
 
@@ -988,25 +1138,26 @@ const fetchAiExplanation = async () => {
 
 /* === 卡片 === */
 .card {
-  background: white;
-  border-radius: 16px;
+  background: var(--surface);
+  border-radius: var(--radius-md);
   padding: 28px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-  border: 1px solid rgba(0,0,0,0.04);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.09);
+  border: 1px solid var(--surface-border);
+  backdrop-filter: blur(12px);
 }
 
 .card h3 {
-  color: #4a5568;
+  color: #334155;
   margin-bottom: 14px;
   font-size: 1.05em;
 }
 
 .error-message {
-  color: #c53030;
-  background-color: #fff5f5;
-  border: 1px solid #fed7d7;
-  padding: 10px 16px;
-  border-radius: 12px;
+  color: #b91c1c;
+  background-color: #fff7f7;
+  border: 1px solid #fecaca;
+  padding: 10px var(--space-4);
+  border-radius: var(--radius-md);
   margin-top: 10px;
   font-size: 0.88em;
 }
@@ -1023,65 +1174,65 @@ const fetchAiExplanation = async () => {
 .result-summary {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   margin-bottom: 16px;
   padding-bottom: 14px;
-  border-bottom: 1px solid #edf2f7;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
   animation: slideUp 0.35s ease both;
 }
 
 .summary-dict {
   font-size: 1.5em;
   font-weight: 700;
-  color: #2d3748;
+  color: var(--text-primary);
 }
 
 .summary-tag {
   font-size: 0.78em;
-  padding: 2px 10px;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  padding: 2px var(--space-2);
+  background: var(--primary);
   color: white;
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   font-weight: 500;
 }
 
 .summary-meaning {
   font-size: 1em;
-  color: #4a5568;
+  color: var(--text-secondary);
 }
 
 .summary-romaji {
   font-size: 0.78em;
-  color: #a0aec0;
+  color: #94a3b8;
   font-style: italic;
 }
 
 .result-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .result-item {
   display: flex;
   flex-direction: column;
-  padding: 14px;
-  background: #f7fafc;
-  border-radius: 10px;
-  border-left: 3px solid #667eea;
+  padding: var(--space-3);
+  background: rgba(248, 250, 252, 0.95);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--primary);
   animation: slideUp 0.35s ease both;
   transition: transform 0.2s, box-shadow 0.2s;
 }
 
 .result-item:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.12);
+  box-shadow: 0 8px 18px rgba(79, 70, 229, 0.16);
 }
 
 .result-item .label {
   font-size: 0.82em;
-  color: #a0aec0;
+  color: var(--text-muted);
   margin-bottom: 4px;
   font-weight: 500;
 }
@@ -1089,7 +1240,7 @@ const fetchAiExplanation = async () => {
 .result-item .value {
   font-size: 1.2em;
   font-weight: 600;
-  color: #2d3748;
+  color: var(--text-primary);
 }
 
 /* === 字典卡片 === */
@@ -1104,13 +1255,13 @@ const fetchAiExplanation = async () => {
   flex-wrap: wrap;
   margin-bottom: 12px;
   padding-bottom: 14px;
-  border-bottom: 1px solid #edf2f7;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.92);
 }
 
 .dict-word {
   font-size: 2em;
   font-weight: 700;
-  color: #2d3748;
+  color: var(--text-primary);
   line-height: 1.6;
 }
 
@@ -1122,7 +1273,7 @@ ruby {
 ruby rt {
   font-size: 0.5em;
   font-weight: 400;
-  color: #667eea;
+  color: var(--primary);
   letter-spacing: 0.05em;
 }
 
@@ -1132,24 +1283,24 @@ ruby rt {
 
 .ex-japanese ruby rt {
   font-size: 0.55em;
-  color: #718096;
+  color: var(--text-muted);
 }
 
 .dict-reading {
   font-size: 1.15em;
-  color: #667eea;
+  color: var(--primary);
   font-weight: 500;
 }
 
 .dict-romaji {
   font-size: 0.88em;
-  color: #a0aec0;
+  color: #94a3b8;
   font-family: monospace;
 }
 
 .dict-tags {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
   flex-wrap: wrap;
   margin-bottom: 16px;
@@ -1158,9 +1309,9 @@ ruby rt {
 .jlpt-badge {
   font-size: 0.78em;
   padding: 2px 8px;
-  background: #ebf8ff;
-  color: #2b6cb0;
-  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: var(--radius-sm);
   font-weight: 600;
   border: 1px solid #bee3f8;
 }
@@ -1168,9 +1319,9 @@ ruby rt {
 .common-badge {
   font-size: 0.78em;
   padding: 2px 8px;
-  background: #f0fff4;
-  color: #276749;
-  border-radius: 8px;
+  background: #f0fdf4;
+  color: #15803d;
+  border-radius: var(--radius-sm);
   font-weight: 500;
   border: 1px solid #c6f6d5;
 }
@@ -1181,7 +1332,7 @@ ruby rt {
 
 .meaning-item {
   padding: 10px 0;
-  border-bottom: 1px solid #f0f4f8;
+  border-bottom: 1px solid rgba(241, 245, 249, 0.95);
   animation: slideUp 0.3s ease both;
 }
 
@@ -1192,17 +1343,17 @@ ruby rt {
 .meaning-pos {
   display: inline-block;
   font-size: 0.78em;
-  color: #718096;
-  background: #edf2f7;
+  color: #64748b;
+  background: #f1f5f9;
   padding: 1px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-right: 8px;
   margin-bottom: 4px;
 }
 
 .meaning-def {
   font-size: 1em;
-  color: #2d3748;
+  color: var(--text-primary);
 }
 
 /* === AI 卡片 === */
@@ -1210,8 +1361,24 @@ ruby rt {
   animation: cardIn 0.4s ease both;
 }
 
-.ai-card h3 {
+.ai-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ai-title {
   margin-bottom: 0;
+}
+
+.ai-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .ai-progress-container {
@@ -1234,15 +1401,20 @@ ruby rt {
 
 .ai-module {
   margin-top: 18px;
-  border-top: 1px solid #edf2f7;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
   padding-top: 14px;
 }
 
 .module-title {
-  color: #4a5568;
+  color: #334155;
   font-size: 1.05em;
   margin-top: 0;
   margin-bottom: 14px;
+}
+
+.title-with-icon .icon {
+  width: 16px;
+  height: 16px;
 }
 
 .examples-grid {
@@ -1252,10 +1424,10 @@ ruby rt {
 }
 
 .example-box {
-  background: #f7fafc;
-  padding: 14px;
-  border-radius: 10px;
-  border-left: 3px solid #667eea;
+  background: rgba(248, 250, 252, 0.95);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--primary);
   animation: slideUp 0.35s ease both;
   transition: transform 0.2s;
 }
@@ -1265,25 +1437,32 @@ ruby rt {
 }
 
 .example-box:hover {
-  transform: translateX(4px);
+  transform: translateX(3px);
+}
+
+.ex-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .ex-japanese {
   font-size: 1.15em;
   font-weight: 600;
-  color: #2d3748;
+  color: var(--text-primary);
   margin-bottom: 3px;
+  flex: 1;
 }
 
 .ex-kana {
   font-size: 0.85em;
-  color: #718096;
+  color: var(--text-muted);
   margin-bottom: 6px;
 }
 
 .ex-chinese {
   font-size: 0.95em;
-  color: #4a5568;
+  color: var(--text-secondary);
 }
 
 .ai-loading {
@@ -1292,14 +1471,14 @@ ruby rt {
   justify-content: center;
   gap: 12px;
   padding: 28px;
-  color: #718096;
+  color: var(--text-muted);
 }
 
 .spinner {
   width: 22px;
   height: 22px;
   border: 3px solid #e2e8f0;
-  border-top-color: #667eea;
+  border-top-color: var(--primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -1315,42 +1494,56 @@ ruby rt {
 }
 
 .ai-content {
-  background: #fafbfc;
-  padding: 18px;
-  border-radius: 10px;
-  border: 1px solid #edf2f7;
+  background: rgba(248, 250, 252, 0.9);
+  padding: var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(226, 232, 240, 0.9);
   line-height: 1.7;
-  color: #2d3748;
+  color: var(--text-primary);
 }
 
 .btn-secondary {
-  padding: 6px 14px;
-  background: #edf2f7;
-  color: #4a5568;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  padding: 0 var(--space-3);
+  background: rgba(241, 245, 249, 0.85);
+  color: #334155;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: var(--radius-sm);
   font-size: 0.85em;
   cursor: pointer;
   transition: all 0.2s;
+  height: 40px;
+  font-weight: 500;
 }
 
 .btn-secondary:hover {
-  background: #e2e8f0;
+  background: rgba(226, 232, 240, 0.95);
+  border-color: rgba(148, 163, 184, 0.9);
 }
 
 .model-select {
-  padding: 6px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  padding: 0 var(--space-3);
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: var(--radius-sm);
   background-color: white;
   font-size: 0.85em;
-  color: #4a5568;
+  color: #334155;
   outline: none;
   cursor: pointer;
+  height: 40px;
 }
 
 .model-select:focus {
-  border-color: #667eea;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+}
+
+.retry-btn {
+  margin-left: 10px;
+  background: none;
+  border: none;
+  text-decoration: underline;
+  color: inherit;
+  cursor: pointer;
 }
 
 /* === AI 核对徽章 === */
@@ -1363,24 +1556,27 @@ ruby rt {
 
 .text-strike {
   text-decoration: line-through;
-  color: #a0aec0;
+  color: #94a3b8;
 }
 
 .success-check {
-  color: #38a169;
+  color: var(--success);
   animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
 }
 
 .error-correction {
-  color: #e53e3e;
+  color: var(--danger);
   font-weight: 600;
   background: #fff5f5;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid #fed7d7;
   animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* === 文档区 === */
@@ -1399,56 +1595,66 @@ ruby rt {
   justify-content: space-between;
   align-items: center;
   cursor: pointer;
-  background-color: #f8fafc;
-  transition: background-color 0.2s;
+  background-color: rgba(248, 250, 252, 0.82);
+  transition: background-color 0.2s, border-color 0.2s;
 }
 
 .doc-header:hover {
-  background-color: #edf2f7;
+  background-color: rgba(241, 245, 249, 0.94);
 }
 
-.doc-header h2 {
+.doc-title {
   margin: 0;
-  font-size: 1.05rem;
-  color: #4a5568;
-  font-weight: 600;
+  font-size: 1.15rem;
+  color: #334155;
+  font-weight: 700;
 }
 
 .doc-content {
   padding: 20px 24px;
-  border-top: 1px solid #edf2f7;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
 }
 
 .toggle-btn {
-  background: none;
-  border: none;
-  padding: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--surface-border);
+  padding: 6px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
 }
 
-.arrow {
-  border: solid #718096;
-  border-width: 0 2px 2px 0;
-  display: inline-block;
-  padding: 3px;
-  transition: transform 0.3s ease;
+.toggle-btn:hover {
+  border-color: rgba(35, 103, 244, 0.28);
+  background: rgba(35, 103, 244, 0.08);
 }
 
-.arrow.right {
-  transform: rotate(-45deg);
+.toggle-btn:active {
+  transform: translateY(1px);
 }
 
-.arrow.down {
-  transform: rotate(45deg);
+.icon-chevron {
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  transition: transform 0.24s ease;
+}
+
+.icon-chevron.right {
+  transform: rotate(-90deg);
+}
+
+.icon-chevron.down {
+  transform: rotate(0deg);
 }
 
 .guide-group h3 {
   margin-top: 0;
   margin-bottom: 14px;
-  color: #2d3748;
+  color: var(--text-primary);
   font-size: 1.05rem;
 }
 
@@ -1458,10 +1664,10 @@ ruby rt {
 }
 
 .guide-item {
-  padding: 14px 16px;
-  background: #f7fafc;
-  border-radius: 10px;
-  border-left: 3px solid #667eea;
+  padding: var(--space-3) var(--space-4);
+  background: rgba(248, 250, 252, 0.95);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--primary);
   margin-bottom: 10px;
 }
 
@@ -1470,11 +1676,11 @@ ruby rt {
 }
 
 .guide-item strong {
-  color: #2d3748;
+  color: var(--text-primary);
 }
 
 .guide-item p {
-  color: #718096;
+  color: var(--text-muted);
   font-size: 0.92em;
   line-height: 1.5;
   margin: 4px 0 0;
@@ -1488,7 +1694,7 @@ ruby rt {
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
   margin-top: 10px;
   margin-bottom: 10px;
-  color: #2d3748;
+  color: var(--text-primary);
 }
 
 .markdown-body p {
@@ -1568,5 +1774,108 @@ ruby rt {
 @keyframes shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
+}
+
+/* === 朗读按钮 === */
+.btn-speak {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: transform 0.15s, background-color 0.2s;
+  opacity: 0.5;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.btn-speak:hover {
+  opacity: 1;
+  transform: scale(1.2);
+  background-color: var(--primary-soft);
+}
+
+.btn-speak:active {
+  transform: scale(0.95);
+}
+
+.btn-speak--sm {
+  padding: 1px 3px;
+}
+
+.btn-speak--lg {
+  padding: 3px 5px;
+}
+
+.icon {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-search {
+  width: 17px;
+  height: 17px;
+}
+
+.btn-speak--sm .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.btn-speak--lg .icon {
+  width: 20px;
+  height: 20px;
+}
+
+.icon-check {
+  color: var(--success);
+}
+
+.icon-error {
+  width: 13px;
+  height: 13px;
+}
+
+.icon-clock {
+  width: 14px;
+  height: 14px;
+}
+
+.icon-trash {
+  width: 12px;
+  height: 12px;
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 26px 14px 36px;
+  }
+
+  .card {
+    padding: 20px;
+    border-radius: 16px;
+  }
+
+  .search-bar {
+    padding-left: 14px;
+  }
+
+  .search-btn {
+    padding: 10px 18px;
+  }
+
+  .result-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .suggestion-meaning,
+  .suggestion-romaji {
+    display: none;
+  }
 }
 </style>

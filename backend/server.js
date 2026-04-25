@@ -8,11 +8,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Ollama } from 'ollama';
 import https from 'https';
+import { searchWords, findWord, bulkInsert } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 读取动词库
+// 读取动词库（conjugationEngine 辅助数据，保留）
 const commonVerbs = JSON.parse(fs.readFileSync(path.join(__dirname, 'common-verbs.json'), 'utf8'));
 
 // 调用 Jisho API 获取词汇（支持全词类）
@@ -231,7 +232,8 @@ function generateFuriganaHtml(text) {
   const tokens = tokenizer.tokenize(text);
   let html = '';
   
-  for (const token of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
     const surface = token.surface_form;
     const reading = token.reading; // カタカナ
     
@@ -242,6 +244,39 @@ function generateFuriganaHtml(text) {
       const readingHira = wanakana.toHiragana(reading);
       // 对混合词（如「食べる」）做精确拆分
       html += rubyForMixedToken(surface, readingHira);
+      
+      // 跳过紧跟在汉字后面的重复读音假名（AI 常把读音写在汉字后面，如「夜よる」）
+      let readingToMatch = readingHira;
+      // 对混合词，提取汉字部分的读音（如「食べる」→ 只匹配「たべる」中去掉送假名的「た」）
+      // 简化处理：用完整读音匹配
+      let j = i + 1;
+      let accumulated = '';
+      while (j < tokens.length && readingToMatch.length > 0) {
+        const nextSurface = tokens[j].surface_form;
+        const nextHasKanji = /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/.test(nextSurface);
+        if (nextHasKanji) break; // 遇到下一个汉字就停止
+        const nextHira = wanakana.toHiragana(nextSurface);
+        accumulated += nextHira;
+        if (readingToMatch === accumulated) {
+          // 后续假名完全匹配当前汉字读音，跳过这些 token
+          i = j;
+          break;
+        } else if (readingToMatch.startsWith(accumulated)) {
+          // 部分匹配，继续累积
+          j++;
+        } else if (accumulated.startsWith(readingToMatch)) {
+          // 当前 token 包含读音前缀 + 额外内容（如「鳴」读音「な」后跟 token「なき」）
+          // 跳过重复的读音前缀，保留后面的真实内容
+          const redundantLen = readingToMatch.length - (accumulated.length - nextHira.length);
+          if (redundantLen > 0 && redundantLen <= nextSurface.length) {
+            html += escapeHtml(nextSurface.slice(redundantLen));
+            i = j;
+          }
+          break;
+        } else {
+          break; // 不匹配，停止
+        }
+      }
     } else {
       html += escapeHtml(surface);
     }
@@ -480,25 +515,39 @@ ${JSON.stringify(conjugationForAi, null, 2)}
   }
 });
 
-// 动词自动补全 API
+// 词汇联想补全 API（双轨：local 秒回 + remote 补充）
 app.get('/api/suggest', async (req, res) => {
   try {
-    const { q } = req.query;
+    const { q, remote } = req.query;
     if (!q || q.trim() === '') {
       return res.json([]);
     }
 
     const query = q.toLowerCase().trim();
+    // 用 wanakana 转假名，支持用户输入罗马音匹配假名
+    const queryHira = wanakana.isRomaji(query) ? wanakana.toHiragana(query) : '';
     
-    // 1. 本地高频词库快速匹配
-    const localSuggestions = commonVerbs.filter(verb => {
-      return verb.kanji.includes(query) || 
-             verb.kana.includes(query) || 
-             verb.romaji.includes(query) ||
-             verb.meaning.includes(query);
-    });
+    // 1. SQLite 本地词库快速匹配（索引加速，毫秒级）
+    let localSuggestions = searchWords(query, 8);
+    // 补充罗马音转假名匹配
+    if (queryHira && localSuggestions.length < 8) {
+      const hiraSuggestions = searchWords(queryHira, 8);
+      const seen = new Set(localSuggestions.map(w => w.kanji + w.kana));
+      for (const s of hiraSuggestions) {
+        if (!seen.has(s.kanji + s.kana)) {
+          localSuggestions.push(s);
+          seen.add(s.kanji + s.kana);
+        }
+      }
+      localSuggestions = localSuggestions.slice(0, 8);
+    }
 
-    // 2. 并行调用 Jisho API 获取更广泛的词汇（包括非动词）
+    // 如果不是 remote 请求，直接返回本地结果（秒回）
+    if (!remote) {
+      return res.json(localSuggestions.slice(0, 8));
+    }
+
+    // remote=1: 查询 Jisho API 补充远程结果
     let jishoSuggestions = [];
     try {
       jishoSuggestions = await Promise.race([
@@ -509,19 +558,35 @@ app.get('/api/suggest', async (req, res) => {
       console.error('Jisho API fetch failed', e);
     }
 
-    // 3. 合并去重（以 kanji 作为唯一标识）
-    const merged = [...localSuggestions, ...jishoSuggestions];
-    const unique = [];
-    const seen = new Set();
-    
-    for (const verb of merged) {
-      if (!seen.has(verb.kanji)) {
-        seen.add(verb.kanji);
-        unique.push(verb);
+    // 合并去重（本地优先）
+    const seen = new Set(localSuggestions.map(w => w.kanji + w.kana));
+    const remoteOnly = [];
+    for (const item of jishoSuggestions) {
+      const key = item.kanji + item.kana;
+      if (!seen.has(key)) {
+        seen.add(key);
+        remoteOnly.push(item);
       }
     }
 
-    res.json(unique.slice(0, 8)); // 最多返回8条记录
+    // 将远程新词缓存到 SQLite（异步，不阻塞响应）
+    if (remoteOnly.length > 0) {
+      try {
+        bulkInsert(remoteOnly.map(item => ({
+          kanji: item.kanji,
+          kana: item.kana,
+          romaji: item.romaji,
+          meaning: item.meaning || '',
+          wordType: item.wordType || 'other',
+          jlpt: '',
+          isCommon: 0
+        })));
+      } catch (e) {
+        // 忽略缓存失败
+      }
+    }
+
+    res.json([...localSuggestions, ...remoteOnly].slice(0, 12));
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to fetch suggestions' });
@@ -549,8 +614,27 @@ app.get('/api/conjugate', async (req, res) => {
       }
       type = detectVerbType(processedVerb);
       
-      // 非动词：回退到 Jisho 查词
+      // 非动词：优先查 SQLite 本地词库（毫秒级）
       if (!type) {
+        const localWord = findWord(verb) || findWord(processedVerb);
+        if (localWord && localWord.wordType !== 'verb' && localWord.wordType !== 'other') {
+          return res.json({
+            wordType: localWord.wordType,
+            word: localWord.kanji,
+            reading: localWord.kana,
+            romaji: localWord.romaji,
+            meanings: [{
+              pos: localWord.wordType,
+              definitions: localWord.meaning
+            }],
+            jlpt: localWord.jlpt || '',
+            isCommon: !!localWord.isCommon,
+            originalInput: verb,
+            parsedAs: processedVerb
+          });
+        }
+
+        // 本地未命中，回退到 Jisho 查词
         try {
           const wordInfo = await lookupWordJisho(verb);
           if (wordInfo && wordInfo.wordType !== 'other') {
@@ -561,6 +645,18 @@ app.get('/api/conjugate', async (req, res) => {
             }
             // 翻译英文释义为中文
             wordInfo.meanings = await translateMeaningsToChinese(wordInfo.meanings);
+            // 缓存到 SQLite，下次秒回
+            try {
+              bulkInsert([{
+                kanji: wordInfo.word,
+                kana: wordInfo.reading,
+                romaji: wordInfo.romaji,
+                meaning: wordInfo.meanings.map(m => m.definitions).join('; '),
+                wordType: wordInfo.wordType,
+                jlpt: wordInfo.jlpt || '',
+                isCommon: wordInfo.isCommon ? 1 : 0
+              }]);
+            } catch(e) { /* ignore cache error */ }
             return res.json({
               ...wordInfo,
               originalInput: verb,
@@ -578,13 +674,14 @@ app.get('/api/conjugate', async (req, res) => {
 
     const result = conjugate(processedVerb, type);
 
-    // 从本地词库查找中文释义
+    // 从 SQLite 本地词库查找中文释义（优先），fallback 到旧 JSON
     const dictForm = result.dictionaryForm;
-    const matchedVerb = commonVerbs.find(v => 
+    const dbWord = findWord(dictForm) || findWord(processedVerb);
+    const matchedVerb = dbWord || commonVerbs.find(v => 
       v.kanji === dictForm || v.kana === dictForm || v.kanji === processedVerb || v.kana === processedVerb
     );
-    const meaning = matchedVerb ? matchedVerb.meaning : '';
-    const reading = matchedVerb ? matchedVerb.kana : '';
+    const meaning = dbWord ? dbWord.meaning : (matchedVerb ? matchedVerb.meaning : '');
+    const reading = dbWord ? dbWord.kana : (matchedVerb ? matchedVerb.kana : '');
 
     res.json({
       wordType: 'verb',

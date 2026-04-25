@@ -49,7 +49,7 @@ class GodanVerb extends Verb {
   }
 
   getTeTaSuffix(isTe) {
-    if (this.dictionaryForm === '行く') {
+    if (this.dictionaryForm === '行く' || this.dictionaryForm === 'いく') {
       return isTe ? 'って' : 'った';
     }
     const suffixMap = {
@@ -113,19 +113,21 @@ class KuruVerb extends Verb {
   constructor(dictionaryForm) {
     super();
     this.dictionaryForm = dictionaryForm;
-    this.prefix = dictionaryForm.slice(0, -2);
+    // 判断是否包含汉字「来」：「来る」→ prefix='来', 「くる」→ prefix=''
+    this.hasKanji = dictionaryForm.includes('来');
+    this.prefix = this.hasKanji ? dictionaryForm.slice(0, dictionaryForm.indexOf('来') + 1) : '';
   }
 
   getDictionaryForm() { return this.dictionaryForm; }
-  getNegative() { return this.prefix + 'こない'; }
-  getPolite() { return this.prefix + 'きます'; }
-  getTeForm() { return this.prefix + 'きて'; }
-  getTaForm() { return this.prefix + 'きた'; }
-  getPotential() { return this.prefix + 'こられる'; }
-  getPassive() { return this.prefix + 'こられる'; }
-  getCausative() { return this.prefix + 'こさせる'; }
-  getImperative() { return this.prefix + 'こい'; }
-  getVolitional() { return this.prefix + 'こよう'; }
+  getNegative() { return this.hasKanji ? this.prefix + 'ない' : this.prefix + 'こない'; }
+  getPolite() { return this.hasKanji ? this.prefix + 'ます' : this.prefix + 'きます'; }
+  getTeForm() { return this.hasKanji ? this.prefix + 'て' : this.prefix + 'きて'; }
+  getTaForm() { return this.hasKanji ? this.prefix + 'た' : this.prefix + 'きた'; }
+  getPotential() { return this.hasKanji ? this.prefix + 'られる' : this.prefix + 'こられる'; }
+  getPassive() { return this.hasKanji ? this.prefix + 'られる' : this.prefix + 'こられる'; }
+  getCausative() { return this.hasKanji ? this.prefix + 'させる' : this.prefix + 'こさせる'; }
+  getImperative() { return this.hasKanji ? this.prefix + 'い' : this.prefix + 'こい'; }
+  getVolitional() { return this.hasKanji ? this.prefix + 'よう' : this.prefix + 'こよう'; }
 }
 
 // 工厂函数

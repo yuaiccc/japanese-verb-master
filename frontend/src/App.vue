@@ -1,56 +1,127 @@
 <template>
   <div class="container">
     <header class="header">
-      <h1>🇯🇵 Japanese Verb Master</h1>
-      <p class="subtitle">精准的日语动词活用在线工具</p>
+      <h1>🇯🇵 Japanese Word Master</h1>
+      <p class="subtitle">日语词汇查询与动词活用工具</p>
     </header>
 
-    <main class="main-content">
-      <!-- 左侧：工具区 -->
-      <section class="tool-section">
-        <div class="card">
-          <h2>动词活用工具</h2>
-          
-          <div class="form-group position-relative">
-            <label for="verb">动词原形</label>
-            <input
-              id="verb"
-              v-model="form.verb"
-              type="text"
-              :placeholder="error ? error : '例如：飲む、食べる、nomu、taberu'"
-              :class="{ 'input-error': error, 'input-success': result }"
-              @keyup.enter="conjugate"
-              @input="error = ''"
-              @focus="showSuggestions = true"
-              @blur="hideSuggestionsWithDelay"
-              autocomplete="off"
-            >
-            <!-- 自动补全下拉框 -->
-            <ul v-if="showSuggestions && suggestions.length > 0" class="suggestions-list">
-              <li 
-                v-for="(item, index) in suggestions" 
-                :key="index"
-                @mousedown.prevent="selectSuggestion(item)"
-              >
-                <span class="suggestion-kanji">{{ item.kanji }}</span>
-                <span class="suggestion-kana">{{ item.kana }}</span>
-                <span class="suggestion-romaji">{{ item.romaji }}</span>
-                <span class="suggestion-meaning">{{ item.meaning }}</span>
-              </li>
-            </ul>
+    <!-- 搜索栏：输入框 + 按钮合一 -->
+    <div class="search-wrapper">
+      <div class="search-bar" :class="{ 'search-bar--error': error, 'search-bar--success': result }">
+        <span class="search-icon">🔍</span>
+        <input
+          id="verb"
+          v-model="form.verb"
+          type="text"
+          class="search-input"
+          :placeholder="error ? error : '输入日语单词，如：食べる、猫、きれい、neko'"
+          @keyup.enter="conjugate"
+          @input="onInput"
+          @focus="onFocus"
+          @blur="hideSuggestionsWithDelay"
+          autocomplete="off"
+        >
+        <button @click="conjugate" class="search-btn" :disabled="loading">
+          <span v-if="loading" class="spinner-small"></span>
+          <span v-else>查询</span>
+        </button>
+      </div>
+      <!-- 联想补全 / 查询历史下拉框 -->
+      <ul v-if="showDropdown && (suggestions.length > 0 || showHistory)" class="suggestions-list">
+        <!-- 查询历史 -->
+        <li v-if="showHistory && history.length > 0" class="history-section">
+          <div class="suggestion-label">
+            <span>🕐 查询历史</span>
+            <button @mousedown.prevent="clearHistory" class="btn-clear-mini" title="清空历史">清空</button>
           </div>
+        </li>
+        <li
+          v-for="(item, index) in (showHistory ? history : suggestions)"
+          :key="item.verb || index"
+          @mousedown.prevent="onSelectItem(item)"
+          :class="{ 'history-row': showHistory }"
+        >
+          <template v-if="showHistory">
+            <span class="suggestion-kanji">{{ item.verb }}</span>
+            <span v-if="item.meaning" class="suggestion-meaning">{{ item.meaning }}</span>
+            <span class="suggestion-type">{{ verbTypeMap[item.verbType] || wordTypeDisplayMap[item.verbType] || item.verbType }}</span>
+          </template>
+          <template v-else>
+            <span class="suggestion-kanji">{{ item.kanji }}</span>
+            <span class="suggestion-kana">{{ item.kana }}</span>
+            <span class="suggestion-romaji">{{ item.romaji }}</span>
+            <span class="suggestion-meaning">{{ item.meaning }}</span>
+            <span v-if="item.wordType && item.wordType !== 'verb'" class="suggestion-type">{{ wordTypeDisplayMap[item.wordType] || item.wordType }}</span>
+          </template>
+        </li>
+      </ul>
+      <transition name="shake">
+        <div v-if="error" class="error-message">
+          {{ error }}
+        </div>
+      </transition>
+    </div>
 
-          <button @click="conjugate" class="btn-primary">
-            {{ loading ? '处理中...' : '活用' }}
-          </button>
+    <main class="main-content" v-if="result || loadingAi">
+      <!-- 左侧：活用变形 / 字典结果 -->
+      <section class="left-section">
 
-          <div v-if="error" class="error-message">
-            {{ error }}
+        <!-- 动词活用结果 -->
+        <transition name="card-fade">
+        <div v-if="result && isVerb" class="card result-card">
+          <div class="result-summary">
+            <span class="summary-dict" v-html="furiganaDict"></span>
+            <span class="summary-tag">{{ verbTypeMap[result.verbType] || result.verbType }}</span>
+            <span v-if="result.meaning" class="summary-meaning">{{ result.meaning }}</span>
+            <span v-if="result.originalInput !== result.parsedAs" class="summary-romaji">从罗马音 "{{ result.originalInput }}" 转换</span>
+          </div>
+          <h3>活用结果</h3>
+          <div class="result-grid">
+            <div class="result-item" v-for="(item, idx) in conjugationItems" :key="item.key" :style="{ animationDelay: idx * 0.06 + 's' }">
+              <span class="label">{{ item.label }}</span>
+              <span class="value">
+                <span :class="{ 'text-strike': verificationStatus[item.key] && !verificationStatus[item.key].isCorrect && !isEquivalentCorrection(verificationStatus[item.key].correction, result[item.key]) }">
+                  {{ result[item.key] }}
+                </span>
+                <span class="verify-badge" v-if="loadingAi && !verificationStatus[item.key]">
+                  <span class="spinner-small" title="AI 正在核对..."></span>
+                </span>
+                <span class="verify-badge" v-else-if="verificationStatus[item.key]">
+                  <span v-if="verificationStatus[item.key].isCorrect || isEquivalentCorrection(verificationStatus[item.key].correction, result[item.key])" title="AI 核对正确" class="success-check">✅</span>
+                  <span v-else title="AI 发现错误" class="error-correction">❌ 修正为: {{ verificationStatus[item.key].correction }}</span>
+                </span>
+              </span>
+            </div>
           </div>
         </div>
+        </transition>
 
-        <!-- AI 解释区域 -->
-        <div v-if="result || loadingAi || aiError" class="card result-card">
+        <!-- 非动词字典卡片 -->
+        <transition name="card-fade">
+        <div v-if="result && !isVerb" class="card result-card dict-card">
+          <div class="dict-header">
+            <span class="dict-word" v-html="furiganaWord"></span>
+          </div>
+          <div class="dict-tags">
+            <span class="summary-tag">{{ wordTypeDisplayMap[result.wordType] || result.wordType }}</span>
+            <span v-if="result.jlpt" class="jlpt-badge">{{ result.jlpt }}</span>
+            <span v-if="result.isCommon" class="common-badge">常用词</span>
+          </div>
+          <div class="dict-meanings">
+            <h3>📖 释义</h3>
+            <div v-for="(m, idx) in result.meanings" :key="idx" class="meaning-item">
+              <span class="meaning-pos">{{ m.pos }}</span>
+              <span class="meaning-def">{{ m.definitions }}</span>
+            </div>
+          </div>
+        </div>
+        </transition>
+      </section>
+
+      <!-- 右侧：AI 解析 -->
+      <section class="right-section" v-if="result || loadingAi || aiError">
+        <transition name="card-fade">
+        <div class="card ai-card">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
             <h3 style="margin-bottom: 0;">✨ AI 深度解析与例句</h3>
             <div style="display: flex; gap: 10px; align-items: center;">
@@ -69,7 +140,7 @@
 
           <div v-if="loadingAi && !aiRawExplanation" class="ai-loading">
             <div class="spinner"></div>
-            <p>Ollama 正在思考中，请稍候...</p>
+            <p>AI 校验中...</p>
           </div>
           
           <div v-else-if="aiError && !aiRawExplanation && aiExamples.length === 0" class="error-message">
@@ -81,53 +152,23 @@
             <h4 class="module-title">💬 实用例句</h4>
             <div class="examples-grid">
               <div v-for="(ex, idx) in aiExamples" :key="idx" class="example-box">
-                <div class="ex-japanese">{{ ex.japanese }}</div>
-                <div class="ex-kana">{{ ex.kana }}</div>
+                <div class="ex-japanese" v-html="furiganaExamples[idx] || ex.japanese"></div>
                 <div class="ex-chinese">{{ ex.chinese }}</div>
               </div>
             </div>
           </div>
           
           <div v-if="aiRawExplanation" class="ai-module mt-4">
-            <h4 class="module-title">📖 词义解析</h4>
+            <h4 class="module-title">🧠 AI 助记</h4>
             <div class="ai-content markdown-body" v-html="aiExplanation"></div>
           </div>
         </div>
-
-        <!-- 结果展示 -->
-        <div v-if="result" class="card result-card">
-          <h3>活用结果</h3>
-          <div class="result-grid">
-            <div class="result-item">
-              <span class="label">原形 (解析为)</span>
-              <span class="value">{{ result.dictionaryForm }}</span>
-              <span v-if="result.originalInput !== result.parsedAs" class="example" style="margin-top: 4px; font-size: 0.8em">从罗马音 "{{ result.originalInput }}" 转换</span>
-            </div>
-            <div class="result-item">
-              <span class="label">动词类型</span>
-              <span class="value">{{ verbTypeMap[result.verbType] || result.verbType }}</span>
-            </div>
-            
-            <div class="result-item" v-for="item in conjugationItems" :key="item.key">
-              <span class="label">{{ item.label }}</span>
-              <span class="value">
-                <span :class="{ 'text-strike': verificationStatus[item.key] && !verificationStatus[item.key].isCorrect && verificationStatus[item.key].correction !== result[item.key] && verificationStatus[item.key].correction.trim() !== result[item.key].trim() + '。' && verificationStatus[item.key].correction.trim() !== result[item.key].trim() + '？' }">
-                  {{ result[item.key] }}
-                </span>
-                <span class="verify-badge" v-if="loadingAi && !verificationStatus[item.key]">
-                  <span class="spinner-small" title="AI 正在核对..."></span>
-                </span>
-                <span class="verify-badge" v-else-if="verificationStatus[item.key]">
-                  <span v-if="verificationStatus[item.key].isCorrect || verificationStatus[item.key].correction === result[item.key] || verificationStatus[item.key].correction.trim() === result[item.key].trim() + '。' || verificationStatus[item.key].correction.trim() === result[item.key].trim() + '？'" title="AI 核对正确" class="success-check">✅</span>
-                  <span v-else title="AI 发现错误" class="error-correction">❌ 修正为: {{ verificationStatus[item.key].correction }}</span>
-                </span>
-              </span>
-            </div>
-          </div>
-        </div>
-
+        </transition>
       </section>
-      <!-- 右侧：文档区 -->
+    </main>
+
+    <!-- 底部：文档区 -->
+    <div class="doc-wrapper">
       <section class="doc-section">
         <div class="card doc-card">
           <div class="doc-header" @click="showDocs = !showDocs">
@@ -207,7 +248,7 @@
           </div>
         </div>
       </section>
-    </main>
+    </div>
   </div>
 </template>
 
@@ -215,6 +256,7 @@
 import { ref, watch, onMounted, computed, onUnmounted } from 'vue';
 import axios from 'axios';
 import { marked } from 'marked';
+import * as wanakana from 'wanakana';
 
 const form = ref({
   verb: ''
@@ -230,7 +272,7 @@ const aiProgress = ref(0);
 let aiProgressInterval = null;
 const error = ref('');
 const aiError = ref('');
-const showSuggestions = ref(false);
+const showDropdown = ref(false);
 const suggestions = ref([]);
 const availableModels = ref([]);
 const selectedModel = ref('');
@@ -238,6 +280,78 @@ let suggestTimeout = null;
 
 // 文档区折叠状态
 const showDocs = ref(false);
+
+// 查询历史
+const MAX_HISTORY = 20;
+const history = ref([]);
+
+// 从 localStorage 加载历史
+const loadHistory = () => {
+  try {
+    const saved = localStorage.getItem('verbHistory');
+    if (saved) {
+      history.value = JSON.parse(saved);
+    }
+  } catch (e) {
+    history.value = [];
+  }
+};
+
+// 保存历史到 localStorage
+const saveHistory = () => {
+  localStorage.setItem('verbHistory', JSON.stringify(history.value));
+};
+
+// 清空历史
+const clearHistory = () => {
+  history.value = [];
+  saveHistory();
+};
+
+// 计算属性：是否显示历史记录（输入为空时）
+const showHistory = computed(() => {
+  return form.value.verb.trim() === '' && history.value.length > 0;
+});
+
+// 输入处理：清除错误，触发下拉框状态更新（由 watch 处理联想）
+const onInput = () => {
+  error.value = '';
+};
+
+// 聚焦处理：显示下拉框（为空时显示历史，有输入时触发联想）
+const onFocus = () => {
+  showDropdown.value = true;
+};
+
+// 选择条目（历史或联想补全）
+const onSelectItem = (item) => {
+  if (showHistory.value) {
+    form.value.verb = item.verb;
+    error.value = '';
+    conjugate();
+  } else {
+    selectSuggestion(item);
+  }
+};
+
+// 添加查询记录到历史顶部（去重）
+const addToHistory = (verbItem) => {
+  const verbName = verbItem.dictionaryForm || verbItem.word || verbItem.verb;
+  const wordType = verbItem.wordType || 'verb';
+  // 先移除相同单词的旧记录（去重）
+  history.value = history.value.filter(h => h.verb !== verbName);
+  // 添加到开头，限制最大数量
+  history.value.unshift({
+    verb: verbName,
+    meaning: verbItem.meaning || (verbItem.meanings?.[0]?.definitions) || '',
+    verbType: wordType === 'verb' ? verbItem.verbType : wordType,
+    time: Date.now()
+  });
+  if (history.value.length > MAX_HISTORY) {
+    history.value = history.value.slice(0, MAX_HISTORY);
+  }
+  saveHistory();
+};
 
 const conjugationItems = [
   { key: 'negative', label: '否定式' },
@@ -265,7 +379,37 @@ onMounted(async () => {
   } catch(e) {
     console.error('获取模型列表失败', e);
   }
+  loadHistory();
 });
+
+// 提取日文文本中的假名部分（去掉汉字），用于模糊比较
+const extractKana = (text) => {
+  if (!text) return '';
+  // 去掉标点、空格
+  let cleaned = text.trim()
+    .replace(/[。！？、・\s]/g, '')
+    .replace(/[\u3099\u309A]/g, '');
+  // 提取平假名和片假名字符
+  const kanaOnly = cleaned.replace(/[^\u3040-\u309F\u30A0-\u30FF]/g, '');
+  // 片假名转平假名
+  return wanakana.toHiragana(kanaOnly);
+};
+
+// 判断 AI 修正是否等价于原结果（只是写法不同，如汉字vs假名）
+const isEquivalentCorrection = (correction, original) => {
+  if (!correction || !correction.trim()) return true;
+  if (!original) return false;
+  // 完全相同
+  if (correction.trim() === original.trim()) return true;
+  // 比较假名部分是否相同（忽略汉字差异）
+  const kanaA = extractKana(correction);
+  const kanaB = extractKana(original);
+  if (kanaA && kanaB && kanaA === kanaB) return true;
+  // 尝试用 toHiragana 转换（处理片假名/罗马音差异）
+  const normA = wanakana.toHiragana(correction.trim());
+  const normB = wanakana.toHiragana(original.trim());
+  return normA === normB;
+};
 
 const verbTypeMap = {
   GODAN: '五段动词',
@@ -273,6 +417,65 @@ const verbTypeMap = {
   SURU: 'サ变动词',
   KURU: 'カ变动词'
 };
+
+const wordTypeDisplayMap = {
+  'verb': '动词',
+  'noun': '名词',
+  'i-adjective': 'い形容词',
+  'na-adjective': 'な形容词',
+  'adverb': '副词'
+};
+
+// 是否为动词结果
+const isVerb = computed(() => {
+  return result.value?.wordType === 'verb' || !!result.value?.dictionaryForm;
+});
+
+// 调用后端 kuromoji 生成 furigana HTML
+const fetchFurigana = async (texts) => {
+  try {
+    const res = await axios.post('/api/furigana', { texts });
+    return res.data.results;
+  } catch (e) {
+    console.error('Furigana API failed:', e);
+    return texts; // fallback: 返回原文
+  }
+};
+
+// 字典卡片 / 动词摘要的 furigana HTML
+const furiganaWord = ref('');
+const furiganaDict = ref('');
+// 例句的 furigana HTML
+const furiganaExamples = ref([]);
+
+// 当查询结果变化时，获取 furigana
+watch(result, async (val) => {
+  if (!val) {
+    furiganaWord.value = '';
+    furiganaDict.value = '';
+    return;
+  }
+  const word = val.dictionaryForm || val.word;
+  if (word) {
+    const results = await fetchFurigana([word]);
+    if (val.dictionaryForm) {
+      furiganaDict.value = results[0];
+    } else {
+      furiganaWord.value = results[0];
+    }
+  }
+});
+
+// 当例句变化时，批量获取 furigana
+watch(aiExamples, async (examples) => {
+  if (!examples || examples.length === 0) {
+    furiganaExamples.value = [];
+    return;
+  }
+  const jaTexts = examples.map(ex => ex.japanese);
+  const results = await fetchFurigana(jaTexts);
+  furiganaExamples.value = results;
+});
 
 // 监听输入，从后端获取联想补全
 watch(() => form.value.verb, (newVal) => {
@@ -282,6 +485,8 @@ watch(() => form.value.verb, (newVal) => {
     suggestions.value = [];
     return;
   }
+
+  showDropdown.value = true;
 
   // 防抖，避免每次击键都发请求
   suggestTimeout = setTimeout(async () => {
@@ -299,13 +504,13 @@ watch(() => form.value.verb, (newVal) => {
 
 const selectSuggestion = (item) => {
   form.value.verb = item.kanji;
-  showSuggestions.value = false;
+  showDropdown.value = false;
   conjugate();
 };
 
 const hideSuggestionsWithDelay = () => {
   setTimeout(() => {
-    showSuggestions.value = false;
+    showDropdown.value = false;
   }, 200);
 };
 
@@ -358,10 +563,15 @@ const conjugate = async () => {
     });
     result.value = response.data;
     
-    // 如果返回了合法的 dictionaryForm，将其同步回输入框（包含汉字转换）
+    // 如果返回了动词结果，同步回输入框
     if (result.value.dictionaryForm) {
       form.value.verb = result.value.dictionaryForm;
+    } else if (result.value.word) {
+      form.value.verb = result.value.word;
     }
+    
+    // 添加到查询历史（去重+置顶）
+    addToHistory(result.value);
     
     // 自动触发 AI 解析
     fetchAiExplanation();
@@ -379,7 +589,11 @@ const conjugate = async () => {
 };
 
 const fetchAiExplanation = async () => {
-  if (!result.value?.dictionaryForm) return;
+  const wordName = result.value?.dictionaryForm || result.value?.word;
+  if (!wordName) return;
+  
+  const currentWordType = result.value?.wordType || 'verb';
+  const currentIsVerb = currentWordType === 'verb';
   
   loadingAi.value = true;
   aiError.value = '';
@@ -395,9 +609,11 @@ const fetchAiExplanation = async () => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        verb: result.value.dictionaryForm,
+        verb: wordName,
         model: selectedModel.value || 'qwen2.5:7b',
-        conjugationResult: result.value // 把前端拿到的变形结果也发给后端
+        conjugationResult: currentIsVerb ? result.value : undefined,
+        wordType: currentWordType,
+        wordInfo: !currentIsVerb ? result.value : undefined
       })
     });
     
@@ -472,25 +688,18 @@ const fetchAiExplanation = async () => {
                 } catch (e) {
                   // JSON 解析失败说明还在流式输出 JSON，尝试用部分匹配提前点亮 ✅
                   const partialJson = jsonMatch[1];
-                  const items = partialJson.split(/},?/);
-                  for (let item of items) {
-                    const keyMatch = item.match(/"([a-zA-Z]+)"\s*:\s*\{/);
-                    const isCorrectMatch = item.match(/"isCorrect"\s*:\s*(true|false)/);
-                    if (keyMatch && isCorrectMatch) {
-                      const key = keyMatch[1];
-                      if (key !== 'verification' && key !== 'examples') {
-                        const isCorrect = isCorrectMatch[1] === 'true';
-                        // 简单提取 correction（如果不完整可能提取不到，但主要是为了尽早显示正确状态）
-                        const correctionMatch = item.match(/"correction"\s*:\s*"([^"]*)"/);
-                        const correction = correctionMatch ? correctionMatch[1] : "";
-                        
-                        if (!verificationStatus.value[key]) {
-                          verificationStatus.value = {
-                            ...verificationStatus.value,
-                            [key]: { isCorrect, correction }
-                          };
-                        }
-                      }
+                  // 用正则匹配完整的 "key": { "isCorrect": true/false, "correction": "..." } 结构
+                  const completeItemRegex = /"(negative|polite|teForm|taForm|potential|passive|causative|imperative|volitional)"\s*:\s*\{\s*"isCorrect"\s*:\s*(true|false)\s*,\s*"correction"\s*:\s*"([^"]*)"\s*\}/g;
+                  let match;
+                  while ((match = completeItemRegex.exec(partialJson)) !== null) {
+                    const key = match[1];
+                    const isCorrect = match[2] === 'true';
+                    const correction = match[3];
+                    if (!verificationStatus.value[key]) {
+                      verificationStatus.value = {
+                        ...verificationStatus.value,
+                        [key]: { isCorrect, correction }
+                      };
                     }
                   }
                   // 由于 JSON 块在最前面，还没解析完时，JSON块之后的内容为空，所以暂不显示
@@ -524,91 +733,145 @@ const fetchAiExplanation = async () => {
 </script>
 
 <style scoped>
+* {
+  box-sizing: border-box;
+}
+
 .container {
   min-height: 100vh;
   padding: 40px 20px;
+  max-width: 1400px;
+  margin: 0 auto;
 }
 
 .header {
   text-align: center;
   color: white;
-  margin-bottom: 40px;
+  margin-bottom: 32px;
 }
 
 .header h1 {
-  font-size: 3em;
-  margin-bottom: 10px;
+  font-size: 2.6em;
+  margin-bottom: 6px;
   text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+  letter-spacing: 1px;
 }
 
 .subtitle {
-  font-size: 1.2em;
-  opacity: 0.9;
+  font-size: 1.05em;
+  opacity: 0.85;
+  font-weight: 300;
 }
 
-.main-content {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 30px;
-  margin-bottom: 40px;
-}
-
-@media (max-width: 1024px) {
-  .main-content {
-    grid-template-columns: 1fr;
-  }
-}
-
-.card {
-  background: white;
-  border-radius: 12px;
-  padding: 30px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-}
-
-.card h2 {
-  color: #667eea;
-  margin-bottom: 20px;
-  font-size: 1.5em;
-}
-
-.card h3 {
-  color: #667eea;
-  margin-bottom: 15px;
-}
-
-.form-group {
-  margin-bottom: 20px;
-}
-
-.position-relative {
+/* === 搜索栏 === */
+.search-wrapper {
+  max-width: 680px;
+  margin: 0 auto 36px;
   position: relative;
 }
 
+.search-bar {
+  display: flex;
+  align-items: center;
+  background: white;
+  border-radius: 50px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  padding: 4px 4px 4px 18px;
+  transition: box-shadow 0.3s, border-color 0.3s;
+  border: 2px solid transparent;
+}
+
+.search-bar:focus-within {
+  box-shadow: 0 6px 30px rgba(102, 126, 234, 0.25);
+  border-color: #667eea;
+}
+
+.search-bar--error {
+  border-color: #fc8181;
+  box-shadow: 0 4px 20px rgba(252, 129, 129, 0.15);
+}
+
+.search-bar--success {
+  border-color: #68d391;
+}
+
+.search-icon {
+  font-size: 1.1em;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.search-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 1.05em;
+  padding: 12px 8px;
+  background: transparent;
+  color: #2d3748;
+  min-width: 0;
+}
+
+.search-input::placeholder {
+  color: #a0aec0;
+}
+
+.search-btn {
+  padding: 10px 28px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 50px;
+  font-size: 0.95em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  height: 42px;
+}
+
+.search-btn:hover {
+  transform: scale(1.03);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.search-btn:active {
+  transform: scale(0.98);
+}
+
+.search-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* === 下拉补全 === */
 .suggestions-list {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 4px);
   left: 0;
   right: 0;
   background: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  margin-top: 4px;
-  padding: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 6px 0;
   list-style: none;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.1);
   z-index: 10;
-  max-height: 250px;
+  max-height: 280px;
   overflow-y: auto;
 }
 
 .suggestions-list li {
-  padding: 10px 15px;
+  padding: 10px 18px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  border-bottom: 1px solid #f5f5f5;
-  transition: background-color 0.2s;
+  border-bottom: 1px solid #f7fafc;
+  transition: background-color 0.15s;
 }
 
 .suggestions-list li:last-child {
@@ -616,238 +879,410 @@ const fetchAiExplanation = async () => {
 }
 
 .suggestions-list li:hover {
-  background-color: #f8f9fa;
+  background-color: #f0f4ff;
+}
+
+.suggestions-list li.history-section {
+  background: #f7fafc;
+  padding: 6px 18px;
+  cursor: default;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.suggestion-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  font-size: 0.82em;
+  color: #718096;
+  font-weight: 600;
+}
+
+.btn-clear-mini {
+  background: none;
+  border: none;
+  color: #a0aec0;
+  font-size: 0.82em;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.btn-clear-mini:hover {
+  color: #e53e3e;
+  background: #fff5f5;
+}
+
+.suggestions-list li.history-row {
+  background: #fafbfc;
 }
 
 .suggestion-kanji {
   font-weight: 600;
-  font-size: 1.1em;
-  color: #333;
-  min-width: 60px;
+  font-size: 1.05em;
+  color: #2d3748;
+  min-width: 56px;
 }
 
 .suggestion-kana {
   color: #667eea;
-  font-size: 0.9em;
+  font-size: 0.88em;
   margin-left: 10px;
-  min-width: 80px;
+  min-width: 70px;
 }
 
 .suggestion-romaji {
-  color: #999;
-  font-size: 0.85em;
+  color: #a0aec0;
+  font-size: 0.82em;
   margin-left: 10px;
   font-family: monospace;
 }
 
 .suggestion-meaning {
-  color: #666;
-  font-size: 0.85em;
+  color: #718096;
+  font-size: 0.82em;
   margin-left: auto;
 }
 
-.form-group label {
-  display: block;
-  margin-bottom: 8px;
-  color: #333;
+.suggestion-type {
+  font-size: 0.72em;
+  padding: 1px 8px;
+  background: linear-gradient(135deg, #667eea22, #764ba222);
+  color: #667eea;
+  border-radius: 8px;
   font-weight: 500;
+  margin-left: 8px;
+  white-space: nowrap;
 }
 
-.form-group input,
-.form-group select {
-  width: 100%;
-  padding: 12px;
-  border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 1em;
-  transition: all 0.3s ease;
+/* === 主内容区 === */
+.main-content {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  margin-bottom: 36px;
+  animation: fadeIn 0.4s ease;
 }
 
-.form-group input:focus,
-.form-group select:focus {
-  outline: none;
-  border-color: #667eea;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+.left-section,
+.right-section {
+  min-width: 0;
 }
 
-.input-error {
-  background-color: #fff5f5 !important;
-  border-color: #fc8181 !important;
-  color: #c53030 !important;
+.right-section {
+  position: sticky;
+  top: 20px;
+  align-self: start;
 }
 
-.input-error::placeholder {
-  color: #feb2b2;
+@media (max-width: 1024px) {
+  .main-content {
+    grid-template-columns: 1fr;
+  }
+  .right-section {
+    position: static;
+  }
 }
 
-.input-success {
-  background-color: #f0fff4 !important;
-  border-color: #68d391 !important;
-  color: #2f855a !important;
+/* === 卡片 === */
+.card {
+  background: white;
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0,0,0,0.04);
 }
 
-.btn-primary {
-  width: 100%;
-  padding: 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 1em;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
-}
-
-.btn-primary:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-}
-
-.btn-primary:active {
-  transform: translateY(0);
+.card h3 {
+  color: #4a5568;
+  margin-bottom: 14px;
+  font-size: 1.05em;
 }
 
 .error-message {
-  color: #e53e3e;
+  color: #c53030;
   background-color: #fff5f5;
   border: 1px solid #fed7d7;
-  padding: 12px;
-  border-radius: 8px;
-  margin-top: 15px;
-  font-size: 0.9em;
+  padding: 10px 16px;
+  border-radius: 12px;
+  margin-top: 10px;
+  font-size: 0.88em;
 }
 
 .result-card {
+  animation: cardIn 0.4s ease both;
+}
+
+.result-card + .result-card {
   margin-top: 20px;
+}
+
+/* === 动词活用结果 === */
+.result-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #edf2f7;
+  animation: slideUp 0.35s ease both;
+}
+
+.summary-dict {
+  font-size: 1.5em;
+  font-weight: 700;
+  color: #2d3748;
+}
+
+.summary-tag {
+  font-size: 0.78em;
+  padding: 2px 10px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.summary-meaning {
+  font-size: 1em;
+  color: #4a5568;
+}
+
+.summary-romaji {
+  font-size: 0.78em;
+  color: #a0aec0;
+  font-style: italic;
 }
 
 .result-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 15px;
-}
-
-@media (max-width: 768px) {
-  .result-grid {
-    grid-template-columns: 1fr;
-  }
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
 }
 
 .result-item {
   display: flex;
   flex-direction: column;
-  padding: 15px;
-  background: #f5f5f5;
-  border-radius: 8px;
-  border-left: 4px solid #667eea;
+  padding: 14px;
+  background: #f7fafc;
+  border-radius: 10px;
+  border-left: 3px solid #667eea;
+  animation: slideUp 0.35s ease both;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.result-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.12);
 }
 
 .result-item .label {
-  font-size: 0.9em;
-  color: #999;
-  margin-bottom: 5px;
+  font-size: 0.82em;
+  color: #a0aec0;
+  margin-bottom: 4px;
+  font-weight: 500;
 }
 
 .result-item .value {
-  font-size: 1.3em;
+  font-size: 1.2em;
   font-weight: 600;
-  color: #333;
+  color: #2d3748;
 }
 
-.verb-type-guide,
-.conjugation-guide {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 15px;
+/* === 字典卡片 === */
+.dict-card {
+  animation: cardIn 0.4s ease both;
 }
 
-.guide-item {
-  padding: 15px;
-  background: #f9f9f9;
-  border-radius: 8px;
-  border-left: 4px solid #667eea;
+.dict-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #edf2f7;
 }
 
-.guide-item h4 {
+.dict-word {
+  font-size: 2em;
+  font-weight: 700;
+  color: #2d3748;
+  line-height: 1.6;
+}
+
+/* === 振り仮名 (Furigana) === */
+ruby {
+  ruby-align: center;
+}
+
+ruby rt {
+  font-size: 0.5em;
+  font-weight: 400;
   color: #667eea;
-  margin-bottom: 8px;
+  letter-spacing: 0.05em;
 }
 
-.guide-item p {
-  color: #666;
-  font-size: 0.95em;
-  line-height: 1.5;
+.summary-dict ruby rt {
+  font-size: 0.45em;
 }
 
-.example {
-  color: #999;
-  font-size: 0.9em;
-  margin-top: 5px;
+.ex-japanese ruby rt {
+  font-size: 0.55em;
+  color: #718096;
 }
 
-.guide-item strong {
-  color: #333;
+.dict-reading {
+  font-size: 1.15em;
+  color: #667eea;
+  font-weight: 500;
 }
 
-/* AI 解释区域样式 */
+.dict-romaji {
+  font-size: 0.88em;
+  color: #a0aec0;
+  font-family: monospace;
+}
+
+.dict-tags {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.jlpt-badge {
+  font-size: 0.78em;
+  padding: 2px 8px;
+  background: #ebf8ff;
+  color: #2b6cb0;
+  border-radius: 8px;
+  font-weight: 600;
+  border: 1px solid #bee3f8;
+}
+
+.common-badge {
+  font-size: 0.78em;
+  padding: 2px 8px;
+  background: #f0fff4;
+  color: #276749;
+  border-radius: 8px;
+  font-weight: 500;
+  border: 1px solid #c6f6d5;
+}
+
+.dict-meanings h3 {
+  margin-top: 0;
+}
+
+.meaning-item {
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f4f8;
+  animation: slideUp 0.3s ease both;
+}
+
+.meaning-item:last-child {
+  border-bottom: none;
+}
+
+.meaning-pos {
+  display: inline-block;
+  font-size: 0.78em;
+  color: #718096;
+  background: #edf2f7;
+  padding: 1px 8px;
+  border-radius: 4px;
+  margin-right: 8px;
+  margin-bottom: 4px;
+}
+
+.meaning-def {
+  font-size: 1em;
+  color: #2d3748;
+}
+
+/* === AI 卡片 === */
+.ai-card {
+  animation: cardIn 0.4s ease both;
+}
+
+.ai-card h3 {
+  margin-bottom: 0;
+}
+
 .ai-progress-container {
   width: 100%;
-  height: 4px;
+  height: 3px;
   background-color: #edf2f7;
   border-radius: 2px;
-  margin-bottom: 15px;
+  margin-bottom: 14px;
   overflow: hidden;
 }
 
 .ai-progress-bar {
   height: 100%;
-  background-color: #667eea;
+  background: linear-gradient(90deg, #667eea, #764ba2, #667eea);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease infinite;
   transition: width 0.3s ease;
   border-radius: 2px;
 }
 
 .ai-module {
-  margin-top: 20px;
+  margin-top: 18px;
   border-top: 1px solid #edf2f7;
-  padding-top: 15px;
+  padding-top: 14px;
 }
 
 .module-title {
   color: #4a5568;
-  font-size: 1.1em;
+  font-size: 1.05em;
   margin-top: 0;
-  margin-bottom: 15px;
+  margin-bottom: 14px;
 }
 
 .examples-grid {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .example-box {
-  background: #f8fafc;
-  padding: 15px;
-  border-radius: 8px;
-  border-left: 4px solid #667eea;
+  background: #f7fafc;
+  padding: 14px;
+  border-radius: 10px;
+  border-left: 3px solid #667eea;
+  animation: slideUp 0.35s ease both;
+  transition: transform 0.2s;
+}
+
+.example-box:nth-child(2) {
+  animation-delay: 0.08s;
+}
+
+.example-box:hover {
+  transform: translateX(4px);
 }
 
 .ex-japanese {
-  font-size: 1.2em;
+  font-size: 1.15em;
   font-weight: 600;
   color: #2d3748;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 .ex-kana {
-  font-size: 0.9em;
+  font-size: 0.85em;
   color: #718096;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .ex-chinese {
-  font-size: 1em;
+  font-size: 0.95em;
   color: #4a5568;
 }
 
@@ -855,74 +1290,80 @@ const fetchAiExplanation = async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 15px;
-  padding: 30px;
-  color: #666;
+  gap: 12px;
+  padding: 28px;
+  color: #718096;
 }
 
 .spinner {
-  width: 24px;
-  height: 24px;
-  border: 3px solid #e0e0e0;
+  width: 22px;
+  height: 22px;
+  border: 3px solid #e2e8f0;
   border-top-color: #667eea;
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.ai-content {
-  background: #fdfdfd;
-  padding: 20px;
-  border-radius: 8px;
-  border: 1px solid #eee;
-  line-height: 1.6;
-  color: #333;
-}
-
-.btn-secondary {
-  padding: 6px 12px;
-  background: #f0f0f0;
-  color: #333;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 0.9em;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-secondary:hover {
-  background: #e4e4e4;
-}
-
-/* AI 核对徽章样式 */
-.verify-badge {
-  margin-left: 8px;
-  font-size: 0.9em;
-  display: inline-flex;
-  align-items: center;
-}
-
 .spinner-small {
-  width: 14px;
-  height: 14px;
-  border: 2px solid #e0e0e0;
-  border-top-color: #667eea;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: white;
   border-radius: 50%;
   animation: spin 1s linear infinite;
   display: inline-block;
 }
 
-.text-strike {
-  text-decoration: line-through;
-  color: #999;
+.ai-content {
+  background: #fafbfc;
+  padding: 18px;
+  border-radius: 10px;
+  border: 1px solid #edf2f7;
+  line-height: 1.7;
+  color: #2d3748;
 }
 
-@keyframes popIn {
-  0% { transform: scale(0.5); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
+.btn-secondary {
+  padding: 6px 14px;
+  background: #edf2f7;
+  color: #4a5568;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.85em;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+  background: #e2e8f0;
+}
+
+.model-select {
+  padding: 6px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background-color: white;
+  font-size: 0.85em;
+  color: #4a5568;
+  outline: none;
+  cursor: pointer;
+}
+
+.model-select:focus {
+  border-color: #667eea;
+}
+
+/* === AI 核对徽章 === */
+.verify-badge {
+  margin-left: 8px;
+  font-size: 0.85em;
+  display: inline-flex;
+  align-items: center;
+}
+
+.text-strike {
+  text-decoration: line-through;
+  color: #a0aec0;
 }
 
 .success-check {
@@ -936,49 +1377,24 @@ const fetchAiExplanation = async () => {
   font-weight: 600;
   background: #fff5f5;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 1px solid #fed7d7;
   animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
   display: inline-block;
 }
 
-.model-select {
-  padding: 6px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background-color: white;
-  font-size: 0.9em;
-  color: #333;
-  outline: none;
-  cursor: pointer;
+/* === 文档区 === */
+.doc-wrapper {
+  margin: 0 auto 40px;
 }
 
-.model-select:focus {
-  border-color: #667eea;
-}
-
-/* 简单的 markdown 样式补充 */
-.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
-  margin-top: 10px;
-  margin-bottom: 10px;
-  color: #2c3e50;
-}
-.markdown-body p {
-  margin-bottom: 10px;
-}
-.markdown-body ul, .markdown-body ol {
-  padding-left: 20px;
-  margin-bottom: 10px;
-}
-
-/* 文档区折叠样式 */
 .doc-card {
   padding: 0;
   overflow: hidden;
 }
 
 .doc-header {
-  padding: 20px;
+  padding: 18px 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -991,9 +1407,16 @@ const fetchAiExplanation = async () => {
   background-color: #edf2f7;
 }
 
+.doc-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #4a5568;
+  font-weight: 600;
+}
+
 .doc-content {
-  padding: 20px;
-  border-top: 1px solid #e2e8f0;
+  padding: 20px 24px;
+  border-top: 1px solid #edf2f7;
 }
 
 .toggle-btn {
@@ -1007,10 +1430,10 @@ const fetchAiExplanation = async () => {
 }
 
 .arrow {
-  border: solid #4a5568;
+  border: solid #718096;
   border-width: 0 2px 2px 0;
   display: inline-block;
-  padding: 4px;
+  padding: 3px;
   transition: transform 0.3s ease;
 }
 
@@ -1024,12 +1447,126 @@ const fetchAiExplanation = async () => {
 
 .guide-group h3 {
   margin-top: 0;
-  margin-bottom: 15px;
+  margin-bottom: 14px;
   color: #2d3748;
-  font-size: 1.1rem;
+  font-size: 1.05rem;
+}
+
+.guide-list {
+  list-style: none;
+  padding: 0;
+}
+
+.guide-item {
+  padding: 14px 16px;
+  background: #f7fafc;
+  border-radius: 10px;
+  border-left: 3px solid #667eea;
+  margin-bottom: 10px;
+}
+
+.guide-item:last-child {
+  margin-bottom: 0;
+}
+
+.guide-item strong {
+  color: #2d3748;
+}
+
+.guide-item p {
+  color: #718096;
+  font-size: 0.92em;
+  line-height: 1.5;
+  margin: 4px 0 0;
 }
 
 .mt-4 {
   margin-top: 1.5rem;
+}
+
+/* === Markdown === */
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+  margin-top: 10px;
+  margin-bottom: 10px;
+  color: #2d3748;
+}
+
+.markdown-body p {
+  margin-bottom: 10px;
+}
+
+.markdown-body ul, .markdown-body ol {
+  padding-left: 20px;
+  margin-bottom: 10px;
+}
+
+/* === 动画 === */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.card-fade-enter-active {
+  animation: cardIn 0.4s ease both;
+}
+
+.card-fade-leave-active {
+  animation: cardIn 0.25s ease reverse both;
+}
+
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.shake-enter-active {
+  animation: shakeIn 0.45s ease both;
+}
+
+.shake-leave-active {
+  animation: fadeOut 0.2s ease both;
+}
+
+@keyframes shakeIn {
+  0% { opacity: 0; transform: translateX(-12px); }
+  25% { transform: translateX(8px); }
+  50% { transform: translateX(-5px); }
+  75% { transform: translateX(2px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fadeOut {
+  to { opacity: 0; transform: translateY(-8px); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes popIn {
+  0% { transform: scale(0.5); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 </style>

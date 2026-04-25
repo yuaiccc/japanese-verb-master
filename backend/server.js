@@ -15,8 +15,8 @@ const __dirname = path.dirname(__filename);
 // 读取动词库
 const commonVerbs = JSON.parse(fs.readFileSync(path.join(__dirname, 'common-verbs.json'), 'utf8'));
 
-// 调用 Jisho API 获取更多动词补充
-function searchJisho(keyword) {
+// 调用 Jisho API 获取词汇（支持全词类）
+function searchJisho(keyword, verbOnly = true) {
   return new Promise((resolve, reject) => {
     https.get(`https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(keyword)}`, (res) => {
       let data = '';
@@ -24,35 +24,104 @@ function searchJisho(keyword) {
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data);
-          const verbs = [];
+          const words = [];
           if (!parsed.data) return resolve([]);
           
           for (const item of parsed.data) {
             const senses = item.senses || [];
-            let isVerb = false;
             let meaning = '';
+            let wordType = 'other';
             
             for (const sense of senses) {
               const pos = sense.parts_of_speech || [];
-              if (pos.some(p => p.toLowerCase().includes('verb'))) {
-                isVerb = true;
+              const posStr = pos.join(' ').toLowerCase();
+              if (!meaning) {
                 meaning = sense.english_definitions.slice(0, 2).join(', ');
-                break;
+              }
+              if (wordType === 'other') {
+                if (posStr.includes('verb')) wordType = 'verb';
+                else if (posStr.includes('i-adjective')) wordType = 'i-adjective';
+                else if (posStr.includes('na-adjective')) wordType = 'na-adjective';
+                else if (posStr.includes('noun')) wordType = 'noun';
+                else if (posStr.includes('adverb')) wordType = 'adverb';
               }
             }
             
-            if (isVerb && item.japanese && item.japanese.length > 0) {
+            if (verbOnly && wordType !== 'verb') continue;
+            if (!verbOnly && wordType === 'other') continue;
+            
+            if (item.japanese && item.japanese.length > 0) {
               const kanji = item.japanese[0].word || item.japanese[0].reading;
               const kana = item.japanese[0].reading || kanji;
-              verbs.push({
+              words.push({
                 kanji,
                 kana,
                 romaji: wanakana.toRomaji(kana),
-                meaning
+                meaning,
+                wordType
               });
             }
           }
-          resolve(verbs);
+          resolve(words);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+// 查询单个词的详细信息（用于非动词查词）
+function lookupWordJisho(keyword) {
+  return new Promise((resolve, reject) => {
+    const url = `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(keyword)}`;
+    https.get(url, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (!parsed.data || parsed.data.length === 0) return resolve(null);
+          
+          const item = parsed.data[0];
+          if (!item.japanese || item.japanese.length === 0) return resolve(null);
+          
+          const japanese = item.japanese[0];
+          const word = japanese.word || japanese.reading;
+          const reading = japanese.reading || word;
+          
+          let wordType = 'other';
+          const meanings = [];
+          
+          for (const sense of (item.senses || [])) {
+            const pos = sense.parts_of_speech || [];
+            const posStr = pos.join(' ').toLowerCase();
+            
+            if (wordType === 'other') {
+              if (posStr.includes('verb')) wordType = 'verb';
+              else if (posStr.includes('i-adjective')) wordType = 'i-adjective';
+              else if (posStr.includes('na-adjective')) wordType = 'na-adjective';
+              else if (posStr.includes('noun')) wordType = 'noun';
+              else if (posStr.includes('adverb')) wordType = 'adverb';
+            }
+            
+            meanings.push({
+              pos: pos.join(', '),
+              definitions: (sense.english_definitions || []).join(', ')
+            });
+          }
+          
+          const jlpt = item.jlpt?.length > 0 ? item.jlpt[0].replace('jlpt-', '').toUpperCase() : '';
+          
+          resolve({
+            wordType,
+            word,
+            reading,
+            romaji: wanakana.toRomaji(reading),
+            meanings,
+            jlpt,
+            isCommon: item.is_common || false
+          });
         } catch (e) {
           reject(e);
         }
@@ -131,9 +200,144 @@ function detectVerbType(verb) {
 // 初始化 Ollama
 const ollama = new Ollama({ host: 'http://127.0.0.1:11434' });
 
+// 用 Ollama 将英文释义翻译为中文
+async function translateMeaningsToChinese(meanings) {
+  try {
+    const englishDefs = meanings.map((m, i) => `${i + 1}. [${m.pos}] ${m.definitions}`).join('\n');
+    const response = await ollama.chat({
+      model: 'qwen2.5:7b',
+      messages: [{
+        role: 'user',
+        content: `将以下日语单词的英文释义翻译为简洁的中文。每条保持编号，只输出中文翻译，不要输出原文、词性或任何解释。格式："1. 中文释义"\n\n${englishDefs}`
+      }],
+      stream: false
+    });
+    const lines = response.message.content.trim().split('\n').filter(l => l.trim());
+    return meanings.map((m, i) => ({
+      ...m,
+      definitions_en: m.definitions,
+      definitions: lines[i]?.replace(/^\d+\.\s*/, '').replace(/^\[.*?\]\s*/, '').trim() || m.definitions
+    }));
+  } catch (e) {
+    console.error('Translation failed, using English:', e.message);
+    return meanings;
+  }
+}
+
+// 用 kuromoji 为日语文本生成 furigana（ruby HTML）
+function generateFuriganaHtml(text) {
+  if (!tokenizer || !text) return text;
+  
+  const tokens = tokenizer.tokenize(text);
+  let html = '';
+  
+  for (const token of tokens) {
+    const surface = token.surface_form;
+    const reading = token.reading; // カタカナ
+    
+    // 判断 surface 中是否含有汉字
+    const hasKanjiChar = /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/.test(surface);
+    
+    if (reading && hasKanjiChar) {
+      const readingHira = wanakana.toHiragana(reading);
+      // 对混合词（如「食べる」）做精确拆分
+      html += rubyForMixedToken(surface, readingHira);
+    } else {
+      html += escapeHtml(surface);
+    }
+  }
+  
+  return html;
+}
+
+// 对单个 token 做汉字/假名拆分，生成 ruby 标签
+function rubyForMixedToken(surface, reading) {
+  const isKanjiChar = (ch) => /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/.test(ch);
+  const segments = [];
+  let i = 0;
+  
+  // 将 surface 拆分成 [汉字段, 假名段, 汉字段, ...] 的序列
+  while (i < surface.length) {
+    if (isKanjiChar(surface[i])) {
+      let end = i;
+      while (end < surface.length && isKanjiChar(surface[end])) end++;
+      segments.push({ type: 'kanji', text: surface.substring(i, end) });
+      i = end;
+    } else {
+      let end = i;
+      while (end < surface.length && !isKanjiChar(surface[end])) end++;
+      segments.push({ type: 'kana', text: surface.substring(i, end) });
+      i = end;
+    }
+  }
+  
+  // 如果整个 token 都是汉字，直接整体加 ruby
+  if (segments.length === 1 && segments[0].type === 'kanji') {
+    return `<ruby>${escapeHtml(surface)}<rt>${escapeHtml(reading)}</rt></ruby>`;
+  }
+  
+  // 用假名段作为锚点，从 reading 中定位每段汉字的读音
+  // 构建正则：将假名段作为固定匹配，汉字段用 (.+?) 捕获
+  let regexStr = '^';
+  for (const seg of segments) {
+    if (seg.type === 'kana') {
+      // 将假名转为平假名用于匹配
+      regexStr += escapeRegex(wanakana.toHiragana(seg.text));
+    } else {
+      regexStr += '(.+?)';
+    }
+  }
+  regexStr += '$';
+  
+  try {
+    const regex = new RegExp(regexStr);
+    const match = reading.match(regex);
+    
+    if (match) {
+      let html = '';
+      let captureIdx = 1;
+      for (const seg of segments) {
+        if (seg.type === 'kanji') {
+          html += `<ruby>${escapeHtml(seg.text)}<rt>${escapeHtml(match[captureIdx])}</rt></ruby>`;
+          captureIdx++;
+        } else {
+          html += escapeHtml(seg.text);
+        }
+      }
+      return html;
+    }
+  } catch (e) {
+    // regex 构建失败时 fallback
+  }
+  
+  // fallback: 整体加 ruby
+  return `<ruby>${escapeHtml(surface)}<rt>${escapeHtml(reading)}</rt></ruby>`;
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // 健康检查
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', dictionaryReady: !!tokenizer });
+});
+
+// Furigana API: 用 kuromoji 为日文文本生成 ruby HTML
+app.post('/api/furigana', express.json(), (req, res) => {
+  const { texts } = req.body; // 支持批量: string[]
+  if (!texts || !Array.isArray(texts)) {
+    return res.status(400).json({ error: 'texts array required' });
+  }
+  if (!tokenizer) {
+    return res.status(503).json({ error: 'Tokenizer not ready' });
+  }
+  const results = texts.map(t => generateFuriganaHtml(t));
+  res.json({ results });
 });
 
 // 获取本地可用模型
@@ -147,29 +351,84 @@ app.get('/api/ai-models', async (req, res) => {
   }
 });
 
-// AI 动词解析及例句生成 API
+// AI 词汇解析 API（动词校验 + 非动词解析）
 app.post('/api/ai-explain', async (req, res) => {
   try {
-    const { verb, model, conjugationResult } = req.body;
+    const { verb, model, conjugationResult, wordType, wordInfo } = req.body;
     if (!verb) {
       return res.status(400).json({ error: 'Missing required parameter: verb' });
     }
     const selectedModel = model || 'qwen2.5:7b';
 
-    const prompt = `你是一个严谨且贴近中文母语者习惯的日语语言学专家。
-我为你提供了一个日语动词 "${verb}" 以及程序自动生成的活用变形结果：
+    let prompt;
+
+    if (wordType && wordType !== 'verb') {
+      // 非动词 prompt：查词解析 + 例句 + 助记
+      const wordTypeNames = {
+        'noun': '名词', 'i-adjective': 'い形容词',
+        'na-adjective': 'な形容词', 'adverb': '副词'
+      };
+      const typeName = wordTypeNames[wordType] || wordType;
+      const meaningsStr = wordInfo?.meanings
+        ? wordInfo.meanings.map((m, i) => `${i + 1}. [${m.pos}] ${m.definitions}`).join('\n')
+        : '';
+
+      prompt = `你是一个专业的日语教师。请详细解析日语单词「${verb}」。
+
+单词信息：
+- 词性：${typeName}
+- 读音：${wordInfo?.reading || ''}
+${meaningsStr ? '- 释义：\n' + meaningsStr : ''}
+
+【重要】你的回答必须严格按以下格式：
+
+1. 回答开头必须直接是一个 JSON 代码块（\`\`\`json 开始），不要有任何前置文字。
+2. JSON 结构如下（只有 examples，不需要 verification）：
 \`\`\`json
-${JSON.stringify(conjugationResult, null, 2)}
+{
+  "examples": [
+    { "japanese": "日文例句", "kana": "平假名注音", "chinese": "中文翻译" },
+    { "japanese": "...", "kana": "...", "chinese": "..." },
+    { "japanese": "...", "kana": "...", "chinese": "..." }
+  ]
+}
 \`\`\`
 
-请你严格按照以下步骤和格式执行任务，优先级顺序为：1. 校对结果 -> 2. 实用例句 -> 3. 词义解析。
+3. JSON 代码块闭合后，请用中文输出一段详细解析（支持 Markdown），包括：
+   - 词义详解（不同语境下的含义）
+   - 常用搭配和惯用表达
+   - 联想记忆法或词源拆解
+   - 易混淆词对比
+   - 文化小知识（如有）`;
+    } else {
+      // 动词 prompt：活用校验 + 例句 + 助记
+      const conjugationForAi = {
+        dictionaryForm: conjugationResult.dictionaryForm,
+        verbType: conjugationResult.verbType,
+        negative: conjugationResult.negative,
+        polite: conjugationResult.polite,
+        teForm: conjugationResult.teForm,
+        taForm: conjugationResult.taForm,
+        potential: conjugationResult.potential,
+        passive: conjugationResult.passive,
+        causative: conjugationResult.causative,
+        imperative: conjugationResult.imperative,
+        volitional: conjugationResult.volitional
+      };
 
-第一步与第二步：必须且只能以一个 JSON 代码块开始你的回答，包含校对结果（verification）和2个实用例句（examples）。不要有任何前置文本。
-格式要求：
-1. verification 中只核对这 9 种变形：negative, polite, teForm, taForm, potential, passive, causative, imperative, volitional。如果正确，isCorrect 为 true，correction 为 ""。如果错误，isCorrect 为 false，并在 correction 中给出正确日文。不要因为送气音或汉字/假名写法不同算错。
-2. examples 中提供2个实用的日常例句，包含日文原文（japanese）、平假名注音（kana）和中文翻译（chinese）。
+      prompt = `你是一个严谨的日语语言学专家。请校对以下动词 "${verb}" 的活用变形结果，并提供例句和词义解析。
 
-返回的 JSON 必须严格遵循如下结构（此为全对的示例）：
+程序生成的活用结果：
+${JSON.stringify(conjugationForAi, null, 2)}
+
+【重要】你的回答必须严格按以下格式，不得有任何偏差：
+
+1. 回答的开头必须直接是一个 JSON 代码块（\`\`\`json 开始），不要有任何前置文字。
+2. JSON 中 "verification" 必须是第一个键，"examples" 必须是第二个键。严禁调换顺序。
+3. verification 逐项校对这 9 种变形：negative, polite, teForm, taForm, potential, passive, causative, imperative, volitional。正确则 isCorrect=true, correction=""；错误则 isCorrect=false 并给出正确日文。汉字/假名写法不同不算错。
+4. examples 提供 2 个日常例句，含 japanese（日文原文）、kana（平假名注音）、chinese（中文翻译）。
+
+严格遵循此 JSON 结构（verification 在前，examples 在后）：
 \`\`\`json
 {
   "verification": {
@@ -184,22 +443,15 @@ ${JSON.stringify(conjugationResult, null, 2)}
     "volitional": { "isCorrect": true, "correction": "" }
   },
   "examples": [
-    {
-      "japanese": "日文例句1",
-      "kana": "平假名注音1",
-      "chinese": "中文翻译1"
-    },
-    {
-      "japanese": "日文例句2",
-      "kana": "平假名注音2",
-      "chinese": "中文翻译2"
-    }
+    { "japanese": "...", "kana": "...", "chinese": "..." },
+    { "japanese": "...", "kana": "...", "chinese": "..." }
   ]
 }
 \`\`\`
 
-第三步：在 JSON 代码块闭合之后，用中文简明扼要地输出该动词的词义解析（支持 Markdown）。
-重要提示：在解释动词类型时，请务必使用中国国内通用的日语教学术语（如：五段动词、一段动词、サ变动词、カ变动词），绝对不要出现 "Godan"、"Ichidan" 等英文直译词汇。`;
+5. JSON 代码块闭合后，请用中文输出一段「助记」内容（支持 Markdown），帮助学习者记忆这个动词。可以包括：词源或字形拆解、联想记忆法、易混淆词对比、文化小知识等。不要重复列举上面已有的变形结果。
+6. 动词类型请使用中国通用术语：五段动词、一段动词、サ变动词、カ变动词，不要用 Godan、Ichidan 等英文。`;
+    }
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -218,6 +470,11 @@ ${JSON.stringify(conjugationResult, null, 2)}
     res.end();
   } catch (error) {
     console.error('Ollama API Error:', error);
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+    }
     res.write(`data: ${JSON.stringify({ error: 'AI 服务暂不可用，请确保本地 Ollama 正在运行且模型存在。' })}\n\n`);
     res.end();
   }
@@ -241,12 +498,12 @@ app.get('/api/suggest', async (req, res) => {
              verb.meaning.includes(query);
     });
 
-    // 2. 并行调用 Jisho API 获取更广泛的词汇（限制等待时间）
+    // 2. 并行调用 Jisho API 获取更广泛的词汇（包括非动词）
     let jishoSuggestions = [];
     try {
       jishoSuggestions = await Promise.race([
-        searchJisho(query),
-        new Promise(resolve => setTimeout(() => resolve([]), 800)) // 800ms 超时，保证输入流畅
+        searchJisho(query, false),
+        new Promise(resolve => setTimeout(() => resolve([]), 5000))
       ]);
     } catch(e) {
       console.error('Jisho API fetch failed', e);
@@ -271,8 +528,8 @@ app.get('/api/suggest', async (req, res) => {
   }
 });
 
-// 动词活用 API
-app.get('/api/conjugate', (req, res) => {
+// 词汇查询 API（动词走活用流程，其他词走查词流程）
+app.get('/api/conjugate', async (req, res) => {
   try {
     let { verb, type } = req.query;
     
@@ -283,8 +540,6 @@ app.get('/api/conjugate', (req, res) => {
     }
 
     // 处理罗马音，转换成平假名
-    // 比如：nomu -> のむ，taberu -> たべる
-    // 原有的汉字会被保留（如 飲む 不变）
     const processedVerb = wanakana.toHiragana(verb);
 
     // 如果前端没有传 type，就用 kuromoji 自动推断
@@ -293,17 +548,49 @@ app.get('/api/conjugate', (req, res) => {
         return res.status(503).json({ error: 'Dictionary is initializing, please try again later.' });
       }
       type = detectVerbType(processedVerb);
+      
+      // 非动词：回退到 Jisho 查词
       if (!type) {
+        try {
+          const wordInfo = await lookupWordJisho(verb);
+          if (wordInfo && wordInfo.wordType !== 'other') {
+            if (wordInfo.wordType === 'verb') {
+              return res.status(400).json({
+                error: `"${verb}" 似乎是动词，但无法解析其原形。请输入动词的辞书形（原形），如「食べる」而非「食べた」。`
+              });
+            }
+            // 翻译英文释义为中文
+            wordInfo.meanings = await translateMeaningsToChinese(wordInfo.meanings);
+            return res.json({
+              ...wordInfo,
+              originalInput: verb,
+              parsedAs: processedVerb
+            });
+          }
+        } catch (e) {
+          console.error('Word lookup failed:', e);
+        }
         return res.status(400).json({ 
-          error: `无法自动识别 "${verb}" (解析为 "${processedVerb}") 的动词类型。请确保输入的是正确的日语动词原形（如：食べる、飲む、勉強する）。` 
+          error: `无法识别 "${verb}" (解析为 "${processedVerb}")。请确保输入正确的日语单词。` 
         });
       }
     }
 
     const result = conjugate(processedVerb, type);
-    // 如果转换后有变化，可以在返回结果里告诉前端这是基于罗马音解析的
+
+    // 从本地词库查找中文释义
+    const dictForm = result.dictionaryForm;
+    const matchedVerb = commonVerbs.find(v => 
+      v.kanji === dictForm || v.kana === dictForm || v.kanji === processedVerb || v.kana === processedVerb
+    );
+    const meaning = matchedVerb ? matchedVerb.meaning : '';
+    const reading = matchedVerb ? matchedVerb.kana : '';
+
     res.json({
+      wordType: 'verb',
       ...result,
+      meaning,
+      reading,
       originalInput: verb,
       parsedAs: processedVerb
     });

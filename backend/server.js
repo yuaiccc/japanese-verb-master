@@ -785,6 +785,7 @@ app.get('/api/dojo-quiz', (req, res) => {
         questions.push({
           verb: verbObj.kanji,
           kana: verbObj.kana,
+          romaji: verbObj.romaji,
           meaning: verbObj.meaning,
           formKey: formObj.key,
           formLabel: formObj.label,

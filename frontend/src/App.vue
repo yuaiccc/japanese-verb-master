@@ -24,7 +24,9 @@
           type="text"
           class="search-input"
           :placeholder="error ? error : '输入日语单词，如：食べる、猫、きれい、neko'"
-          @keyup.enter="conjugate"
+          @compositionstart="isComposing = true"
+          @compositionend="isComposing = false"
+          @keyup.enter="handleDictEnter"
           @input="onInput"
           @focus="onFocus"
           @blur="hideSuggestionsWithDelay"
@@ -256,7 +258,9 @@
               class="search-input dojo-input"
               :class="{ 'input-correct': dojoFeedback?.isCorrect, 'input-error': dojoFeedback && !dojoFeedback.isCorrect }"
               placeholder="输入假名或罗马音..."
-              @keyup.enter="dojoFeedback ? nextDojoQuestion() : checkDojoAnswer()"
+              @compositionstart="isComposing = true"
+              @compositionend="isComposing = false"
+              @keyup.enter="handleDojoEnter"
               :disabled="!!dojoFeedback"
               autocomplete="off"
             >
@@ -397,6 +401,7 @@ import Icon from './components/Icon.vue';
 
 // 全局模式
 const currentMode = ref('dict'); // 'dict' | 'dojo'
+const isComposing = ref(false); // 跟踪输入法状态，防止回车键误触
 
 // 词典模式状态
 const form = ref({
@@ -455,6 +460,15 @@ const startDojo = async () => {
     console.error(err);
   } finally {
     dojoLoading.value = false;
+  }
+};
+
+const handleDojoEnter = (e) => {
+  if (isComposing.value || e.key !== 'Enter') return;
+  if (dojoFeedback.value) {
+    nextDojoQuestion();
+  } else {
+    checkDojoAnswer();
   }
 };
 
@@ -791,6 +805,15 @@ const completeProgress = () => {
 onUnmounted(() => {
   if (aiProgressInterval) clearInterval(aiProgressInterval);
 });
+
+const handleDictEnter = (e) => {
+  if (isComposing.value) return;
+  // 有些输入法（如 macOS 自带日语输入法）在按下回车选词时会触发 keyup.enter
+  // 我们通过检查 key 属性和组合状态来避免误触发
+  if (e.key === 'Enter') {
+    conjugate();
+  }
+};
 
 const conjugate = async () => {
   if (loading.value) return;

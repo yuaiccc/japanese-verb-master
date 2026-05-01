@@ -58,6 +58,11 @@
     <template v-else-if="name === 'chevron'">
       <polyline points="8 10 12 14 16 10"></polyline>
     </template>
+
+    <template v-else-if="name === 'x'">
+      <line x1="18" y1="6" x2="6" y2="18"></line>
+      <line x1="6" y1="6" x2="18" y2="18"></line>
+    </template>
   </svg>
 </template>
 

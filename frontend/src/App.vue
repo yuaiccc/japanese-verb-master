@@ -252,19 +252,29 @@
           </div>
 
           <div class="dojo-input-area">
-            <input
-              ref="dojoInputRef"
-              v-model="dojoAnswer"
-              type="text"
-              class="search-input dojo-input"
-              :class="{ 'input-correct': dojoFeedback?.isCorrect, 'input-error': dojoFeedback && !dojoFeedback.isCorrect }"
-              placeholder="输入假名或罗马音..."
-              @compositionstart="isComposing = true"
-              @compositionend="isComposing = false"
-              @keyup.enter="handleDojoEnter"
-              :disabled="!!dojoFeedback"
-              autocomplete="off"
-            >
+            <div class="dojo-input-wrapper">
+              <input
+                ref="dojoInputRef"
+                v-model="dojoAnswer"
+                type="text"
+                class="search-input dojo-input"
+                :class="{ 'input-correct': dojoFeedback?.isCorrect, 'input-error': dojoFeedback && !dojoFeedback.isCorrect }"
+                placeholder="输入假名或罗马音..."
+                @compositionstart="isComposing = true"
+                @compositionend="isComposing = false"
+                @keyup.enter="handleDojoEnter"
+                :disabled="!!dojoFeedback"
+                autocomplete="off"
+              >
+              <button 
+                v-if="dojoAnswer && !dojoFeedback" 
+                class="dojo-clear-btn" 
+                @click="clearDojoInput"
+                title="清除输入"
+              >
+                <Icon name="x" class="icon-x" />
+              </button>
+            </div>
             <button v-if="!dojoFeedback" class="search-btn" @click="checkDojoAnswer" :disabled="!dojoAnswer.trim()">提交</button>
             <button v-else class="search-btn btn-next" @click="nextDojoQuestion">
               {{ dojoCurrentIndex < dojoQuestions.length - 1 ? '下一题' : '查看成绩' }}
@@ -482,6 +492,13 @@ const checkDojoAnswer = () => {
   
   if (isCorrect) dojoScore.value++;
   dojoFeedback.value = { isCorrect, correctAnswer: q.answer };
+};
+
+const clearDojoInput = () => {
+  dojoAnswer.value = '';
+  nextTick(() => {
+    dojoInputRef.value?.focus();
+  });
 };
 
 const nextDojoQuestion = () => {
@@ -2030,16 +2047,49 @@ ruby rt {
   display: flex;
   gap: 12px;
   margin-bottom: 24px;
+  justify-content: center;
+}
+
+.dojo-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
 }
 
 .dojo-input {
   border: 2px solid var(--surface-border);
   border-radius: var(--radius-md);
-  padding: 12px 16px;
+  padding: 12px 36px 12px 16px; /* Added right padding for the clear button */
   font-size: 1.2em;
   text-align: center;
   transition: all 0.3s;
   background: rgba(255, 255, 255, 0.8);
+  width: 100%;
+}
+
+.dojo-clear-btn {
+  position: absolute;
+  right: 10px;
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.dojo-clear-btn:hover {
+  color: #475569;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.icon-x {
+  width: 16px;
+  height: 16px;
 }
 
 .dojo-input:focus {

@@ -640,6 +640,12 @@ onUnmounted(() => {
 });
 
 const conjugate = async () => {
+  if (loading.value) return;
+  if (aiAbortController) {
+    aiAbortController.abort();
+    aiAbortController = null;
+  }
+  loadingAi.value = false;
   error.value = '';
   result.value = null;
   aiRawExplanation.value = '';
@@ -690,9 +696,16 @@ const conjugate = async () => {
   }
 };
 
+let aiAbortController = null;
+
 const fetchAiExplanation = async () => {
   const wordName = result.value?.dictionaryForm || result.value?.word;
   if (!wordName) return;
+  
+  if (aiAbortController) {
+    aiAbortController.abort();
+  }
+  aiAbortController = new AbortController();
   
   const currentWordType = result.value?.wordType || 'verb';
   const currentIsVerb = currentWordType === 'verb';
@@ -710,6 +723,7 @@ const fetchAiExplanation = async () => {
       headers: {
         'Content-Type': 'application/json'
       },
+      signal: aiAbortController.signal,
       body: JSON.stringify({
         verb: wordName,
         model: selectedModel.value || 'qwen2.5:7b',
@@ -826,10 +840,16 @@ const fetchAiExplanation = async () => {
       }
     }
   } catch (err) {
+    if (err.name === 'AbortError') return;
     aiError.value = err.message || 'AI 解析请求失败';
     completeProgress();
   } finally {
-    loadingAi.value = false;
+    if (aiAbortController && !aiAbortController.signal.aborted) {
+      loadingAi.value = false;
+      aiAbortController = null;
+    } else if (!aiAbortController) {
+      loadingAi.value = false;
+    }
   }
 };
 </script>

@@ -19,7 +19,7 @@ const commonVerbs = JSON.parse(fs.readFileSync(path.join(__dirname, 'common-verb
 // 调用 Jisho API 获取词汇（支持全词类）
 function searchJisho(keyword, verbOnly = true) {
   return new Promise((resolve, reject) => {
-    https.get(`https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(keyword)}`, (res) => {
+    const req = https.get(`https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(keyword)}`, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
@@ -68,7 +68,12 @@ function searchJisho(keyword, verbOnly = true) {
           reject(e);
         }
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(5000, () => {
+      req.destroy();
+      reject(new Error('Jisho API timeout'));
+    });
   });
 }
 
@@ -76,7 +81,7 @@ function searchJisho(keyword, verbOnly = true) {
 function lookupWordJisho(keyword) {
   return new Promise((resolve, reject) => {
     const url = `https://jisho.org/api/v1/search/words?keyword=${encodeURIComponent(keyword)}`;
-    https.get(url, (res) => {
+    const req = https.get(url, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
@@ -127,7 +132,12 @@ function lookupWordJisho(keyword) {
           reject(e);
         }
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(5000, () => {
+      req.destroy();
+      reject(new Error('Jisho API timeout'));
+    });
   });
 }
 
@@ -146,7 +156,8 @@ app.use(express.json());
 let tokenizer = null;
 
 // 初始化 Kuromoji 分词器
-kuromoji.builder({ dicPath: 'node_modules/kuromoji/dict' }).build((err, _tokenizer) => {
+const dicPath = path.join(__dirname, 'node_modules/kuromoji/dict');
+kuromoji.builder({ dicPath }).build((err, _tokenizer) => {
   if (err) {
     console.error('Failed to build Kuromoji tokenizer:', err);
   } else {

@@ -22,14 +22,27 @@ class GodanVerb extends Verb {
   }
 
   getDictionaryForm() { return this.dictionaryForm; }
-  getNegative() { return this.stem + this.mapLastChar('a') + 'ない'; }
-  getPolite() { return this.stem + this.mapLastChar('i') + 'ます'; }
+  getNegative() {
+    if (this.dictionaryForm === 'ある') return 'ない';
+    return this.stem + this.mapLastChar('a') + 'ない';
+  }
+  getPolite() {
+    if (['いらっしゃる', 'おっしゃる', 'なさる', 'くださる', 'ござる'].includes(this.dictionaryForm)) {
+      return this.stem + 'い' + 'ます';
+    }
+    return this.stem + this.mapLastChar('i') + 'ます';
+  }
   getTeForm() { return this.stem + this.getTeTaSuffix(true); }
   getTaForm() { return this.stem + this.getTeTaSuffix(false); }
   getPotential() { return this.stem + this.mapLastChar('e') + 'る'; }
   getPassive() { return this.stem + this.mapLastChar('a') + 'れる'; }
   getCausative() { return this.stem + this.mapLastChar('a') + 'せる'; }
-  getImperative() { return this.stem + this.mapLastChar('e'); }
+  getImperative() {
+    if (['いらっしゃる', 'おっしゃる', 'なさる', 'くださる'].includes(this.dictionaryForm)) {
+      return this.stem + 'い';
+    }
+    return this.stem + this.mapLastChar('e');
+  }
   getVolitional() { return this.stem + this.mapLastChar('o') + 'う'; }
 
   mapLastChar(row) {
@@ -49,7 +62,7 @@ class GodanVerb extends Verb {
   }
 
   getTeTaSuffix(isTe) {
-    if (this.dictionaryForm === '行く' || this.dictionaryForm === 'いく') {
+    if (this.dictionaryForm.endsWith('行く') || this.dictionaryForm.endsWith('いく')) {
       return isTe ? 'って' : 'った';
     }
     const suffixMap = {
@@ -84,7 +97,10 @@ class IchidanVerb extends Verb {
   getPotential() { return this.stem + 'られる'; }
   getPassive() { return this.stem + 'られる'; }
   getCausative() { return this.stem + 'させる'; }
-  getImperative() { return this.stem + 'ろ'; }
+  getImperative() {
+    if (this.dictionaryForm === 'くれる') return 'くれ';
+    return this.stem + 'ろ';
+  }
   getVolitional() { return this.stem + 'よう'; }
 }
 
@@ -113,9 +129,12 @@ class KuruVerb extends Verb {
   constructor(dictionaryForm) {
     super();
     this.dictionaryForm = dictionaryForm;
-    // 判断是否包含汉字「来」：「来る」→ prefix='来', 「くる」→ prefix=''
-    this.hasKanji = dictionaryForm.includes('来');
-    this.prefix = this.hasKanji ? dictionaryForm.slice(0, dictionaryForm.indexOf('来') + 1) : '';
+    this.hasKanji = dictionaryForm.endsWith('来る');
+    if (this.hasKanji) {
+      this.prefix = dictionaryForm.slice(0, -2) + '来';
+    } else {
+      this.prefix = dictionaryForm.slice(0, -2);
+    }
   }
 
   getDictionaryForm() { return this.dictionaryForm; }

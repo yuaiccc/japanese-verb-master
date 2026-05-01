@@ -243,6 +243,7 @@
           <div class="dojo-question">
             <div class="dojo-verb">
               <span class="dojo-kanji">{{ currentQuestion.verb }}</span>
+              <span class="dojo-romaji" v-if="currentQuestion.romaji">{{ currentQuestion.romaji }}</span>
               <span class="dojo-meaning">{{ currentQuestion.meaning }}</span>
             </div>
             <div class="dojo-prompt">
@@ -1996,6 +1997,14 @@ ruby rt {
   font-weight: 800;
   color: var(--text-primary);
   line-height: 1.2;
+}
+
+.dojo-romaji {
+  display: block;
+  font-size: 1.2em;
+  color: #64748b;
+  font-family: monospace;
+  margin-bottom: 8px;
 }
 
 .dojo-meaning {

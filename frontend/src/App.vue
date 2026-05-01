@@ -3,10 +3,17 @@
     <header class="header">
       <h1>🇯🇵 Japanese Word Master</h1>
       <p class="subtitle">日语词汇查询与动词活用工具</p>
+      
+      <div class="mode-switch">
+        <button :class="{ active: currentMode === 'dict' }" @click="currentMode = 'dict'">词典查询</button>
+        <button :class="{ active: currentMode === 'dojo' }" @click="currentMode = 'dojo'">变形道场 🎯</button>
+      </div>
     </header>
 
-    <!-- 搜索栏：输入框 + 按钮合一 -->
-    <div class="search-wrapper">
+    <!-- 词典模式 -->
+    <div v-show="currentMode === 'dict'">
+      <!-- 搜索栏：输入框 + 按钮合一 -->
+      <div class="search-wrapper">
       <div class="search-bar" :class="{ 'search-bar--error': error, 'search-bar--success': result }">
         <span class="search-icon" aria-hidden="true">
           <Icon name="search" class="icon-search" />
@@ -208,6 +215,83 @@
         </transition>
       </section>
     </main>
+    </div>
+
+    <!-- Dojo 模式 -->
+    <div v-if="currentMode === 'dojo'" class="dojo-wrapper">
+      <transition name="card-fade" mode="out-in">
+        <!-- 准备界面 -->
+        <div v-if="dojoState === 'start'" class="card dojo-card dojo-start" key="start">
+          <Icon name="brain" class="icon-brain-large" />
+          <h2>动词变形道场</h2>
+          <p>随机抽取 10 个常见动词，测试你的变形能力。<br>准备好迎接挑战了吗？</p>
+          <button class="search-btn btn-dojo-start" @click="startDojo" :disabled="dojoLoading">
+            <span v-if="dojoLoading" class="spinner-small"></span>
+            <span v-else>开始挑战</span>
+          </button>
+        </div>
+
+        <!-- 游戏界面 -->
+        <div v-else-if="dojoState === 'playing'" class="card dojo-card dojo-playing" key="playing">
+          <div class="dojo-header">
+            <span class="dojo-progress">进度: {{ dojoCurrentIndex + 1 }} / {{ dojoQuestions.length }}</span>
+            <span class="dojo-score">得分: <strong>{{ dojoScore }}</strong></span>
+          </div>
+
+          <div class="dojo-question">
+            <div class="dojo-verb">
+              <span class="dojo-kanji">{{ currentQuestion.verb }}</span>
+              <span class="dojo-meaning">{{ currentQuestion.meaning }}</span>
+            </div>
+            <div class="dojo-prompt">
+              请写出它的 <strong>{{ currentQuestion.formLabel }}</strong>
+            </div>
+          </div>
+
+          <div class="dojo-input-area">
+            <input
+              ref="dojoInputRef"
+              v-model="dojoAnswer"
+              type="text"
+              class="search-input dojo-input"
+              :class="{ 'input-correct': dojoFeedback?.isCorrect, 'input-error': dojoFeedback && !dojoFeedback.isCorrect }"
+              placeholder="输入假名或罗马音..."
+              @keyup.enter="dojoFeedback ? nextDojoQuestion() : checkDojoAnswer()"
+              :disabled="!!dojoFeedback"
+              autocomplete="off"
+            >
+            <button v-if="!dojoFeedback" class="search-btn" @click="checkDojoAnswer" :disabled="!dojoAnswer.trim()">提交</button>
+            <button v-else class="search-btn btn-next" @click="nextDojoQuestion">
+              {{ dojoCurrentIndex < dojoQuestions.length - 1 ? '下一题' : '查看成绩' }}
+            </button>
+          </div>
+
+          <div v-if="dojoFeedback" class="dojo-feedback" :class="dojoFeedback.isCorrect ? 'feedback-correct' : 'feedback-error'">
+            <div v-if="dojoFeedback.isCorrect" class="feedback-msg">
+              <Icon name="check" class="icon-check" /> 完全正确！
+            </div>
+            <div v-else class="feedback-msg">
+              <Icon name="error" class="icon-error" /> 错误。正确答案是: <strong>{{ dojoFeedback.correctAnswer }}</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- 结算界面 -->
+        <div v-else-if="dojoState === 'end'" class="card dojo-card dojo-end" key="end">
+          <h2>挑战结束！</h2>
+          <div class="final-score">
+            <span class="score-number">{{ dojoScore }}</span> / {{ dojoQuestions.length }}
+          </div>
+          <p class="score-eval">
+            {{ dojoScore === dojoQuestions.length ? '完美！你是动词大师 🏆' : 
+               dojoScore >= 8 ? '非常棒！只有一点点小瑕疵 🌟' : 
+               dojoScore >= 5 ? '不错，继续加油！💪' : 
+               '看来还需要多加练习哦 📚' }}
+          </p>
+          <button class="search-btn btn-dojo-start" @click="startDojo">再来一局</button>
+        </div>
+      </transition>
+    </div>
 
     <!-- 底部：文档区 -->
     <div class="doc-wrapper">
@@ -305,12 +389,16 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, computed, onUnmounted } from 'vue';
+import { ref, watch, onMounted, computed, onUnmounted, nextTick } from 'vue';
 import axios from 'axios';
 import { marked } from 'marked';
 import * as wanakana from 'wanakana';
 import Icon from './components/Icon.vue';
 
+// 全局模式
+const currentMode = ref('dict'); // 'dict' | 'dojo'
+
+// 词典模式状态
 const form = ref({
   verb: ''
 });
@@ -330,6 +418,71 @@ const suggestions = ref([]);
 const availableModels = ref([]);
 const selectedModel = ref('');
 let suggestTimeout = null;
+
+// Dojo 模式状态
+const dojoState = ref('start'); // 'start' | 'playing' | 'end'
+const dojoQuestions = ref([]);
+const dojoCurrentIndex = ref(0);
+const dojoScore = ref(0);
+const dojoAnswer = ref('');
+const dojoFeedback = ref(null); // { isCorrect: boolean, correctAnswer: string }
+const dojoLoading = ref(false);
+const dojoInputRef = ref(null);
+
+const currentQuestion = computed(() => {
+  return dojoQuestions.value[dojoCurrentIndex.value] || {};
+});
+
+const startDojo = async () => {
+  dojoLoading.value = true;
+  dojoError.value = '';
+  try {
+    const res = await axios.get('/api/dojo-quiz?limit=10');
+    dojoQuestions.value = res.data;
+    if (dojoQuestions.value.length === 0) throw new Error('题库为空');
+    
+    dojoCurrentIndex.value = 0;
+    dojoScore.value = 0;
+    dojoState.value = 'playing';
+    dojoAnswer.value = '';
+    dojoFeedback.value = null;
+    
+    nextTick(() => {
+      dojoInputRef.value?.focus();
+    });
+  } catch (err) {
+    alert('加载题库失败，请稍后再试。');
+    console.error(err);
+  } finally {
+    dojoLoading.value = false;
+  }
+};
+
+const checkDojoAnswer = () => {
+  if (!dojoAnswer.value.trim() || dojoFeedback.value) return;
+  const q = currentQuestion.value;
+  // 转换用户输入（支持罗马音直接转平假名）
+  const userKana = wanakana.toHiragana(dojoAnswer.value.trim());
+  const isCorrect = userKana === q.answer;
+  
+  if (isCorrect) dojoScore.value++;
+  dojoFeedback.value = { isCorrect, correctAnswer: q.answer };
+};
+
+const nextDojoQuestion = () => {
+  if (dojoCurrentIndex.value < dojoQuestions.value.length - 1) {
+    dojoCurrentIndex.value++;
+    dojoAnswer.value = '';
+    dojoFeedback.value = null;
+    nextTick(() => {
+      dojoInputRef.value?.focus();
+    });
+  } else {
+    dojoState.value = 'end';
+  }
+};
+
+const dojoError = ref('');
 
 // 文档区折叠状态
 const showDocs = ref(false);
@@ -909,6 +1062,35 @@ const fetchAiExplanation = async () => {
   font-size: 1rem;
   color: var(--text-muted);
   font-weight: 500;
+}
+
+/* === 模式切换 === */
+.mode-switch {
+  display: inline-flex;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 4px;
+  border-radius: 20px;
+  margin-top: 16px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.mode-switch button {
+  background: transparent;
+  border: none;
+  padding: 6px 16px;
+  font-size: 0.9em;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.mode-switch button.active {
+  background: white;
+  color: var(--primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 /* === 搜索栏 === */
@@ -1724,6 +1906,184 @@ ruby rt {
 .markdown-body ul, .markdown-body ol {
   padding-left: 20px;
   margin-bottom: 10px;
+}
+
+/* === 道场模式 Dojo === */
+.dojo-wrapper {
+  max-width: 600px;
+  margin: 0 auto 40px;
+}
+
+.dojo-card {
+  text-align: center;
+  padding: 40px 30px;
+}
+
+.icon-brain-large {
+  width: 64px;
+  height: 64px;
+  color: var(--primary);
+  margin-bottom: 16px;
+}
+
+.dojo-start h2 {
+  font-size: 2em;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+}
+
+.dojo-start p {
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 30px;
+}
+
+.btn-dojo-start {
+  padding: 12px 32px;
+  font-size: 1.1em;
+  border-radius: 24px;
+}
+
+.dojo-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px dashed rgba(226, 232, 240, 0.6);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.dojo-score strong {
+  color: var(--primary);
+  font-size: 1.2em;
+}
+
+.dojo-question {
+  margin-bottom: 32px;
+}
+
+.dojo-verb {
+  margin-bottom: 16px;
+}
+
+.dojo-kanji {
+  display: block;
+  font-size: 3em;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.dojo-meaning {
+  display: block;
+  font-size: 1.1em;
+  color: var(--text-muted);
+}
+
+.dojo-prompt {
+  font-size: 1.2em;
+  color: var(--text-secondary);
+}
+
+.dojo-prompt strong {
+  color: var(--primary);
+  padding: 2px 8px;
+  background: rgba(35, 103, 244, 0.1);
+  border-radius: 6px;
+  margin: 0 4px;
+}
+
+.dojo-input-area {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.dojo-input {
+  border: 2px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  font-size: 1.2em;
+  text-align: center;
+  transition: all 0.3s;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.dojo-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(35, 103, 244, 0.15);
+}
+
+.input-correct {
+  border-color: var(--success) !important;
+  background: #f0fdf4 !important;
+  color: var(--success);
+}
+
+.input-error {
+  border-color: var(--danger) !important;
+  background: #fef2f2 !important;
+  color: var(--danger);
+  text-decoration: line-through;
+}
+
+.btn-next {
+  background: var(--text-primary);
+}
+.btn-next:hover {
+  background: #000;
+}
+
+.dojo-feedback {
+  padding: 16px;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: 1.1em;
+  animation: slideUp 0.3s ease;
+}
+
+.feedback-correct {
+  background: #f0fdf4;
+  color: var(--success);
+  border: 1px solid #bbf7d0;
+}
+
+.feedback-error {
+  background: #fef2f2;
+  color: var(--danger);
+  border: 1px solid #fecaca;
+}
+
+.feedback-msg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.dojo-end h2 {
+  font-size: 2.5em;
+  color: var(--text-primary);
+  margin-bottom: 20px;
+}
+
+.final-score {
+  font-size: 1.5em;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+
+.score-number {
+  font-size: 3em;
+  font-weight: 800;
+  color: var(--primary);
+}
+
+.score-eval {
+  font-size: 1.2em;
+  color: var(--text-secondary);
+  margin-bottom: 32px;
 }
 
 /* === 动画 === */

@@ -143,7 +143,7 @@ function lookupWordJisho(keyword) {
 
 // 初始化 Ollama
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3456;
 
 // 中间件
 app.use(cors({
@@ -735,6 +735,70 @@ app.get('/api/verb-types', (req, res) => {
       }
     ]
   });
+});
+
+// Dojo (动词变形道场) 题库 API
+app.get('/api/dojo-quiz', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    if (!tokenizer) {
+      return res.status(503).json({ error: 'Dictionary is initializing, please try again later.' });
+    }
+
+    const forms = [
+      { key: 'negative', label: '否定式 (ない形)' },
+      { key: 'polite', label: '礼貌式 (ます形)' },
+      { key: 'teForm', label: 'て形' },
+      { key: 'taForm', label: '过去式 (た形)' },
+      { key: 'potential', label: '可能形' },
+      { key: 'passive', label: '被动形' },
+      { key: 'causative', label: '使役形' },
+      { key: 'imperative', label: '命令形' },
+      { key: 'volitional', label: '意向形' }
+    ];
+
+    const questions = [];
+    const usedVerbs = new Set();
+
+    // 从 commonVerbs 中随机抽取
+    while (questions.length < limit && usedVerbs.size < commonVerbs.length) {
+      const randomIndex = Math.floor(Math.random() * commonVerbs.length);
+      const verbObj = commonVerbs[randomIndex];
+      
+      if (usedVerbs.has(verbObj.kanji)) continue;
+      usedVerbs.add(verbObj.kanji);
+
+      // 解析动词类型
+      const type = detectVerbType(verbObj.kana);
+      if (!type) continue;
+
+      try {
+        // 生成所有变形
+        const result = conjugate(verbObj.kana, type);
+        
+        // 随机挑一个考点
+        const formObj = forms[Math.floor(Math.random() * forms.length)];
+        const answerKana = result[formObj.key];
+        
+        if (!answerKana) continue;
+
+        questions.push({
+          verb: verbObj.kanji,
+          kana: verbObj.kana,
+          meaning: verbObj.meaning,
+          formKey: formObj.key,
+          formLabel: formObj.label,
+          answer: answerKana
+        });
+      } catch (e) {
+        // 忽略解析失败的动词
+      }
+    }
+
+    res.json(questions);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // 启动服务器

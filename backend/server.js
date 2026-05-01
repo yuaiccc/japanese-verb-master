@@ -68,6 +68,7 @@ function searchJisho(keyword, verbOnly = true) {
           reject(e);
         }
       });
+      res.on('error', reject);
     });
     req.on('error', reject);
     req.setTimeout(5000, () => {
@@ -132,6 +133,7 @@ function lookupWordJisho(keyword) {
           reject(e);
         }
       });
+      res.on('error', reject);
     });
     req.on('error', reject);
     req.setTimeout(5000, () => {
@@ -216,8 +218,9 @@ const ollama = new Ollama({ host: 'http://127.0.0.1:11434' });
 async function translateMeaningsToChinese(meanings) {
   try {
     const englishDefs = meanings.map((m, i) => `${i + 1}. [${m.pos}] ${m.definitions}`).join('\n');
+    const model = process.env.OLLAMA_MODEL || 'qwen2.5';
     const response = await ollama.chat({
-      model: 'qwen2.5:7b',
+      model: model,
       messages: [{
         role: 'user',
         content: `将以下日语单词的英文释义翻译为简洁的中文。每条保持编号，只输出中文翻译，不要输出原文、词性或任何解释。格式："1. 中文释义"\n\n${englishDefs}`
@@ -404,7 +407,7 @@ app.post('/api/ai-explain', async (req, res) => {
     if (!verb) {
       return res.status(400).json({ error: 'Missing required parameter: verb' });
     }
-    const selectedModel = model || 'qwen2.5:7b';
+    const selectedModel = model || process.env.OLLAMA_MODEL || 'qwen2.5';
 
     let prompt;
 

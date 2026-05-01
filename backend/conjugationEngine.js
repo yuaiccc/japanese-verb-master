@@ -65,6 +65,12 @@ class GodanVerb extends Verb {
     if (this.dictionaryForm.endsWith('行く') || this.dictionaryForm.endsWith('いく')) {
       return isTe ? 'って' : 'った';
     }
+    if (this.dictionaryForm.endsWith('問う') || this.dictionaryForm.endsWith('とう')) {
+      return isTe ? 'うて' : 'うた';
+    }
+    if (this.dictionaryForm.endsWith('請う') || this.dictionaryForm.endsWith('こう')) {
+      return isTe ? 'うて' : 'うた';
+    }
     const suffixMap = {
       'う': { te: 'って', ta: 'った' },
       'つ': { te: 'って', ta: 'った' },

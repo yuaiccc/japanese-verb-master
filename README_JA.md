@@ -36,7 +36,7 @@ cd japanese-verb-master
 ```bash
 cd backend
 npm install
-npm run dev # ポート3000で起動
+npm run dev # ポート3456で起動
 ```
 
 #### 3. フロントエンドを起動
@@ -53,7 +53,7 @@ npm run dev # ポート5173で起動
 **エンドポイント：** `GET /api/conjugate`
 
 ```bash
-curl "http://localhost:3000/api/conjugate?verb=飲む&type=GODAN"
+curl "http://localhost:3456/api/conjugate?verb=飲む&type=GODAN"
 ```
 
 **レスポンス：**

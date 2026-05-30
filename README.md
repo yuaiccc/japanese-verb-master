@@ -36,7 +36,7 @@ cd japanese-verb-master
 ```bash
 cd backend
 npm install
-npm run dev # 默认运行在 3000 端口
+npm run dev # 默认运行在 3456 端口
 ```
 
 #### 3. 启动前端页面
@@ -53,7 +53,7 @@ npm run dev # 默认运行在 5173 端口
 **请求接口：** `GET /api/conjugate`
 
 ```bash
-curl "http://localhost:3000/api/conjugate?verb=食べる&type=ICHIDAN"
+curl "http://localhost:3456/api/conjugate?verb=食べる&type=ICHIDAN"
 ```
 
 **返回结果：**

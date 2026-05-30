@@ -36,7 +36,7 @@ cd japanese-verb-master
 ```bash
 cd backend
 npm install
-npm run dev # Runs on port 3000
+npm run dev # Runs on port 3456
 ```
 
 #### 3. Start the Frontend
@@ -53,7 +53,7 @@ You can easily use our conjugation engine in your own apps!
 **Endpoint:** `GET /api/conjugate`
 
 ```bash
-curl "http://localhost:3000/api/conjugate?verb=飲む&type=GODAN"
+curl "http://localhost:3456/api/conjugate?verb=飲む&type=GODAN"
 ```
 
 **Response:**

@@ -43,28 +43,46 @@
           <button :class="{ active: currentMode === 'dict' }" @click="currentMode = 'dict'">词典查询</button>
           <button :class="{ active: currentMode === 'dojo' }" @click="currentMode = 'dojo'">变形道场</button>
         </div>
+        <button class="nav-llm-toggle" @click="showLlmSettings = !showLlmSettings">
+          {{ llmSettings.provider }} · {{ llmSettings.model || 'model' }}
+        </button>
       </div>
+
+      <transition name="agent-flow">
+      <div v-if="showLlmSettings" class="nav-llm-panel">
+        <select v-model="llmSettings.provider" @change="applyLlmProviderPreset">
+          <option value="deepseek">DeepSeek</option>
+          <option value="openai">OpenAI</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="siliconflow">SiliconFlow</option>
+          <option value="custom">Custom</option>
+          <option value="ollama">Ollama</option>
+        </select>
+        <input v-model="llmSettings.model" type="text" placeholder="model">
+        <input v-model="llmSettings.baseUrl" type="text" placeholder="Base URL">
+        <input v-model="llmSettings.apiKey" type="password" :placeholder="llmSettings.apiKeySet ? 'API Key 已保存' : 'API Key'">
+        <button class="agent-chip" @click="saveLlmSettingsToServer">保存</button>
+        <a
+          class="nav-llm-credit"
+          href="https://github.com/farion1231/cc-switch"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Supported by CC Switch
+        </a>
+      </div>
+      </transition>
     </header>
 
+    <template v-if="currentMode === 'dict'">
     <section class="agent-panel agent-panel--hero card">
-      <div class="agent-header">
-        <div>
-          <p class="eyebrow memory-eyebrow">Learning Agent</p>
-          <h2>日语学习 Agent 指挥台</h2>
-        </div>
-        <span v-if="agentLoading" class="agent-status">分析中...</span>
-        <span v-else class="agent-status">{{ agentRuntimeLabel }}</span>
-      </div>
-
-      <p class="agent-note">{{ agentPlan?.coachNote || agentDefaultNote }}</p>
-
       <div class="agent-chat">
         <div class="agent-chat-input">
           <input
             id="agent-command"
             v-model="agentInput"
             type="text"
-            placeholder="输入日语词或问题：食べる / neko / 食べる 和 召し上がる 有什么区别？"
+            :placeholder="animatedAgentPlaceholder"
             @input="onInput"
             @focus="onFocus"
             @blur="hideSuggestionsWithDelay"
@@ -78,9 +96,7 @@
           </button>
         </div>
 
-        <div class="agent-quick-actions">
-          <button class="agent-chip" @click="focusSearch">查词</button>
-          <button class="agent-chip" @click="currentMode = 'dojo'">练习</button>
+        <div class="agent-secondary-actions">
           <button class="agent-chip" @click="memoryRevealed = !!activeMemoryCard">复习</button>
           <button class="agent-chip" @click="showMemorySettings = !showMemorySettings">参数</button>
         </div>
@@ -126,47 +142,104 @@
       </div>
 
       <transition name="agent-flow">
-      <div v-if="agentRunning || agentMessages.length > 0" class="agent-runtime" aria-label="Agent 运行队列">
+      <section
+        v-if="latestAssistantMessage"
+        class="agent-answer-core"
+        :class="{ 'agent-answer-core--streaming': agentRunning }"
+        aria-live="polite"
+      >
+        <span v-if="agentRunning" class="agent-answer-pulse" aria-hidden="true"></span>
+        <div v-if="agentMemoryCandidates.length > 0" class="agent-memory-suggestions agent-memory-suggestions--top">
+          <button
+            v-for="item in agentMemoryCandidates"
+            :key="`${item.word}-${item.reading}`"
+            class="agent-memory-pill"
+            :class="{ 'agent-memory-pill--added': item.added }"
+            @click="addAgentMemoryCandidate(item)"
+          >
+            <strong>{{ item.word }}</strong>
+            <span v-if="item.reading">{{ item.reading }}</span>
+            <em>{{ item.added ? '取消记忆' : '加入记忆' }}</em>
+          </button>
+        </div>
+        <p v-if="latestUserMessage" class="agent-answer-question">{{ latestUserMessage }}</p>
+        <p v-if="agentRunning && agentRuntimeNote" class="agent-runtime-note">{{ agentRuntimeNote }}</p>
         <div
-          v-for="agent in agentQueue"
-          :key="agent.id"
-          class="agent-runtime-node"
-          :class="`agent-runtime-node--${agent.status}`"
-        >
-          <span class="runtime-dot" aria-hidden="true"></span>
-          <div>
-            <strong>{{ agent.label }}</strong>
-            <span>{{ agent.description }}</span>
+          v-if="agentRunning"
+          class="agent-markdown markdown-body typewriter-output typewriter-output--live is-streaming"
+          v-html="renderedStreamingMarkdown"
+        ></div>
+        <div
+          v-else
+          class="agent-markdown markdown-body typewriter-output"
+          v-html="renderMarkdown(latestAssistantMessage.content)"
+        ></div>
+        <div v-if="agentInteractivePractice" class="agent-practice-panel">
+          <div class="agent-practice-header">
+            <strong>即时练习</strong>
+            <span>{{ agentInteractivePractice.question.formLabel }}</span>
+          </div>
+          <p class="agent-practice-prompt">{{ agentInteractivePractice.prompt }}</p>
+          <div class="agent-practice-input-row">
+            <input
+              v-model="agentPracticeInput"
+              class="agent-practice-input"
+              type="text"
+              placeholder="输入你的答案"
+              :disabled="agentPracticeBusy || !!agentPracticeFeedback"
+              @keyup.enter="submitAgentPracticeAnswer"
+            >
+            <button class="agent-chip" :disabled="agentPracticeBusy || !!agentPracticeFeedback" @click="requestAgentPracticeHint">提示</button>
+            <button class="search-btn" :disabled="agentPracticeBusy || !agentPracticeInput.trim() || !!agentPracticeFeedback" @click="submitAgentPracticeAnswer">提交</button>
+          </div>
+          <div v-if="agentPracticeHint && !agentPracticeFeedback" class="dojo-coach-hint agent-practice-hint">
+            {{ agentPracticeHint }}
+          </div>
+          <div
+            v-if="agentPracticeFeedback"
+            class="dojo-feedback agent-practice-feedback"
+            :class="agentPracticeFeedback.isCorrect ? 'feedback-correct' : 'feedback-error'"
+          >
+            <div class="feedback-msg">
+              <template v-if="agentPracticeFeedback.isCorrect">
+                <Icon name="check" class="icon-check" /> 回答正确
+              </template>
+              <template v-else>
+                <Icon name="error" class="icon-error" /> 正确答案是: <strong>{{ agentPracticeFeedback.correctAnswer }}</strong>
+              </template>
+            </div>
+            <p v-if="agentPracticeFeedback.explanation" class="dojo-feedback-copy">{{ agentPracticeFeedback.explanation }}</p>
+            <p v-if="agentPracticeFeedback.memoryNote" class="agent-practice-memory-note">
+              <Icon name="brain" class="icon-memory" /> {{ agentPracticeFeedback.memoryNote }}
+            </p>
+            <div class="dojo-action-row">
+              <button class="agent-chip" @click="resetAgentPracticeState">再答一次</button>
+            </div>
           </div>
         </div>
-      </div>
+        <div v-if="agentExamples.length > 0" class="agent-examples-panel">
+          <div class="examples-grid">
+            <div v-for="(ex, idx) in agentExamples" :key="`${ex.japanese}-${idx}`" class="example-box">
+              <div class="ex-row">
+                <div class="ex-japanese">{{ ex.japanese }}</div>
+                <button class="btn-speak btn-speak--sm" @click="speak(ex.japanese)" title="朗读例句">
+                  <Icon name="volume" class="icon-volume" />
+                </button>
+              </div>
+              <div v-if="ex.kana" class="ex-kana">{{ ex.kana }}</div>
+              <div class="ex-chinese">{{ ex.chinese }}</div>
+            </div>
+          </div>
+        </div>
+      </section>
       </transition>
-      <p v-if="agentRuntimeNote" class="agent-runtime-note">{{ agentRuntimeNote }}</p>
 
       <transition name="agent-flow">
-      <div class="agent-chat agent-chat--conversation" v-if="agentMessages.length > 0 || agentToolCalls.length > 0">
-        <div class="agent-chat-log" v-if="agentMessages.length > 0">
-          <transition-group name="agent-message-list">
-          <div
-            v-for="(msg, index) in agentMessages"
-            :key="index"
-            class="agent-message"
-            :class="`agent-message--${msg.role}`"
-          >
-            <strong>{{ msg.role === 'user' ? '你' : 'Agent' }}</strong>
-            <div
-              v-if="msg.role === 'assistant'"
-              class="agent-markdown markdown-body"
-              v-html="renderMarkdown(msg.content)"
-            ></div>
-            <p v-else>{{ msg.content }}</p>
-          </div>
-          </transition-group>
-        </div>
-        <details v-if="agentToolCalls.length > 0" class="agent-tool-trace" :open="agentRunning">
+      <div class="agent-chat agent-chat--trace" v-if="agentToolCalls.length > 0 && !agentRunning">
+        <details v-if="agentToolCalls.length > 0" class="agent-tool-trace">
           <summary class="tool-trace-header">
-            <span>Agent 工具轨迹</span>
-            <small>{{ agentToolCalls.length }} steps</small>
+            <span>工具</span>
+            <small>{{ agentToolCalls.length }}</small>
           </summary>
           <transition-group name="agent-tool-list">
           <div v-for="(call, index) in agentToolCalls" :key="`${call.name}-${index}`" class="agent-tool-card" :class="`agent-tool-card--${call.status || 'done'}`">
@@ -245,13 +318,23 @@
     <section class="memory-panel card">
       <div class="memory-header">
         <div>
-          <p class="eyebrow memory-eyebrow">Memory Queue</p>
           <h2>记忆复习</h2>
+          <div class="memory-engine-line">
+            <span class="memory-engine-chip">{{ memoryEngineMeta.current }}</span>
+            <a
+              class="memory-engine-link"
+              :href="memoryEngineMeta.referenceUrl"
+              target="_blank"
+              rel="noreferrer"
+            >
+              {{ memoryEngineMeta.reference }}
+            </a>
+          </div>
         </div>
         <div class="memory-stats">
-          <span><strong>{{ memoryStats.total }}</strong> 张卡片</span>
-          <span><strong>{{ memoryStats.due }}</strong> 待复习</span>
-          <span><strong>{{ memoryStats.mastered }}</strong> 已稳定</span>
+          <span>{{ memoryStats.total }} 张</span>
+          <span>{{ memoryStats.due }} 待复习</span>
+          <span>{{ memoryStats.mastered }} 稳定</span>
         </div>
       </div>
 
@@ -266,19 +349,60 @@
           <div v-if="activeMemoryCard.sample" class="memory-sample">{{ activeMemoryCard.sample }}</div>
         </div>
         <div class="memory-actions">
-          <button v-if="!memoryRevealed" class="btn-secondary" @click="memoryRevealed = true">显示答案</button>
+          <button v-if="!memoryRevealed" class="btn-secondary" @click="memoryRevealed = true">显示</button>
           <template v-else>
             <button class="memory-grade grade-forgot" @click="reviewMemory(activeMemoryCard.id, 'forgot')">忘记</button>
             <button class="memory-grade grade-hard" @click="reviewMemory(activeMemoryCard.id, 'hard')">模糊</button>
             <button class="memory-grade grade-good" @click="reviewMemory(activeMemoryCard.id, 'good')">记住</button>
           </template>
-          <button class="btn-secondary" @click="searchMemoryCard(activeMemoryCard)">查这个词</button>
+          <button class="btn-secondary" @click="searchMemoryCard(activeMemoryCard)">查词</button>
         </div>
       </div>
 
       <div v-else class="memory-empty">
-        <strong>{{ memoryCards.length > 0 ? '今天没有到期卡片' : '还没有记忆卡片' }}</strong>
-        <p>{{ memoryCards.length > 0 ? nextMemoryText : '查询一个词后点“加入记忆”，它会进入复习队列。' }}</p>
+        <strong>{{ memoryCards.length > 0 ? '今日清空' : '暂无卡片' }}</strong>
+        <p>{{ memoryCards.length > 0 ? nextMemoryText : '查词后加入记忆。' }}</p>
+      </div>
+
+      <div class="memory-library">
+        <div class="memory-library-toolbar">
+          <input
+            v-model="memoryLibraryQuery"
+            type="text"
+            class="memory-library-search"
+            placeholder="搜索已保存词条"
+          >
+          <div class="memory-library-filters">
+            <button
+              v-for="filter in memoryLibraryFilters"
+              :key="filter.id"
+              class="memory-library-filter"
+              :class="{ active: memoryLibraryFilter === filter.id }"
+              @click="memoryLibraryFilter = filter.id"
+            >
+              {{ filter.label }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="filteredMemoryCards.length > 0" class="memory-library-list">
+          <div
+            v-for="card in filteredMemoryCards"
+            :key="card.id"
+            class="memory-library-item"
+          >
+            <div class="memory-library-copy">
+              <strong>{{ card.word }}</strong>
+              <span v-if="card.reading">{{ card.reading }}</span>
+              <p>{{ card.meaning || '暂无释义' }}</p>
+            </div>
+            <div class="memory-library-meta">
+              <small>{{ formatMemoryDueLabel(card) }}</small>
+              <button class="memory-library-action" @click="searchMemoryCard(card)">查词</button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="memory-library-empty">没有匹配到已保存词条。</div>
       </div>
     </section>
 
@@ -302,7 +426,7 @@
               :class="{ active: isCurrentMemorized }"
               @click="addCurrentToMemory"
             >
-              {{ isCurrentMemorized ? '已在记忆库' : '加入记忆' }}
+              {{ isCurrentMemorized ? '取消记忆' : '加入记忆' }}
             </button>
           </div>
           <h3>活用结果</h3>
@@ -352,7 +476,7 @@
               :class="{ active: isCurrentMemorized }"
               @click="addCurrentToMemory"
             >
-              {{ isCurrentMemorized ? '已在记忆库' : '加入记忆' }}
+              {{ isCurrentMemorized ? '取消记忆' : '加入记忆' }}
             </button>
           </div>
           <div class="dict-meanings">
@@ -434,158 +558,6 @@
         </transition>
       </section>
     </main>
-    </div>
-
-    <!-- Dojo 模式 -->
-    <div v-if="currentMode === 'dojo'" class="dojo-wrapper">
-      <transition name="card-fade" mode="out-in">
-        <!-- 准备界面 -->
-        <div v-if="dojoState === 'start'" class="card dojo-card dojo-start" key="start">
-          <Icon name="brain" class="icon-brain-large" />
-          <h2>动词变形道场</h2>
-          <p class="dojo-start-copy">先选一个练习场景，再开始 10 题挑战。你在道场里的答题表现会自动生成学习画像。</p>
-          <div class="dojo-scene-grid">
-            <button
-              v-for="scene in sceneOptions"
-              :key="scene.id"
-              class="scene-card"
-              :class="{ active: selectedSceneId === scene.id }"
-              @click="selectedSceneId = scene.id"
-            >
-              <span class="scene-card-title">{{ scene.name }}</span>
-              <span class="scene-card-desc">{{ scene.description }}</span>
-              <span class="scene-card-meta">{{ scene.meta }}</span>
-              <span v-if="scene.preview" class="scene-card-preview">{{ scene.preview }}</span>
-            </button>
-          </div>
-          <div class="dojo-profile-panel" v-if="practiceProfile.totalAttempts > 0">
-            <div class="dojo-profile-header">
-              <h3>学习画像</h3>
-              <span class="profile-badge">最近 {{ practiceProfile.totalAttempts }} 次练习</span>
-            </div>
-            <div class="dojo-profile-stats">
-              <div class="profile-stat">
-                <strong>{{ practiceProfile.accuracy }}%</strong>
-                <span>综合正确率</span>
-              </div>
-              <div class="profile-stat">
-                <strong>{{ practiceProfile.todayAttempts }}</strong>
-                <span>今日练习</span>
-              </div>
-              <div class="profile-stat">
-                <strong>{{ practiceProfile.avgDuration }}s</strong>
-                <span>平均答题</span>
-              </div>
-            </div>
-            <p class="profile-recommendation">{{ practiceProfile.recommendation }}</p>
-            <div class="profile-subsection" v-if="practiceProfile.weakestForms.length > 0">
-              <span class="profile-subtitle">薄弱变形</span>
-              <div class="profile-tag-list">
-                <span v-for="item in practiceProfile.weakestForms" :key="item.key" class="profile-tag">
-                  {{ item.label }} {{ item.accuracy }}%
-                </span>
-              </div>
-            </div>
-            <div class="profile-subsection" v-if="practiceProfile.sceneStats.length > 0">
-              <span class="profile-subtitle">场景掌握度</span>
-              <div class="scene-progress-list">
-                <div v-for="item in practiceProfile.sceneStats" :key="item.id" class="scene-progress-row">
-                  <span>{{ item.name }}</span>
-                  <strong>{{ item.accuracy }}%</strong>
-                </div>
-              </div>
-            </div>
-            <div class="profile-subsection" v-if="practiceProfile.wrongBook.length > 0">
-              <span class="profile-subtitle">错题本</span>
-              <div class="wrong-book-list">
-                <div v-for="item in practiceProfile.wrongBook" :key="`${item.verb}-${item.formKey}`" class="wrong-book-item">
-                  <div class="wrong-book-main">
-                    <strong>{{ item.verb }}</strong>
-                    <span>{{ item.formLabel }}</span>
-                    <span class="wrong-book-scene">{{ item.sceneName }}</span>
-                  </div>
-                  <div class="wrong-book-meta">
-                    <span>正确：{{ item.correctAnswer }}</span>
-                    <span>最近写成：{{ item.latestUserAnswer || '未记录' }}</span>
-                    <span>累计错 {{ item.wrongCount }} 次</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p v-else class="dojo-profile-empty">完成几轮挑战后，这里会出现你的薄弱变形、场景掌握度和推荐练习。</p>
-          <button class="search-btn btn-dojo-start" @click="startDojo" :disabled="dojoLoading">
-            <span v-if="dojoLoading" class="spinner-small"></span>
-            <span v-else>开始{{ selectedSceneName }}挑战</span>
-          </button>
-        </div>
-
-        <!-- 游戏界面 -->
-        <div v-else-if="dojoState === 'playing'" class="card dojo-card dojo-playing" key="playing">
-          <div class="dojo-header">
-            <span class="dojo-progress">进度: {{ dojoCurrentIndex + 1 }} / {{ dojoQuestions.length }}</span>
-            <span class="dojo-scene-pill">{{ activeDojoSceneName }}</span>
-            <span class="dojo-score">得分: <strong>{{ dojoScore }}</strong></span>
-          </div>
-
-          <div class="dojo-question">
-            <div class="dojo-verb">
-              <span class="dojo-kanji">{{ currentQuestion.verb }}</span>
-              <span class="dojo-romaji" v-if="currentQuestion.romaji">{{ currentQuestion.romaji }}</span>
-              <span class="dojo-meaning">{{ currentQuestion.meaning }}</span>
-            </div>
-            <div class="dojo-prompt">
-              请写出它的 <strong>{{ currentQuestion.formLabel }}</strong>
-            </div>
-          </div>
-
-          <div class="dojo-choice-area">
-            <button
-              v-for="option in currentQuestion.options || []"
-              :key="option"
-              class="dojo-choice-btn"
-              :class="getDojoChoiceClass(option)"
-              :disabled="!!dojoFeedback"
-              @click="selectDojoOption(option)"
-            >
-              {{ option }}
-            </button>
-          </div>
-
-          <div class="dojo-action-row">
-            <button v-if="dojoFeedback" class="search-btn btn-next" @click="nextDojoQuestion">
-              {{ dojoCurrentIndex < dojoQuestions.length - 1 ? '下一题' : '查看成绩' }}
-            </button>
-          </div>
-
-          <div v-if="dojoFeedback" class="dojo-feedback" :class="dojoFeedback.isCorrect ? 'feedback-correct' : 'feedback-error'">
-            <div v-if="dojoFeedback.isCorrect" class="feedback-msg">
-              <Icon name="check" class="icon-check" /> 完全正确！
-            </div>
-            <div v-else class="feedback-msg">
-              <Icon name="error" class="icon-error" /> 错误。正确答案是: <strong>{{ dojoFeedback.correctAnswer }}</strong>
-            </div>
-          </div>
-        </div>
-
-        <!-- 结算界面 -->
-        <div v-else-if="dojoState === 'end'" class="card dojo-card dojo-end" key="end">
-          <h2>挑战结束！</h2>
-          <p class="dojo-end-scene">{{ activeDojoSceneName }}</p>
-          <div class="final-score">
-            <span class="score-number">{{ dojoScore }}</span> / {{ dojoQuestions.length }}
-          </div>
-          <p class="score-eval">
-            {{ dojoScore === dojoQuestions.length ? '完美！你是动词大师 🏆' : 
-               dojoScore >= 8 ? '非常棒！只有一点点小瑕疵 🌟' : 
-               dojoScore >= 5 ? '不错，继续加油！💪' : 
-               '看来还需要多加练习哦 📚' }}
-          </p>
-          <button class="search-btn btn-dojo-start" @click="startDojo">再来一局</button>
-        </div>
-      </transition>
-    </div>
-
     <!-- 底部：文档区 -->
     <div class="doc-wrapper">
       <section class="doc-section">
@@ -677,7 +649,199 @@
           </div>
         </div>
       </section>
+    </div>
+    </template>
+
+    <!-- Dojo 模式 -->
+    <div v-if="currentMode === 'dojo'" class="dojo-wrapper">
+      <transition name="card-fade" mode="out-in">
+        <!-- 准备界面 -->
+        <div v-if="dojoState === 'start'" class="card dojo-card dojo-start" key="start">
+          <Icon name="brain" class="icon-brain-large" />
+          <h2>动词变形道场</h2>
+          <p class="dojo-start-copy">先选一个练习场景，再开始 10 题挑战。你在道场里的答题表现会自动生成学习画像。</p>
+          <div class="dojo-scene-grid">
+            <button
+              v-for="scene in sceneOptions"
+              :key="scene.id"
+              class="scene-card"
+              :class="{ active: selectedSceneId === scene.id }"
+              @click="selectedSceneId = scene.id"
+            >
+              <span class="scene-card-title">{{ scene.name }}</span>
+              <span class="scene-card-desc">{{ scene.description }}</span>
+              <span class="scene-card-meta">{{ scene.meta }}</span>
+              <span v-if="scene.preview" class="scene-card-preview">{{ scene.preview }}</span>
+            </button>
+          </div>
+          <div class="dojo-profile-panel" v-if="practiceProfile.totalAttempts > 0">
+            <div class="dojo-profile-header">
+              <h3>学习画像</h3>
+              <span class="profile-badge">最近 {{ practiceProfile.totalAttempts }} 次练习</span>
+            </div>
+            <p class="profile-recommendation profile-recommendation--hero">{{ userProfile.summary }}</p>
+            <div class="profile-tag-list">
+              <span class="profile-tag">记忆 {{ userProfile.reviewLoad.total }}</span>
+              <span class="profile-tag">待复习 {{ userProfile.reviewLoad.due }}</span>
+              <span class="profile-tag">准确率 {{ userProfile.recentAccuracy }}%</span>
+              <span v-if="userProfile.strongestScene" class="profile-tag">熟悉场景 {{ userProfile.strongestScene.name }}</span>
+            </div>
+            <div class="dojo-profile-stats">
+              <div class="profile-stat">
+                <strong>{{ practiceProfile.accuracy }}%</strong>
+                <span>综合正确率</span>
+              </div>
+              <div class="profile-stat">
+                <strong>{{ practiceProfile.todayAttempts }}</strong>
+                <span>今日练习</span>
+              </div>
+              <div class="profile-stat">
+                <strong>{{ practiceProfile.avgDuration }}s</strong>
+                <span>平均答题</span>
+              </div>
+            </div>
+            <p class="profile-recommendation">{{ practiceProfile.recommendation }}</p>
+            <div class="profile-subsection" v-if="userProfile.recommendations.length > 0">
+              <span class="profile-subtitle">长期建议</span>
+              <div class="profile-tag-list">
+                <span v-for="item in userProfile.recommendations" :key="item" class="profile-tag">
+                  {{ item }}
+                </span>
+              </div>
+            </div>
+            <div class="profile-subsection" v-if="practiceProfile.weakestForms.length > 0">
+              <span class="profile-subtitle">薄弱变形</span>
+              <div class="profile-tag-list">
+                <span v-for="item in practiceProfile.weakestForms" :key="item.key" class="profile-tag">
+                  {{ item.label }} {{ item.accuracy }}%
+                </span>
+              </div>
+            </div>
+            <div class="profile-subsection" v-if="practiceProfile.sceneStats.length > 0">
+              <span class="profile-subtitle">场景掌握度</span>
+              <div class="scene-progress-list">
+                <div v-for="item in practiceProfile.sceneStats" :key="item.id" class="scene-progress-row">
+                  <span>{{ item.name }}</span>
+                  <strong>{{ item.accuracy }}%</strong>
+                </div>
+              </div>
+            </div>
+            <div class="profile-subsection" v-if="practiceProfile.wrongBook.length > 0">
+              <span class="profile-subtitle">错题本</span>
+              <div class="wrong-book-list">
+                <div v-for="item in practiceProfile.wrongBook" :key="`${item.verb}-${item.formKey}`" class="wrong-book-item">
+                  <div class="wrong-book-main">
+                    <strong>{{ item.verb }}</strong>
+                    <span>{{ item.formLabel }}</span>
+                    <span class="wrong-book-scene">{{ item.sceneName }}</span>
+                  </div>
+                  <div class="wrong-book-meta">
+                    <span>正确：{{ item.correctAnswer }}</span>
+                    <span>最近写成：{{ item.latestUserAnswer || '未记录' }}</span>
+                    <span>累计错 {{ item.wrongCount }} 次</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p v-else class="dojo-profile-empty">完成几轮挑战后，这里会出现你的薄弱变形、场景掌握度和推荐练习。</p>
+          <button class="search-btn btn-dojo-start" @click="startDojo" :disabled="dojoLoading">
+            <span v-if="dojoLoading" class="spinner-small"></span>
+            <span v-else>开始{{ selectedSceneName }}挑战</span>
+          </button>
+        </div>
+
+        <!-- 游戏界面 -->
+        <div v-else-if="dojoState === 'playing'" class="card dojo-card dojo-playing" key="playing">
+          <div class="dojo-header">
+            <span class="dojo-progress">进度: {{ dojoCurrentIndex + 1 }} / {{ dojoQuestions.length }}</span>
+            <span class="dojo-scene-pill">{{ activeDojoSceneName }}</span>
+            <span class="dojo-score">得分: <strong>{{ dojoScore }}</strong></span>
+          </div>
+
+          <div class="dojo-question">
+            <div class="dojo-verb">
+              <span class="dojo-kanji">{{ currentQuestion.verb }}</span>
+              <span class="dojo-romaji" v-if="currentQuestion.romaji">{{ currentQuestion.romaji }}</span>
+              <span class="dojo-meaning">{{ currentQuestion.meaning }}</span>
+            </div>
+            <div class="dojo-prompt">
+              请写出它的 <strong>{{ currentQuestion.formLabel }}</strong>
+            </div>
+          </div>
+
+          <div class="dojo-coach-line">
+            <span class="dojo-coach-badge">Dojo Coach</span>
+            <span>{{ dojoCoachBusy ? '正在思考…' : '可给提示、判题、讲解' }}</span>
+          </div>
+
+          <div class="dojo-input-area">
+            <div class="dojo-input-wrapper">
+              <input
+                v-model="dojoInput"
+                class="dojo-input"
+                :class="{
+                  'input-correct': dojoFeedback?.isCorrect,
+                  'input-error': dojoFeedback && !dojoFeedback.isCorrect
+                }"
+                type="text"
+                placeholder="输入你的变形答案"
+                :disabled="!!dojoFeedback"
+                @keyup.enter="submitDojoAnswer"
+              >
+              <button
+                v-if="dojoInput"
+                class="dojo-clear-btn"
+                @click="dojoInput = ''"
+                aria-label="清空答案"
+              >
+                <Icon name="x" class="icon-x" />
+              </button>
+            </div>
+            <button class="agent-chip" :disabled="dojoCoachBusy || !!dojoFeedback" @click="requestDojoHint">提示</button>
+            <button class="search-btn" :disabled="dojoCoachBusy || !dojoInput.trim() || !!dojoFeedback" @click="submitDojoAnswer">提交</button>
+          </div>
+
+          <div v-if="dojoCoachHint && !dojoFeedback" class="dojo-coach-hint">
+            {{ dojoCoachHint }}
+          </div>
+
+          <div class="dojo-action-row">
+            <button v-if="dojoFeedback" class="search-btn btn-next" @click="nextDojoQuestion">
+              {{ dojoCurrentIndex < dojoQuestions.length - 1 ? '下一题' : '查看成绩' }}
+            </button>
+          </div>
+
+          <div v-if="dojoFeedback" class="dojo-feedback" :class="dojoFeedback.isCorrect ? 'feedback-correct' : 'feedback-error'">
+            <div v-if="dojoFeedback.isCorrect" class="feedback-msg">
+              <Icon name="check" class="icon-check" /> 完全正确！
+            </div>
+            <div v-else class="feedback-msg">
+              <Icon name="error" class="icon-error" /> 错误。正确答案是: <strong>{{ dojoFeedback.correctAnswer }}</strong>
+            </div>
+            <p v-if="dojoFeedback.explanation" class="dojo-feedback-copy">{{ dojoFeedback.explanation }}</p>
+          </div>
+        </div>
+
+        <!-- 结算界面 -->
+        <div v-else-if="dojoState === 'end'" class="card dojo-card dojo-end" key="end">
+          <h2>挑战结束！</h2>
+          <p class="dojo-end-scene">{{ activeDojoSceneName }}</p>
+          <div class="final-score">
+            <span class="score-number">{{ dojoScore }}</span> / {{ dojoQuestions.length }}
+          </div>
+          <p class="score-eval">
+            {{ dojoScore === dojoQuestions.length ? '完美！你是动词大师 🏆' : 
+               dojoScore >= 8 ? '非常棒！只有一点点小瑕疵 🌟' : 
+               dojoScore >= 5 ? '不错，继续加油！💪' : 
+               '看来还需要多加练习哦 📚' }}
+          </p>
+          <button class="search-btn btn-dojo-start" @click="startDojo">再来一局</button>
+        </div>
+      </transition>
+    </div>
   </div>
+
 </template>
 
 <script setup>
@@ -735,7 +899,14 @@ const showDropdown = ref(false);
 const suggestions = ref([]);
 const availableModels = ref([]);
 const selectedModel = ref('');
-const llmStatus = ref({ provider: 'ollama', model: '', deepSeekReady: false });
+const llmStatus = ref({ provider: 'ollama', model: '', apiKeySet: false });
+const llmSettings = ref({
+  provider: 'deepseek',
+  model: 'deepseek-v4-flash',
+  baseUrl: 'https://api.deepseek.com',
+  apiKey: '',
+  apiKeySet: false
+});
 let suggestTimeout = null;
 
 // Dojo 模式状态
@@ -747,6 +918,9 @@ const dojoFeedback = ref(null); // { isCorrect: boolean, correctAnswer: string }
 const dojoLoading = ref(false);
 const dojoQuestionStartedAt = ref(0);
 const dojoSelectedOption = ref('');
+const dojoInput = ref('');
+const dojoCoachBusy = ref(false);
+const dojoCoachHint = ref('');
 const scenes = ref([]);
 const selectedSceneId = ref('all');
 const practiceProfile = ref({
@@ -758,6 +932,16 @@ const practiceProfile = ref({
   sceneStats: [],
   wrongBook: [],
   recommendation: '先完成一轮挑战，系统会开始生成你的长期学习画像。'
+});
+const userProfile = ref({
+  summary: '还在建立你的长期学习画像。',
+  learningStyle: 'exploring',
+  focusWordType: 'verb',
+  reviewLoad: { total: 0, due: 0, mastered: 0 },
+  weakestForm: null,
+  strongestScene: null,
+  recentAccuracy: 0,
+  recommendations: []
 });
 
 const currentQuestion = computed(() => {
@@ -805,8 +989,18 @@ const recordPractice = async ({ question, userAnswer, isCorrect, durationMs }) =
       answeredAt: new Date().toISOString()
     });
     practiceProfile.value = res.data;
+    await loadUserProfile();
   } catch (e) {
     console.error('保存练习记录失败', e);
+  }
+};
+
+const loadUserProfile = async () => {
+  try {
+    const res = await axios.get('/api/user-profile');
+    userProfile.value = res.data;
+  } catch (e) {
+    console.error('加载用户画像失败', e);
   }
 };
 
@@ -826,6 +1020,8 @@ const startDojo = async () => {
     dojoScore.value = 0;
     dojoState.value = 'playing';
     dojoSelectedOption.value = '';
+    dojoInput.value = '';
+    dojoCoachHint.value = '';
     dojoFeedback.value = null;
     dojoQuestionStartedAt.value = Date.now();
   } catch (err) {
@@ -836,32 +1032,55 @@ const startDojo = async () => {
   }
 };
 
-const getDojoChoiceClass = (option) => {
-  if (!dojoFeedback.value) {
-    return dojoSelectedOption.value === option ? 'choice-selected' : '';
+const submitDojoAnswer = async () => {
+  if (dojoFeedback.value || !dojoInput.value.trim()) return;
+  const q = currentQuestion.value;
+  const answer = dojoInput.value.trim();
+  const durationMs = dojoQuestionStartedAt.value ? Date.now() - dojoQuestionStartedAt.value : 0;
+  dojoCoachBusy.value = true;
+  try {
+    const { data } = await axios.post('/api/dojo-agent-turn', {
+      question: q,
+      userAnswer: answer,
+      action: 'check'
+    });
+    const isCorrect = !!data.isCorrect;
+    if (isCorrect) dojoScore.value++;
+    await recordPractice({ question: q, userAnswer: answer, isCorrect, durationMs });
+    dojoFeedback.value = {
+      isCorrect,
+      correctAnswer: data.correctAnswer || q.answer,
+      explanation: data.explanation || ''
+    };
+  } catch (e) {
+    console.error('Dojo Coach 判题失败', e);
+  } finally {
+    dojoCoachBusy.value = false;
   }
-  if (option === currentQuestion.value.answer) return 'choice-correct';
-  if (option === dojoSelectedOption.value && !dojoFeedback.value.isCorrect) return 'choice-wrong';
-  return '';
 };
 
-const selectDojoOption = async (option) => {
+const requestDojoHint = async () => {
   if (dojoFeedback.value) return;
-
-  const q = currentQuestion.value;
-  dojoSelectedOption.value = option;
-  const isCorrect = option === q.answer;
-  const durationMs = dojoQuestionStartedAt.value ? Date.now() - dojoQuestionStartedAt.value : 0;
-  
-  if (isCorrect) dojoScore.value++;
-  await recordPractice({ question: q, userAnswer: option, isCorrect, durationMs });
-  dojoFeedback.value = { isCorrect, correctAnswer: q.answer };
+  dojoCoachBusy.value = true;
+  try {
+    const { data } = await axios.post('/api/dojo-agent-turn', {
+      question: currentQuestion.value,
+      action: 'hint'
+    });
+    dojoCoachHint.value = data.hint || '';
+  } catch (e) {
+    console.error('Dojo Coach 提示失败', e);
+  } finally {
+    dojoCoachBusy.value = false;
+  }
 };
 
 const nextDojoQuestion = () => {
   if (dojoCurrentIndex.value < dojoQuestions.value.length - 1) {
     dojoCurrentIndex.value++;
     dojoSelectedOption.value = '';
+    dojoInput.value = '';
+    dojoCoachHint.value = '';
     dojoFeedback.value = null;
     dojoQuestionStartedAt.value = Date.now();
   } else {
@@ -879,6 +1098,8 @@ const MAX_HISTORY = 20;
 const history = ref([]);
 const memoryCards = ref([]);
 const memoryRevealed = ref(false);
+const memoryLibraryQuery = ref('');
+const memoryLibraryFilter = ref('all');
 const agentPlan = ref(null);
 const similarWords = ref([]);
 const agentLoading = ref(false);
@@ -886,7 +1107,24 @@ const agentRunning = ref(false);
 const agentInput = ref('');
 const agentMessages = ref([]);
 const agentToolCalls = ref([]);
+const agentEvents = ref([]);
+const agentMemoryCandidates = ref([]);
+const agentExamples = ref([]);
+const agentInteractivePractice = ref(null);
+const agentPracticeInput = ref('');
+const agentPracticeBusy = ref(false);
+const agentPracticeHint = ref('');
+const agentPracticeFeedback = ref(null);
+const streamedAssistantText = ref('');
 const agentAbortController = ref(null);
+const agentPlaceholderExamples = [
+  '问日语：食べる 和 召し上がる 有什么区别',
+  '问日语：为什么 〜ている 有时表示状态',
+  '问日语：给我 3 个便利店场景例句',
+  '问日语：把 猫 翻成日语并推荐相近词'
+];
+const animatedAgentPlaceholder = ref(agentPlaceholderExamples[0]);
+let placeholderInterval = null;
 const agentRuntimeEngine = ref('LangGraph');
 let agentRunSeq = 0;
 const defaultAgentQueue = [
@@ -898,7 +1136,15 @@ const defaultAgentQueue = [
 const agentQueue = ref(defaultAgentQueue.map(item => ({ ...item })));
 const agentRuntimeNote = ref('');
 const showMemorySettings = ref(false);
-const agentDefaultNote = '我是这个工具的学习中枢：查词后我会生成相似词、记忆卡片建议、场景练习路径和复习优先级。';
+const showLlmSettings = ref(false);
+const llmProviderPresets = {
+  deepseek: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
+  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-3.5-sonnet' },
+  siliconflow: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3' },
+  custom: { baseUrl: '', model: '' },
+  ollama: { baseUrl: 'http://127.0.0.1:11434', model: 'qwen2.5' }
+};
 const memorySettings = ref({
   desiredRetention: 0.9,
   newCardsPerDay: 12,
@@ -908,17 +1154,180 @@ const memorySettings = ref({
   maxIntervalDays: 180,
   autoAddSimilar: false
 });
+const memoryEngineMeta = {
+  current: '当前调度: 内置 SM-2 风格间隔复习',
+  reference: '参考开源 repo: ts-fsrs',
+  referenceUrl: 'https://github.com/open-spaced-repetition/ts-fsrs'
+};
+const memoryLibraryFilters = [
+  { id: 'all', label: '全部' },
+  { id: 'due', label: '待复习' },
+  { id: 'mastered', label: '稳定' }
+];
 
 const llmStatusLabel = computed(() => {
-  if (llmStatus.value.provider === 'deepseek') {
-    return llmStatus.value.deepSeekReady ? `DeepSeek · ${llmStatus.value.model}` : 'DeepSeek 未配置';
-  }
-  return `Ollama · ${llmStatus.value.model || '本地模型'}`;
+  const provider = llmStatus.value.provider || 'ollama';
+  const ready = provider === 'ollama' || llmStatus.value.apiKeySet;
+  return `${provider} · ${ready ? (llmStatus.value.model || 'model') : '未配置'}`;
 });
 
 const agentRuntimeLabel = computed(() => {
   return agentRuntimeEngine.value ? `${agentRuntimeEngine.value} · ${llmStatusLabel.value}` : llmStatusLabel.value;
 });
+
+const latestAssistantMessage = computed(() => {
+  return [...agentMessages.value].reverse().find(message => message.role === 'assistant') || null;
+});
+
+const latestUserMessage = computed(() => {
+  return [...agentMessages.value].reverse().find(message => message.role === 'user')?.content || '';
+});
+
+const latestAssistantText = computed(() => {
+  if (agentRunning.value) {
+    return streamedAssistantText.value;
+  }
+  return latestAssistantMessage.value?.content || '';
+});
+
+const renderedStreamingMarkdown = computed(() => {
+  return renderMarkdown(latestAssistantText.value);
+});
+
+let streamRenderQueue = '';
+let streamRenderTimer = null;
+let streamRenderDone = false;
+let streamRenderDrainResolvers = [];
+
+const resetStreamRenderer = () => {
+  streamedAssistantText.value = '';
+  streamRenderQueue = '';
+  streamRenderDone = false;
+  streamRenderDrainResolvers = [];
+  if (streamRenderTimer) {
+    window.clearTimeout(streamRenderTimer);
+    streamRenderTimer = null;
+  }
+};
+
+const resolveStreamDrain = () => {
+  if (!streamRenderDone || streamRenderQueue.length > 0 || streamRenderTimer) return;
+  while (streamRenderDrainResolvers.length > 0) {
+    const resolve = streamRenderDrainResolvers.shift();
+    resolve?.();
+  }
+};
+
+const pumpStreamRenderer = (assistantMessage) => {
+  if (streamRenderTimer || !streamRenderQueue.length) {
+    resolveStreamDrain();
+    return;
+  }
+
+  const step = () => {
+    const sliceLength = streamRenderQueue.length > 20 ? 4 : streamRenderQueue.length > 8 ? 3 : 2;
+    const chunk = streamRenderQueue.slice(0, sliceLength);
+    streamRenderQueue = streamRenderQueue.slice(sliceLength);
+    streamedAssistantText.value += chunk;
+    assistantMessage.content = streamedAssistantText.value;
+
+    if (streamRenderQueue.length > 0) {
+      streamRenderTimer = window.setTimeout(step, 18);
+      return;
+    }
+
+    streamRenderTimer = null;
+    resolveStreamDrain();
+  };
+
+  streamRenderTimer = window.setTimeout(step, 18);
+};
+
+const enqueueStreamText = (text, assistantMessage) => {
+  if (!text) return;
+  streamRenderQueue += text;
+  pumpStreamRenderer(assistantMessage);
+};
+
+const markStreamRendererDone = () => {
+  streamRenderDone = true;
+  resolveStreamDrain();
+};
+
+const resetAgentPracticeState = () => {
+  agentPracticeInput.value = '';
+  agentPracticeBusy.value = false;
+  agentPracticeHint.value = '';
+  agentPracticeFeedback.value = null;
+};
+
+const requestAgentPracticeHint = async () => {
+  if (!agentInteractivePractice.value?.question || agentPracticeFeedback.value) return;
+  agentPracticeBusy.value = true;
+  try {
+    const { data } = await axios.post('/api/dojo-agent-turn', {
+      question: agentInteractivePractice.value.question,
+      action: 'hint'
+    });
+    agentPracticeHint.value = data.hint || '';
+  } catch (e) {
+    console.error('Agent 练习提示失败', e);
+  } finally {
+    agentPracticeBusy.value = false;
+  }
+};
+
+const submitAgentPracticeAnswer = async () => {
+  if (!agentInteractivePractice.value?.question || !agentPracticeInput.value.trim() || agentPracticeFeedback.value) return;
+  agentPracticeBusy.value = true;
+  try {
+    const { data } = await axios.post('/api/dojo-agent-turn', {
+      question: agentInteractivePractice.value.question,
+      userAnswer: agentPracticeInput.value.trim(),
+      action: 'check',
+      hintUsed: !!agentPracticeHint.value,
+      recordToMemory: true
+    });
+    agentPracticeFeedback.value = {
+      isCorrect: !!data.isCorrect,
+      correctAnswer: data.correctAnswer || agentInteractivePractice.value.question.answer,
+      explanation: data.explanation || '',
+      memoryNote: ''
+    };
+    // 把判题结果反馈到长期记忆队列：刷新卡片列表（统计自动重算）并提示下次复习安排。
+    if (data.memory) {
+      if (Array.isArray(data.memory.cards)) {
+        memoryCards.value = data.memory.cards.map(normalizeMemoryCard);
+      }
+      if (data.memory.profile) {
+        userProfile.value = { ...userProfile.value, ...data.memory.profile };
+      }
+      const card = data.memory.card;
+      if (card) {
+        const dueLabel = formatMemoryDueLabel(normalizeMemoryCard(card));
+        agentPracticeFeedback.value.memoryNote = data.memory.created
+          ? `已加入记忆库并安排复习 · ${dueLabel}`
+          : data.isCorrect
+            ? `记忆已巩固，间隔延长 · ${dueLabel}`
+            : `已标记为需巩固，将尽快重现 · ${dueLabel}`;
+      }
+    }
+  } catch (e) {
+    console.error('Agent 练习判题失败', e);
+  } finally {
+    agentPracticeBusy.value = false;
+  }
+};
+
+const waitForStreamRendererDrain = () => {
+  if (!streamRenderQueue.length && !streamRenderTimer) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    streamRenderDrainResolvers.push(resolve);
+    resolveStreamDrain();
+  });
+};
 
 const getMemoryWord = (item) => item?.dictionaryForm || item?.word || item?.verb || '';
 
@@ -937,6 +1346,7 @@ const loadMemoryCards = async () => {
   try {
     const res = await axios.get('/api/memory-cards');
     memoryCards.value = res.data.map(normalizeMemoryCard);
+    await loadUserProfile();
   } catch (e) {
     console.error('加载记忆卡片失败', e);
   }
@@ -958,6 +1368,80 @@ const saveMemorySettingsToServer = async () => {
   } catch (e) {
     console.error('保存记忆参数失败', e);
   }
+};
+
+const loadLlmSettings = async () => {
+  try {
+    const res = await axios.get('/api/llm-settings');
+    llmSettings.value = { ...llmSettings.value, ...res.data, apiKey: '' };
+    llmStatus.value = res.data;
+  } catch (e) {
+    console.error('加载 LLM 设置失败', e);
+  }
+};
+
+const saveLlmSettingsToServer = async () => {
+  try {
+    const payload = { ...llmSettings.value };
+    if (!payload.apiKey) delete payload.apiKey;
+    const res = await axios.post('/api/llm-settings', payload);
+    llmSettings.value = { ...llmSettings.value, ...res.data, apiKey: '' };
+    llmStatus.value = res.data;
+  } catch (e) {
+    console.error('保存 LLM 设置失败', e);
+  }
+};
+
+const applyLlmProviderPreset = () => {
+  const preset = llmProviderPresets[llmSettings.value.provider];
+  if (!preset) return;
+  llmSettings.value = {
+    ...llmSettings.value,
+    baseUrl: preset.baseUrl,
+    model: preset.model,
+    // 切换 provider 后旧 key 已在后端失效，清空输入提示用户重新填写。
+    apiKey: ''
+  };
+};
+
+const addAgentMemoryCandidate = async (item) => {
+  if (!item) return;
+  try {
+    if (item.added) {
+      const existing = memoryCards.value.find(card => card.word === item.word);
+      if (!existing) {
+        item.added = false;
+        return;
+      }
+      const res = await axios.delete(`/api/memory-cards/${existing.id}`);
+      memoryCards.value = res.data.map(normalizeMemoryCard);
+      item.added = false;
+      return;
+    }
+
+    const res = await axios.post('/api/memory-cards', {
+      word: item.word,
+      reading: item.reading || '',
+      meaning: item.meaning || '',
+      wordType: item.wordType || 'other',
+      sample: item.sample || '',
+      source: item.source || 'agent-suggestion'
+    });
+    memoryCards.value = res.data.map(normalizeMemoryCard);
+    item.added = true;
+  } catch (e) {
+    console.error('加入 Agent 推荐记忆失败', e);
+  }
+};
+
+const mergeAgentMemoryCandidates = (candidates = []) => {
+  const existing = new Map(agentMemoryCandidates.value.map(item => [`${item.word}-${item.reading}`, item]));
+  for (const item of candidates) {
+    const key = `${item.word}-${item.reading || ''}`;
+    if (!item.word || existing.has(key)) continue;
+    existing.set(key, { ...item, added: memoryCards.value.some(card => card.word === item.word) });
+  }
+  agentMemoryCandidates.value = [...existing.values()].slice(0, 8);
 };
 
 const formatToolArgs = (args = {}) => {
@@ -1072,6 +1556,19 @@ const upsertStreamingToolCall = (payload = {}, status = 'done') => {
   }
 };
 
+const pushAgentEvent = ({ title, body, status = 'running' }) => {
+  agentEvents.value.push({
+    id: `${Date.now()}-${agentEvents.value.length}-${Math.random().toString(36).slice(2, 7)}`,
+    title,
+    body,
+    status,
+    time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  });
+  if (agentEvents.value.length > 8) {
+    agentEvents.value = agentEvents.value.slice(-8);
+  }
+};
+
 const parseSseFrames = (chunk, onEvent) => {
   const frames = chunk.split('\n\n');
   const rest = frames.pop() || '';
@@ -1147,6 +1644,22 @@ const nextMemoryText = computed(() => {
   return `下一张卡片将在 ${nextDate.toLocaleDateString()} 到期。`;
 });
 
+const filteredMemoryCards = computed(() => {
+  const keyword = memoryLibraryQuery.value.trim().toLowerCase();
+  return memoryCards.value.filter((card) => {
+    if (memoryLibraryFilter.value === 'due' && new Date(card.dueAt).getTime() > Date.now()) {
+      return false;
+    }
+    if (memoryLibraryFilter.value === 'mastered' && card.intervalDays < 7) {
+      return false;
+    }
+    if (!keyword) return true;
+    return [card.word, card.reading, card.meaning]
+      .filter(Boolean)
+      .some(text => String(text).toLowerCase().includes(keyword));
+  });
+});
+
 const currentMemoryId = computed(() => {
   const word = getMemoryWord(result.value);
   if (!word) return '';
@@ -1158,6 +1671,14 @@ const isCurrentMemorized = computed(() => !!currentMemoryId.value);
 watch(() => activeMemoryCard.value?.id, () => {
   memoryRevealed.value = false;
 });
+
+watch(memoryCards, (cards) => {
+  const savedWords = new Set(cards.map(card => card.word));
+  agentMemoryCandidates.value = agentMemoryCandidates.value.map(item => ({
+    ...item,
+    added: savedWords.has(item.word)
+  }));
+}, { deep: true });
 
 const buildMemoryCard = (item) => {
   const word = getMemoryWord(item);
@@ -1187,7 +1708,12 @@ const addCurrentToMemory = async () => {
   if (!word) return;
 
   try {
-    const res = await axios.post('/api/memory-cards', buildMemoryCard(result.value));
+    let res;
+    if (currentMemoryId.value) {
+      res = await axios.delete(`/api/memory-cards/${currentMemoryId.value}`);
+    } else {
+      res = await axios.post('/api/memory-cards', buildMemoryCard(result.value));
+    }
     memoryCards.value = res.data.map(normalizeMemoryCard);
     await refreshAgentPlan(result.value);
   } catch (e) {
@@ -1210,6 +1736,14 @@ const searchMemoryCard = (card) => {
   if (!card?.word) return;
   form.value.verb = card.word;
   conjugate();
+};
+
+const formatMemoryDueLabel = (card) => {
+  const dueTime = new Date(card.dueAt).getTime();
+  if (Number.isNaN(dueTime)) return '时间未知';
+  if (dueTime <= Date.now()) return '现在可复习';
+  const due = new Date(card.dueAt);
+  return `下次 ${due.toLocaleDateString()}`;
 };
 
 const focusSearch = () => {
@@ -1260,16 +1794,30 @@ const runAgent = async () => {
   const runSeq = ++agentRunSeq;
   agentRunning.value = true;
   agentToolCalls.value = [];
+  agentEvents.value = [];
+  agentMemoryCandidates.value = [];
+  agentExamples.value = [];
+  agentInteractivePractice.value = null;
+  resetAgentPracticeState();
+  resetStreamRenderer();
   resetAgentRuntime();
   agentMessages.value.push({ role: 'user', content: message });
   const assistantMessage = { role: 'assistant', content: '' };
   agentMessages.value.push(assistantMessage);
   agentInput.value = '';
+  let hasTutorToken = false;
+  let timeoutId = null;
+
+  const setStreamingPlaceholder = (text) => {
+    if (!hasTutorToken) {
+      assistantMessage.content = `> ${text}`;
+    }
+  };
 
   try {
     const controller = new AbortController();
     agentAbortController.value = controller;
-    let timeoutId = window.setTimeout(() => controller.abort(), 90000);
+    timeoutId = window.setTimeout(() => controller.abort(), 90000);
     const response = await fetch('/api/agent/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1278,7 +1826,8 @@ const runAgent = async () => {
         message,
         context: {
           lookup: result.value,
-          memoryStats: memoryStats.value
+          memoryStats: memoryStats.value,
+          userProfile: userProfile.value
         }
       })
     });
@@ -1294,22 +1843,76 @@ const runAgent = async () => {
     const handleEvent = (event, payload) => {
       if (event === 'queue') {
         applyAgentQueue(payload);
+        if (payload.activeId) {
+          const activeAgent = payload.agents?.find(agent => agent.id === payload.activeId);
+          pushAgentEvent({
+            title: activeAgent?.label || payload.activeId,
+            body: payload.note || activeAgent?.description || 'Agent 节点运行中',
+            status: 'running'
+          });
+        }
+        setStreamingPlaceholder('处理中...');
       } else if (event === 'run_start') {
         agentRuntimeEngine.value = payload.runtime === 'langgraph' ? 'LangGraph' : 'Agent';
+        pushAgentEvent({
+          title: '开始',
+          body: `${payload.runtime || 'agent'} · ${payload.model || 'model'} 已建立流式连接`,
+          status: 'running'
+        });
+        setStreamingPlaceholder('处理中...');
       } else if (event === 'agent_note') {
         agentRuntimeNote.value = payload.agent === 'planner'
           ? 'Planner 已完成任务拆解，正在进入工具检索。'
           : `${payload.title}: ${compactText(payload.content, 80)}`;
+        pushAgentEvent({
+          title: payload.title || payload.agent || 'Agent Note',
+          body: compactText(payload.content || agentRuntimeNote.value, 120),
+          status: 'done'
+        });
+        setStreamingPlaceholder('处理中...');
       } else if (event === 'tool_start') {
         upsertStreamingToolCall(payload, 'running');
+        pushAgentEvent({
+          title: toolNameLabel(payload.name),
+          body: `调用工具：${formatToolArgs(payload.arguments || {})}`,
+          status: 'running'
+        });
+        setStreamingPlaceholder('处理中...');
       } else if (event === 'tool_end') {
         upsertStreamingToolCall(payload, 'done');
+        pushAgentEvent({
+          title: `${toolNameLabel(payload.name)} 完成`,
+          body: formatToolResult({ ...payload, status: 'done' }),
+          status: payload.error ? 'error' : 'done'
+        });
+        setStreamingPlaceholder('处理中...');
       } else if (event === 'token') {
-        assistantMessage.content += payload.content || '';
+        if (!hasTutorToken) {
+          assistantMessage.content = '';
+          streamedAssistantText.value = '';
+          hasTutorToken = true;
+          pushAgentEvent({
+            title: '输出',
+            body: '最终回答开始按 token 输出',
+            status: 'running'
+          });
+        }
+        enqueueStreamText(payload.content || '', assistantMessage);
       } else if (event === 'done') {
         streamDone = true;
+        pushAgentEvent({
+          title: '完成',
+          body: '本轮学习 Agent 工作流已完成',
+          status: 'done'
+        });
+        markStreamRendererDone();
+        mergeAgentMemoryCandidates(payload.memoryCandidates || []);
+        agentExamples.value = Array.isArray(payload.examples) ? payload.examples.slice(0, 3) : [];
+        agentInteractivePractice.value = payload.interactivePractice || null;
+        resetAgentPracticeState();
         if (payload.answer && !assistantMessage.content.trim()) {
           assistantMessage.content = payload.answer;
+          streamedAssistantText.value = payload.answer;
         }
         if (Array.isArray(payload.toolCalls) && payload.toolCalls.length > 0) {
           agentToolCalls.value = payload.toolCalls.map(call => ({ ...call, status: 'done' }));
@@ -1329,21 +1932,37 @@ const runAgent = async () => {
         break;
       }
     }
-    window.clearTimeout(timeoutId);
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+
+    markStreamRendererDone();
+    await waitForStreamRendererDrain();
 
     if (!assistantMessage.content.trim()) {
       assistantMessage.content = '我暂时没有得到明确结果。';
+      streamedAssistantText.value = assistantMessage.content;
     }
     await loadMemoryCards();
   } catch (e) {
     if (e.name === 'AbortError') {
       assistantMessage.content ||= '已停止上一次请求。';
-      agentRuntimeNote.value = '上一次请求已停止，可以继续新的查询。';
+      streamedAssistantText.value = assistantMessage.content;
+      if (runSeq === agentRunSeq) {
+        agentRuntimeNote.value = '上一次请求已停止，可以继续新的查询。';
+      }
     } else {
       assistantMessage.content = 'Agent 调用失败，请检查 DeepSeek Key、网络或后端日志。';
-      agentRuntimeNote.value = e.message || 'Agent 调用失败。';
+      streamedAssistantText.value = assistantMessage.content;
+      if (runSeq === agentRunSeq) {
+        agentRuntimeNote.value = e.message || 'Agent 调用失败。';
+      }
     }
   } finally {
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+    }
     if (runSeq === agentRunSeq) {
       agentRunning.value = false;
       agentAbortController.value = null;
@@ -1460,16 +2079,53 @@ watch(accessibilityMode, (value) => {
   applyDisplayPreferences();
 });
 
+const startAgentPlaceholderAnimation = () => {
+  if (placeholderInterval) window.clearInterval(placeholderInterval);
+  let exampleIndex = 0;
+  let charIndex = 0;
+  let deleting = false;
+  let holdUntil = 0;
+  animatedAgentPlaceholder.value = '';
+
+  placeholderInterval = window.setInterval(() => {
+    if (document.activeElement?.id === 'agent-command' || agentInput.value.trim() || agentRunning.value) {
+      return;
+    }
+    if (holdUntil && Date.now() < holdUntil) {
+      return;
+    }
+    const current = agentPlaceholderExamples[exampleIndex];
+    if (!deleting) {
+      charIndex += 1;
+      animatedAgentPlaceholder.value = current.slice(0, charIndex);
+      if (charIndex >= current.length) {
+        holdUntil = Date.now() + 1600;
+        deleting = true;
+      }
+      return;
+    }
+    charIndex -= 1;
+    animatedAgentPlaceholder.value = current.slice(0, Math.max(0, charIndex));
+    if (charIndex <= 0) {
+      holdUntil = 0;
+      deleting = false;
+      exampleIndex = (exampleIndex + 1) % agentPlaceholderExamples.length;
+    }
+  }, 90);
+};
+
 onMounted(async () => {
   const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches || false;
   darkMode.value = readBooleanPreference('jvmDarkMode', prefersDark);
   accessibilityMode.value = readBooleanPreference('jvmAccessibilityMode', false);
   applyDisplayPreferences();
+  startAgentPlaceholderAnimation();
 
-  const [modelsResult, scenesResult, profileResult] = await Promise.allSettled([
+  const [modelsResult, scenesResult, profileResult, userProfileResult] = await Promise.allSettled([
     axios.get('/api/ai-models'),
     axios.get('/api/scenes'),
-    axios.get('/api/practice-profile')
+    axios.get('/api/practice-profile'),
+    axios.get('/api/user-profile')
   ]);
 
   axios.get('/api/llm-status')
@@ -1501,9 +2157,15 @@ onMounted(async () => {
   } else {
     console.error('获取学习画像失败', profileResult.reason);
   }
+  if (userProfileResult.status === 'fulfilled') {
+    userProfile.value = userProfileResult.value.data;
+  } else {
+    console.error('获取长期画像失败', userProfileResult.reason);
+  }
   loadHistory();
   await loadMemoryCards();
   await loadMemorySettings();
+  await loadLlmSettings();
 });
 
 // 提取日文文本中的假名部分（去掉汉字），用于模糊比较
@@ -1561,9 +2223,11 @@ const speak = (text) => {
   utterance.lang = 'ja-JP';
   utterance.rate = 0.85;
   utterance.pitch = 1;
-  // 尝试选择日语语音
+
   const voices = window.speechSynthesis.getVoices();
-  const jaVoice = voices.find(v => v.lang.startsWith('ja'));
+  const jaVoice = voices.find(v => /microsoft|edge/i.test(v.name) && v.lang.toLowerCase().startsWith('ja'))
+    || voices.find(v => /microsoft|edge/i.test(v.name))
+    || voices.find(v => v.lang.toLowerCase().startsWith('ja'));
   if (jaVoice) utterance.voice = jaVoice;
   utterance.onstart = () => isSpeaking.value = true;
   utterance.onend = () => isSpeaking.value = false;
@@ -1720,6 +2384,7 @@ const completeProgress = () => {
 
 onUnmounted(() => {
   if (aiProgressInterval) clearInterval(aiProgressInterval);
+  if (placeholderInterval) window.clearInterval(placeholderInterval);
 });
 
 const conjugate = async () => {
@@ -1948,22 +2613,15 @@ const fetchAiExplanation = async () => {
 
 :global(body) {
   margin: 0;
-  background:
-    linear-gradient(90deg, rgba(20, 184, 166, 0.07) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(79, 70, 229, 0.055) 1px, transparent 1px),
-    linear-gradient(135deg, #f7faf9 0%, #eef6f4 46%, #f6f7fb 100%);
-  background-size: 42px 42px, 42px 42px, auto;
-  color: #0f172a;
+  background: #f4f1ea;
+  color: #191714;
+  font-family: "Styrene B", "Styrene A", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", "Noto Sans SC", sans-serif;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 :global(html[data-theme='dark'] body) {
-  background:
-    linear-gradient(90deg, rgba(45, 212, 191, 0.055) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(250, 204, 21, 0.04) 1px, transparent 1px),
-    linear-gradient(135deg, #101511 0%, #151916 48%, #191720 100%);
-  background-size: 42px 42px, 42px 42px, auto;
-  color: #eef7f1;
+  background: #191714;
+  color: #f4f1ea;
 }
 
 :global(html[data-accessibility='on']) {
@@ -1972,28 +2630,28 @@ const fetchAiExplanation = async () => {
 }
 
 .container {
-  --surface: rgba(255, 255, 255, 0.88);
-  --surface-soft: rgba(244, 248, 247, 0.92);
-  --surface-muted: rgba(232, 240, 238, 0.92);
-  --surface-border: rgba(188, 202, 200, 0.9);
-  --field-bg: rgba(255, 255, 255, 0.96);
-  --panel-bg: rgba(246, 250, 249, 0.96);
-  --dropdown-bg: rgba(255, 255, 255, 0.98);
-  --text-primary: #18231f;
-  --text-secondary: #33443f;
-  --text-muted: #61736e;
-  --primary: #167d77;
-  --primary-hover: #0f6662;
-  --primary-soft: rgba(20, 184, 166, 0.12);
-  --accent: #4f46e5;
-  --accent-soft: rgba(79, 70, 229, 0.1);
-  --success: #128447;
-  --danger: #c2414a;
+  --surface: rgba(255, 252, 245, 0.82);
+  --surface-soft: rgba(244, 241, 234, 0.92);
+  --surface-muted: rgba(226, 219, 208, 0.78);
+  --surface-border: rgba(56, 52, 46, 0.18);
+  --field-bg: rgba(255, 252, 245, 0.94);
+  --panel-bg: rgba(248, 245, 238, 0.92);
+  --dropdown-bg: rgba(255, 252, 245, 0.98);
+  --text-primary: #191714;
+  --text-secondary: #3d3832;
+  --text-muted: #756d63;
+  --primary: #b95f45;
+  --primary-hover: #984d38;
+  --primary-soft: rgba(185, 95, 69, 0.11);
+  --accent: #191714;
+  --accent-soft: rgba(25, 23, 20, 0.08);
+  --success: #3f7d55;
+  --danger: #a33d2f;
   --error: var(--danger);
   --border: var(--surface-border);
-  --shadow-soft: 0 18px 44px rgba(24, 35, 31, 0.09);
-  --shadow-lift: 0 24px 54px rgba(24, 35, 31, 0.11);
-  --focus-ring: 0 0 0 3px rgba(20, 184, 166, 0.24);
+  --shadow-soft: 0 16px 42px rgba(25, 23, 20, 0.08);
+  --shadow-lift: 0 20px 50px rgba(25, 23, 20, 0.1);
+  --focus-ring: 0 0 0 3px rgba(185, 95, 69, 0.24);
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
@@ -2007,26 +2665,26 @@ const fetchAiExplanation = async () => {
 }
 
 .container.app-dark {
-  --surface: rgba(25, 31, 27, 0.88);
-  --surface-soft: rgba(31, 38, 33, 0.92);
-  --surface-muted: rgba(45, 55, 49, 0.96);
-  --surface-border: rgba(113, 132, 122, 0.44);
-  --field-bg: rgba(19, 25, 21, 0.94);
-  --panel-bg: rgba(29, 36, 31, 0.94);
-  --dropdown-bg: rgba(18, 24, 20, 0.98);
-  --text-primary: #f4fbf6;
-  --text-secondary: #dbe8df;
-  --text-muted: #a9b9af;
-  --primary: #5eead4;
-  --primary-hover: #99f6e4;
-  --primary-soft: rgba(94, 234, 212, 0.15);
-  --accent: #facc15;
-  --accent-soft: rgba(250, 204, 21, 0.12);
-  --success: #86efac;
-  --danger: #fda4af;
-  --shadow-soft: 0 22px 48px rgba(0, 0, 0, 0.34);
-  --shadow-lift: 0 26px 58px rgba(0, 0, 0, 0.38);
-  --focus-ring: 0 0 0 3px rgba(94, 234, 212, 0.32);
+  --surface: rgba(35, 32, 28, 0.88);
+  --surface-soft: rgba(43, 39, 34, 0.9);
+  --surface-muted: rgba(70, 64, 56, 0.86);
+  --surface-border: rgba(244, 241, 234, 0.18);
+  --field-bg: rgba(29, 27, 24, 0.94);
+  --panel-bg: rgba(38, 35, 31, 0.94);
+  --dropdown-bg: rgba(29, 27, 24, 0.98);
+  --text-primary: #f4f1ea;
+  --text-secondary: #ded8cc;
+  --text-muted: #a69d91;
+  --primary: #e08b70;
+  --primary-hover: #f0a28a;
+  --primary-soft: rgba(224, 139, 112, 0.14);
+  --accent: #f4f1ea;
+  --accent-soft: rgba(244, 241, 234, 0.1);
+  --success: #8fbe8e;
+  --danger: #f19a84;
+  --shadow-soft: 0 22px 48px rgba(0, 0, 0, 0.28);
+  --shadow-lift: 0 26px 58px rgba(0, 0, 0, 0.32);
+  --focus-ring: 0 0 0 3px rgba(224, 139, 112, 0.3);
 }
 
 .container.app-accessible {
@@ -2056,6 +2714,66 @@ const fetchAiExplanation = async () => {
 
 .header-bottom {
   padding-top: 14px;
+}
+
+.nav-llm-toggle {
+  max-width: min(280px, 42vw);
+  height: 32px;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  padding: 0 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-llm-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--primary);
+}
+
+.nav-llm-panel {
+  display: grid;
+  grid-template-columns: 120px minmax(140px, 1fr) minmax(190px, 1.3fr) minmax(150px, 1fr) auto;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.nav-llm-panel select,
+.nav-llm-panel input {
+  height: 34px;
+  min-width: 0;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--field-bg);
+  color: var(--text-primary);
+  padding: 0 9px;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.nav-llm-credit {
+  grid-column: 1 / -1;
+  justify-self: end;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+
+.nav-llm-credit:hover {
+  color: var(--primary);
 }
 
 .brand-block {
@@ -2446,10 +3164,10 @@ const fetchAiExplanation = async () => {
 .card {
   background: var(--surface);
   border-radius: var(--radius-md);
-  padding: 24px;
+  padding: 20px;
   box-shadow: var(--shadow-soft);
   border: 1px solid var(--surface-border);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(10px);
 }
 
 .card h3 {
@@ -2485,113 +3203,155 @@ const fetchAiExplanation = async () => {
 .memory-header,
 .agent-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.agent-header--minimal {
+  justify-content: flex-end;
+  margin-bottom: 10px;
 }
 
 .memory-header h2,
 .agent-header h2 {
   margin: 0;
   color: var(--text-primary);
-  font-size: 1.28rem;
+  font-size: 1.05rem;
+  font-weight: 760;
 }
 
 .memory-eyebrow {
   margin-bottom: 4px;
 }
 
+.memory-engine-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.memory-engine-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  color: var(--text-secondary);
+  font-size: 0.73rem;
+  font-weight: 650;
+}
+
+.memory-engine-link {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  text-decoration: none;
+}
+
+.memory-engine-link:hover {
+  color: var(--primary);
+}
+
 .memory-stats {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
 .memory-stats span,
 .agent-status {
-  padding: 5px 9px;
+  padding: 4px 7px;
   border: 1px solid var(--surface-border);
   border-radius: var(--radius-sm);
   background: var(--panel-bg);
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.75rem;
 }
 
 .memory-review {
   display: grid;
-  grid-template-columns: minmax(190px, 0.7fr) 1fr;
-  gap: 14px;
-  align-items: stretch;
+  grid-template-columns: minmax(132px, 0.55fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
 }
 
 .memory-card-face {
-  min-height: 150px;
+  min-height: 88px;
   border: 1px solid var(--surface-border);
-  border-left: 4px solid var(--accent);
-  border-radius: var(--radius-md);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
   background: var(--panel-bg);
-  padding: 18px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .memory-word {
   color: var(--text-primary);
-  font-size: 2rem;
-  font-weight: 800;
+  font-size: 1.35rem;
+  font-weight: 760;
+  line-height: 1.15;
 }
 
 .memory-reading,
 .memory-type {
   color: var(--text-muted);
+  font-size: 0.8rem;
 }
 
 .memory-answer {
   border: 1px solid var(--surface-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--field-bg);
-  padding: 18px;
+  padding: 11px 12px;
   color: var(--text-secondary);
-  line-height: 1.6;
+  line-height: 1.48;
+  font-size: 0.88rem;
+  min-height: 68px;
+}
+
+.memory-answer p {
+  margin: 0;
 }
 
 .memory-sample {
-  margin-top: 10px;
+  margin-top: 7px;
   color: var(--text-primary);
-  font-weight: 700;
+  font-weight: 680;
 }
 
 .memory-actions {
-  grid-column: 1 / -1;
   display: flex;
-  gap: 10px;
+  gap: 6px;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .memory-btn,
 .memory-grade {
-  height: 32px;
+  height: 30px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--surface-border);
   background: var(--field-bg);
   color: var(--text-primary);
-  padding: 0 12px;
+  padding: 0 10px;
   cursor: pointer;
-  font-weight: 700;
+  font-weight: 680;
+  font-size: 0.82rem;
 }
 
 .memory-btn.active {
   color: var(--primary);
   background: var(--primary-soft);
   border-color: var(--primary);
-}
-
-.memory-grade {
-  height: 40px;
 }
 
 .grade-forgot {
@@ -2624,22 +3384,129 @@ const fetchAiExplanation = async () => {
   margin: 0;
 }
 
-.agent-note {
-  margin: 0 0 14px;
+.memory-library {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--surface-border);
+}
+
+.memory-library-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.memory-library-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--field-bg);
+  color: var(--text-primary);
+  padding: 0 11px;
+  font: inherit;
+}
+
+.memory-library-filters {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.memory-library-filter,
+.memory-library-action {
+  height: 30px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--field-bg);
   color: var(--text-secondary);
-  line-height: 1.6;
+  padding: 0 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.memory-library-filter.active,
+.memory-library-action:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.memory-library-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.memory-library-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-bg);
+}
+
+.memory-library-copy {
+  min-width: 0;
+}
+
+.memory-library-copy strong,
+.memory-library-copy span {
+  display: block;
+}
+
+.memory-library-copy strong {
+  color: var(--text-primary);
+  font-size: 0.96rem;
+}
+
+.memory-library-copy span {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.memory-library-copy p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.memory-library-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.memory-library-meta small {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.memory-library-empty {
+  padding: 14px 0 2px;
+  color: var(--text-muted);
+  font-size: 0.84rem;
 }
 
 .agent-panel--hero {
   border-color: rgba(22, 125, 119, 0.32);
   box-shadow: var(--shadow-lift);
-}
-
-.agent-quick-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 10px;
 }
 
 .agent-chip {
@@ -2657,6 +3524,13 @@ const fetchAiExplanation = async () => {
 .agent-chip:hover {
   border-color: var(--primary);
   background: var(--primary-soft);
+}
+
+.agent-secondary-actions {
+  display: flex;
+  gap: 7px;
+  justify-content: flex-end;
+  margin-top: 8px;
 }
 
 .agent-capability-grid {
@@ -2764,25 +3638,6 @@ const fetchAiExplanation = async () => {
   white-space: nowrap;
 }
 
-.agent-runtime-node span:not(.runtime-dot) {
-  display: none;
-  margin-top: 1px;
-  color: var(--text-muted);
-  font-size: 0.7rem;
-  line-height: 1.35;
-}
-
-.agent-runtime-node--running span:not(.runtime-dot) {
-  display: block;
-}
-
-.agent-runtime-note {
-  margin: 4px 0 10px;
-  color: var(--text-muted);
-  font-size: 0.82rem;
-  line-height: 1.55;
-}
-
 .agent-chat {
   margin: 0;
   border: 1px solid var(--surface-border);
@@ -2794,6 +3649,151 @@ const fetchAiExplanation = async () => {
 .agent-chat--conversation {
   margin-top: 12px;
   background: var(--panel-bg);
+}
+
+.agent-chat--trace {
+  margin-top: 6px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+}
+
+.agent-answer-core {
+  position: relative;
+  margin: 12px 0 10px;
+  padding: 16px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--primary-soft) 38%, transparent), transparent 34%),
+    var(--field-bg);
+  box-shadow: 0 16px 34px rgba(25, 52, 60, 0.08);
+  overflow: hidden;
+}
+
+.agent-answer-core::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--primary), var(--accent), var(--primary));
+  opacity: 0.8;
+}
+
+.agent-answer-core--streaming {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--surface-border));
+}
+
+.agent-answer-core--streaming::before {
+  background-size: 180% 100%;
+  animation: streamSweep 1.8s ease-in-out infinite;
+}
+
+.agent-answer-pulse {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow: 0 0 0 5px var(--primary-soft);
+  animation: pulseDot 1.25s ease-in-out infinite;
+}
+
+.agent-answer-question {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.agent-runtime-note {
+  margin: -2px 0 12px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.agent-memory-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.agent-memory-pill {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  padding: 0 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.agent-memory-pill:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.agent-memory-pill span {
+  color: var(--text-muted);
+}
+
+.agent-memory-pill em {
+  color: var(--primary);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.agent-memory-pill--added {
+  opacity: 0.62;
+  cursor: default;
+}
+
+.typewriter-output {
+  min-height: 42px;
+  font-size: 0.98rem;
+}
+
+.typewriter-output--live {
+  color: var(--text-secondary);
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.typewriter-output.is-streaming::after {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 1.05em;
+  margin-left: 4px;
+  border-radius: 2px;
+  background: var(--primary);
+  vertical-align: -0.16em;
+  animation: caretBlink 0.85s steps(1, end) infinite;
+}
+
+@keyframes streamSweep {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes caretBlink {
+  50% { opacity: 0; }
 }
 
 .agent-flow-enter-active,
@@ -2958,9 +3958,9 @@ const fetchAiExplanation = async () => {
 .agent-tool-trace {
   display: grid;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 0;
   color: var(--text-muted);
-  font-size: 0.84rem;
+  font-size: 0.78rem;
 }
 
 .tool-trace-header {
@@ -2970,7 +3970,8 @@ const fetchAiExplanation = async () => {
   font-weight: 700;
   cursor: pointer;
   list-style: none;
-  padding: 8px 0 0;
+  padding: 3px 2px;
+  color: var(--text-muted);
 }
 
 .tool-trace-header::-webkit-details-marker {
@@ -3043,6 +4044,10 @@ const fetchAiExplanation = async () => {
   font-size: 0.96rem;
 }
 
+.agent-chat-input input::placeholder {
+  color: color-mix(in srgb, var(--text-muted) 88%, transparent);
+}
+
 .agent-chat-input input:focus {
   outline: none;
 }
@@ -3067,13 +4072,25 @@ const fetchAiExplanation = async () => {
   font-weight: 700;
 }
 
-.memory-settings input {
+.memory-settings input,
+.memory-settings select {
   height: 38px;
   border: 1px solid var(--surface-border);
   border-radius: var(--radius-sm);
   background: var(--field-bg);
   color: var(--text-primary);
   padding: 0 10px;
+}
+
+.settings-row {
+  grid-column: 1 / -1;
+}
+
+.settings-row--switch {
+  display: grid;
+  grid-template-columns: 120px minmax(140px, 1fr) minmax(180px, 1.4fr) minmax(160px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
 }
 
 .memory-settings .settings-check {
@@ -3433,6 +4450,86 @@ ruby rt {
 
 .example-box:hover {
   transform: translateX(3px);
+}
+
+.agent-examples-panel {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--surface-border);
+}
+
+.agent-practice-panel {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--surface-border);
+}
+
+.agent-practice-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+}
+
+.agent-practice-header strong {
+  color: var(--text-primary);
+}
+
+.agent-practice-prompt {
+  margin: 10px 0 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.agent-practice-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.agent-practice-input {
+  flex: 1;
+  min-width: 220px;
+  border: 1px solid var(--surface-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--field-bg);
+  color: var(--text-primary);
+  font-size: 0.98rem;
+}
+
+.agent-practice-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(35, 103, 244, 0.12);
+}
+
+.agent-practice-hint,
+.agent-practice-feedback {
+  margin-top: 12px;
+}
+
+.agent-practice-memory-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #6d28d9;
+  background: rgba(124, 58, 237, 0.08);
+}
+
+.agent-practice-memory-note .icon-memory {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
 }
 
 .ex-row {
@@ -4014,6 +5111,27 @@ ruby rt {
   margin: 0 4px;
 }
 
+.dojo-coach-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0 10px;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.dojo-coach-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
 .dojo-input-area {
   display: flex;
   gap: 12px;
@@ -4057,6 +5175,17 @@ ruby rt {
 .dojo-clear-btn:hover {
   color: var(--text-primary);
   background: var(--primary-soft);
+}
+
+.dojo-coach-hint {
+  margin: -8px 0 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-bg);
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.5;
 }
 
 .icon-x {
@@ -4114,6 +5243,13 @@ ruby rt {
   align-items: center;
   justify-content: center;
   gap: 8px;
+}
+
+.dojo-feedback-copy {
+  margin: 10px 0 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  font-weight: 500;
 }
 
 .dojo-end h2 {
@@ -4529,11 +5665,33 @@ select:focus-visible,
     padding-inline: 7px;
   }
 
+  .nav-llm-panel {
+    grid-template-columns: 1fr;
+  }
+
   .result-grid {
     grid-template-columns: 1fr;
   }
 
   .memory-review {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-header,
+  .memory-library-toolbar,
+  .memory-library-item {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .memory-stats,
+  .memory-library-meta {
+    justify-content: flex-start;
+    align-items: flex-start;
+  }
+
+  .settings-row--switch {
     grid-template-columns: 1fr;
   }
 

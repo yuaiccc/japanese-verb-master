@@ -218,6 +218,33 @@ export function listMemoryCards(limit = 500) {
   return listMemoryStmt.all(limit);
 }
 
+const findMemoryByWordStmt = db.prepare(`
+  SELECT
+    id,
+    word,
+    reading,
+    meaning,
+    word_type AS wordType,
+    verb_type AS verbType,
+    sample,
+    source,
+    ease,
+    interval_days AS intervalDays,
+    review_count AS reviewCount,
+    lapses,
+    due_at AS dueAt,
+    created_at AS createdAt,
+    updated_at AS updatedAt
+  FROM memory_cards
+  WHERE word = ?
+  LIMIT 1
+`);
+
+export function getMemoryCardByWord(word) {
+  if (!word) return null;
+  return findMemoryByWordStmt.get(word) || null;
+}
+
 const defaultMemorySettings = {
   desiredRetention: 0.9,
   newCardsPerDay: 12,
@@ -263,6 +290,59 @@ export function saveMemorySettings(settings = {}) {
   };
   upsertSettingStmt.run('memory_settings', JSON.stringify(next), new Date().toISOString());
   return next;
+}
+
+const defaultLlmSettings = {
+  provider: 'deepseek',
+  baseUrl: 'https://api.deepseek.com',
+  model: 'deepseek-v4-flash',
+  apiKey: '',
+  apiKeySet: false,
+  updatedAt: ''
+};
+
+export function getLlmSettings({ includeSecret = false } = {}) {
+  const row = getSettingStmt.get('llm_settings');
+  let parsed = {};
+  if (row) {
+    try {
+      parsed = JSON.parse(row.value);
+    } catch (e) {
+      parsed = {};
+    }
+  }
+  const settings = {
+    ...defaultLlmSettings,
+    ...parsed,
+    provider: String(parsed.provider || defaultLlmSettings.provider).trim() || defaultLlmSettings.provider,
+    baseUrl: String(parsed.baseUrl || defaultLlmSettings.baseUrl).trim(),
+    model: String(parsed.model || defaultLlmSettings.model).trim(),
+    apiKey: String(parsed.apiKey || '').trim()
+  };
+  settings.apiKeySet = !!settings.apiKey;
+  if (!includeSecret) {
+    delete settings.apiKey;
+  }
+  return settings;
+}
+
+export function saveLlmSettings(settings = {}) {
+  const current = getLlmSettings({ includeSecret: true });
+  const provider = String(settings.provider || current.provider || defaultLlmSettings.provider).trim();
+  const providerChanged = provider !== current.provider;
+  const hasNewKey = settings.apiKey !== undefined && settings.apiKey !== '';
+  const next = {
+    provider,
+    baseUrl: String(settings.baseUrl || current.baseUrl || defaultLlmSettings.baseUrl).trim(),
+    model: String(settings.model || current.model || defaultLlmSettings.model).trim(),
+    // 切换 provider 且未提供新 key 时清空旧 key，避免把上一个 provider 的密钥误用到新 provider。
+    apiKey: hasNewKey
+      ? String(settings.apiKey).trim()
+      : (providerChanged ? '' : current.apiKey),
+    updatedAt: new Date().toISOString()
+  };
+  upsertSettingStmt.run('llm_settings', JSON.stringify(next), next.updatedAt);
+  return getLlmSettings();
 }
 
 const upsertMemoryStmt = db.prepare(`
@@ -323,6 +403,15 @@ const reviewMemoryStmt = db.prepare(`
     updated_at = ?
   WHERE id = ?
 `);
+
+const deleteMemoryStmt = db.prepare(`
+  DELETE FROM memory_cards
+  WHERE id = ?
+`);
+
+export function deleteMemoryCard(id) {
+  return deleteMemoryStmt.run(Number(id));
+}
 
 export function reviewMemoryCard(id, grade, settings = getMemorySettings()) {
   const card = listMemoryStmt.all(10000).find(item => item.id === Number(id));

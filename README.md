@@ -16,13 +16,15 @@
 
 ---
 
-Japanese Word Master 正在从传统“日语动词变形工具”升级为一个垂类日语学习 Agent。它保留了词典、动词活用、场景练习和记忆复习能力，同时引入 LangGraph 多阶段 Agent、DeepSeek LLM、外部搜索和 token 级流式输出，让查词变成可解释、可追踪、可复习的学习闭环。
+Japanese Word Master 正在从传统“日语动词变形工具”升级为一个垂类日语学习 Agent。它保留了词典、动词活用、场景练习和记忆复习能力，同时引入 LangGraph 多阶段 Agent、可切换 LLM Provider、外部搜索和 token 级流式输出，让查词变成可解释、可追踪、可复习的学习闭环。
 
 ## 核心能力
 
 - **LangGraph 多 Agent 工作流**：`Planner -> Researcher -> Tutor -> Memory Manager`，每一步都是真实 LangGraph 节点。
-- **流式 Agent 体验**：通过 SSE 实时推送 `queue`、`tool_start`、`tool_end`、`token`、`done` 事件。
+- **流式 Agent 体验**：通过 SSE 实时推送 `queue`、`tool_start`、`tool_end`、`token`、`done` 事件，前端将工具过程压成回答区内的小胶囊，不抢占主视觉。
 - **外部搜索与工具调用**：Agent 可调用外部搜索、Jisho/Wiktionary/Wikipedia 资料、本地词典、相似词推荐和记忆状态工具。
+- **练习驱动的记忆闭环 ⭐**：Agent 生成的练习题是可交互的，作答结果会直接回流到长期记忆系统——答对延长复习间隔、答错缩短并尽快重现，练过但未入库的词会自动建卡。这是把「学」与「记」打通的核心创新点。
+- **LLM Switch**：借鉴 `cc-switch` 的 provider 快速切换思路，支持 DeepSeek、OpenAI、OpenRouter、SiliconFlow、Custom 和 Ollama。
 - **日语词典与动词活用**：支持五段、一段、サ变、カ变动词，生成常用活用形式。
 - **记忆卡片系统**：内置 SQLite 记忆卡、复习队列、到期提醒和可调复习参数。
 - **场景练习**：按日常生活、点餐、学校、旅行、职场等场景练习高频动词。
@@ -43,8 +45,35 @@ flowchart LR
   Memory --> Backend
   Backend -->|SSE token + tool events| Frontend
   Backend <--> DB["SQLite"]
-  Backend <--> LLM["DeepSeek / Ollama"]
+  Backend <--> LLM["LLM Switch: DeepSeek / OpenAI-compatible / Ollama"]
 ```
+
+更详细的维护说明、Agent 边界、SSE 协议和重构建议见 [维护手册](./docs/MAINTENANCE.md)。
+
+## 练习驱动的记忆闭环
+
+大多数日语工具把「查词解释」和「间隔复习」当成两个互不相通的功能。本项目把它们连成一条闭环：
+
+```mermaid
+flowchart LR
+  Ask["用户提出练习需求"] --> Agent["LangGraph Agent 生成可交互练习"]
+  Agent --> Answer["用户作答"]
+  Answer --> Grade["判题 + 评级"]
+  Grade -->|答对| Good["good：拉长复习间隔"]
+  Grade -->|用提示答对| Hard["hard：小幅延后"]
+  Grade -->|答错| Forgot["forgot：缩短间隔，尽快重现"]
+  Good --> SRS["SQLite 间隔复习队列"]
+  Hard --> SRS
+  Forgot --> SRS
+  SRS -->|画像 / 错题 / 待复习| Agent
+```
+
+- 当 Agent 识别到练习类请求时，会基于当前查词上下文构造一道带标准答案的活用练习题。
+- 用户在回答区直接作答，后端判题后把结果映射为复习评级（`good` / `hard` / `forgot`）。
+- 评级通过与 Anki 类似的 SM-2 变体算法更新记忆卡的 `ease`、`interval`、`due` 等字段，**错题会在约 20 分钟后重现，连续答对的词复习间隔逐步拉长**。
+- 练过但尚未进入记忆库的词会自动建卡，纳入复习队列；学习画像（薄弱活用形、错题本）也会同步刷新，反过来指导后续练习。
+
+这样每一次练习既是检测，也是一次记忆调度，真正把「学」和「记」打通。
 
 ### 后端
 
@@ -94,6 +123,8 @@ export OLLAMA_MODEL=qwen2.5
 npm run dev
 ```
 
+> 除环境变量外，也可以在前端「设置」面板中切换 LLM Provider（DeepSeek / OpenAI / OpenRouter / SiliconFlow / Custom / Ollama）。切换 Provider 后需重新填写对应的 API Key，旧 Key 不会被跨 Provider 复用。API Key 以明文保存在本地 SQLite，请勿将含密钥的 `dictionary.db` 提交或公开。
+
 ### 3. 启动前端
 
 ```bash
@@ -123,6 +154,27 @@ curl -N -X POST http://localhost:3456/api/agent/stream \
 - `tool_end`：工具调用完成
 - `token`：Tutor 流式回答片段
 - `done`：本轮完成
+
+`done` 事件中除最终回答外，还会带回 `examples`（结构化例句卡）、`memoryCandidates`（推荐记忆词）和 `interactivePractice`（可交互练习题）。
+
+### 交互练习判题接口（记忆闭环）
+
+```bash
+curl -X POST http://localhost:3456/api/dojo-agent-turn \
+  -H "Content-Type: application/json" \
+  --data '{
+    "action": "check",
+    "recordToMemory": true,
+    "hintUsed": false,
+    "userAnswer": "食べて",
+    "question": {
+      "verb": "食べる", "reading": "たべる", "verbType": "ICHIDAN",
+      "formKey": "teForm", "formLabel": "て形", "answer": "食べて"
+    }
+  }'
+```
+
+当 `recordToMemory` 为 `true` 时，判题结果会写入练习记录、更新（或新建）记忆卡，并在响应的 `memory` 字段中返回评级、最新卡片、整张卡表和刷新后的学习画像。`action: "hint"` 则返回一条解题提示。
 
 ### 动词活用接口
 
@@ -179,11 +231,12 @@ node --check server.js
 
 ## 路线图
 
-- LangGraph checkpoint / thread 持久化
-- 更完整的 Agent 工具注册与动态扩展
-- 用户级长期记忆和学习画像
-- 更细的敬语、谦让语、语境判断
-- 移动端复习体验优化
+- [x] 练习结果回流长期记忆系统（间隔复习闭环）
+- [ ] LangGraph checkpoint / thread 持久化
+- [ ] 更完整的 Agent 工具注册与动态扩展
+- [ ] 多用户隔离的长期记忆和学习画像
+- [ ] 更细的敬语、谦让语、语境判断
+- [ ] 移动端复习体验优化
 
 ## 开源协议
 

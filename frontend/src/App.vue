@@ -53,7 +53,7 @@
           <h2>日语学习 Agent 指挥台</h2>
         </div>
         <span v-if="agentLoading" class="agent-status">分析中...</span>
-        <span v-else class="agent-status">{{ llmStatusLabel }}</span>
+        <span v-else class="agent-status">{{ agentRuntimeLabel }}</span>
       </div>
 
       <p class="agent-note">{{ agentPlan?.coachNote || agentDefaultNote }}</p>
@@ -887,6 +887,7 @@ const agentInput = ref('');
 const agentMessages = ref([]);
 const agentToolCalls = ref([]);
 const agentAbortController = ref(null);
+const agentRuntimeEngine = ref('LangGraph');
 let agentRunSeq = 0;
 const defaultAgentQueue = [
   { id: 'planner', label: 'Planner', description: '拆解学习任务与工具路线', status: 'queued' },
@@ -913,6 +914,10 @@ const llmStatusLabel = computed(() => {
     return llmStatus.value.deepSeekReady ? `DeepSeek · ${llmStatus.value.model}` : 'DeepSeek 未配置';
   }
   return `Ollama · ${llmStatus.value.model || '本地模型'}`;
+});
+
+const agentRuntimeLabel = computed(() => {
+  return agentRuntimeEngine.value ? `${agentRuntimeEngine.value} · ${llmStatusLabel.value}` : llmStatusLabel.value;
 });
 
 const getMemoryWord = (item) => item?.dictionaryForm || item?.word || item?.verb || '';
@@ -1289,6 +1294,8 @@ const runAgent = async () => {
     const handleEvent = (event, payload) => {
       if (event === 'queue') {
         applyAgentQueue(payload);
+      } else if (event === 'run_start') {
+        agentRuntimeEngine.value = payload.runtime === 'langgraph' ? 'LangGraph' : 'Agent';
       } else if (event === 'agent_note') {
         agentRuntimeNote.value = payload.agent === 'planner'
           ? 'Planner 已完成任务拆解，正在进入工具检索。'

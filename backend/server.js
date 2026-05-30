@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Ollama } from 'ollama';
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import https from 'https';
 import {
   searchWords,
@@ -585,6 +586,149 @@ function emitTextAsTokens(res, text, size = 12) {
   for (let i = 0; i < text.length; i += size) {
     writeSse(res, 'token', { content: text.slice(i, i + size) });
   }
+}
+
+const LearningAgentState = Annotation.Root({
+  message: Annotation({ reducer: (x, y) => y ?? x, default: () => '' }),
+  context: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
+  systemPrompt: Annotation({ reducer: (x, y) => y ?? x, default: () => '' }),
+  userContent: Annotation({ reducer: (x, y) => y ?? x, default: () => '' }),
+  completed: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
+  plannerNote: Annotation({ reducer: (x, y) => y ?? x, default: () => '' }),
+  messages: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
+  toolCalls: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
+  finalAnswer: Annotation({ reducer: (x, y) => y ?? x, default: () => '' }),
+  memorySnapshot: Annotation({ reducer: (x, y) => y ?? x, default: () => null })
+});
+
+function createLearningAgentGraph({ res, closedRef }) {
+  const graph = new StateGraph(LearningAgentState)
+    .addNode('planner', async (state) => {
+      emitAgentQueue(res, 'planner', state.completed, '正在拆解任务和选择工具路线');
+      const plannerNote = [
+        '识别用户问题中的核心词、语法点或学习目标。',
+        'Researcher 优先调用 lookup_word 与 external_search 查证词义、敬语和例句。',
+        '如果当前上下文涉及复习，读取 memory_status 并交给 Memory Manager 更新学习建议。',
+        'Tutor 用表格、例句、误用提醒和下一步练习组织最终答案。'
+      ].join('\n');
+      if (closedRef.closed) return {};
+      writeSse(res, 'agent_note', {
+        agent: 'planner',
+        title: 'Planner 计划',
+        content: plannerNote
+      });
+
+      return {
+        plannerNote,
+        completed: [...state.completed, 'planner']
+      };
+    })
+    .addNode('researcher', async (state) => {
+      emitAgentQueue(res, 'researcher', state.completed, '正在调用工具收集事实');
+      const messages = [
+        {
+          role: 'system',
+          content: `${state.systemPrompt}
+你现在扮演 Researcher。你的任务是通过工具收集事实，不要给最终长答案。
+可用工具包括外部搜索、词典查询、相似词推荐、记忆状态、加入记忆卡。
+如果用户问词义、语法、例句或敬语差异，优先使用 lookup_word 和 external_search。
+如果问题涉及复习安排，使用 memory_status。`
+        },
+        { role: 'user', content: `${state.userContent}\n\nPlanner 计划：${state.plannerNote}` }
+      ];
+      const toolCalls = [];
+      const terms = extractJapaneseTerms(state.message);
+      const plannedTools = [
+        ...terms.slice(0, 3).map(word => ({ name: 'lookup_word', arguments: { word } })),
+        { name: 'external_search', arguments: { query: state.message } },
+        ...(terms[0] ? [{ name: 'recommend_similar', arguments: { word: terms[0] } }] : []),
+        { name: 'memory_status', arguments: {} }
+      ];
+
+      for (const tool of plannedTools) {
+        if (closedRef.closed) return {};
+        writeSse(res, 'tool_start', tool);
+        const result = await executeAgentTool(tool.name, tool.arguments);
+        const summarized = summarizeToolResult(result);
+        const toolRecord = { ...tool, result: summarized };
+        toolCalls.push(toolRecord);
+        writeSse(res, 'tool_end', toolRecord);
+        messages.push({
+          role: 'user',
+          content: `Researcher 工具 ${tool.name} 参数 ${JSON.stringify(tool.arguments)} 返回：${JSON.stringify(result)}`
+        });
+      }
+
+      return {
+        messages,
+        toolCalls,
+        completed: [...state.completed, 'researcher']
+      };
+    })
+    .addNode('tutor', async (state) => {
+      emitAgentQueue(res, 'tutor', state.completed, '正在流式生成最终回答');
+      const finalMessages = [
+        {
+          role: 'system',
+          content: `${state.systemPrompt}
+你现在扮演 Tutor。基于 Researcher 的工具结果给最终答案。
+请使用 Markdown，但不要写“我作为 AI”。必须包含：核心结论、对比或结构化说明、例句、误用提醒、下一步练习。`
+        },
+        ...state.messages,
+        {
+          role: 'user',
+          content: `请基于以上计划和工具结果，回答用户原问题：${state.message}`
+        }
+      ];
+
+      let finalAnswer = '';
+      try {
+        await streamLlmText({
+          messages: finalMessages,
+          model: getDefaultLlmModel(),
+          temperature: 0.25,
+          maxTokens: 1700,
+          onToken: (content) => {
+            finalAnswer += content;
+            writeSse(res, 'token', { content });
+          }
+        });
+      } catch (e) {
+        finalAnswer = buildFallbackTutorAnswer(state.message, state.toolCalls);
+        writeSse(res, 'agent_note', {
+          agent: 'tutor',
+          title: 'Tutor 降级',
+          content: 'DeepSeek token 流暂时超时，已基于工具结果生成本地摘要。'
+        });
+        emitTextAsTokens(res, finalAnswer);
+      }
+
+      return {
+        finalAnswer,
+        completed: [...state.completed, 'tutor']
+      };
+    })
+    .addNode('memory_manager', async (state) => {
+      emitAgentQueue(res, 'memory_manager', state.completed, '正在刷新记忆队列');
+      const memorySnapshot = await executeAgentTool('memory_status', {});
+      writeSse(res, 'agent_note', {
+        agent: 'memory_manager',
+        title: 'Memory Manager',
+        content: `当前记忆卡 ${memorySnapshot.memory.total} 张，待复习 ${memorySnapshot.memory.due} 张，已稳定 ${memorySnapshot.memory.mastered} 张。`
+      });
+
+      return {
+        memorySnapshot,
+        completed: [...state.completed, 'memory_manager']
+      };
+    })
+    .addEdge(START, 'planner')
+    .addEdge('planner', 'researcher')
+    .addEdge('researcher', 'tutor')
+    .addEdge('tutor', 'memory_manager')
+    .addEdge('memory_manager', END);
+
+  return graph.compile();
 }
 
 async function streamLlmText({ messages, model, temperature = 0.25, maxTokens = 1600, onToken }) {
@@ -1436,14 +1580,13 @@ app.post('/api/agent/run', async (req, res) => {
   }
 });
 
-// Streaming multi-agent runtime：Planner -> Researcher(tools) -> Tutor(tokens) -> Memory Manager
+// LangGraph streaming multi-agent runtime：Planner -> Researcher(tools) -> Tutor(tokens) -> Memory Manager
 app.post('/api/agent/stream', async (req, res) => {
   prepareSse(res);
 
-  const completed = [];
-  let closed = false;
+  const closedRef = { closed: false };
   res.on('close', () => {
-    closed = true;
+    closedRef.closed = true;
   });
 
   try {
@@ -1470,113 +1613,30 @@ app.post('/api/agent/stream', async (req, res) => {
       id: `agent-run-${Date.now()}`,
       provider: getLlmProvider(),
       model: getDefaultLlmModel(),
-      queue: agentQueueTemplate
+      queue: agentQueueTemplate,
+      runtime: 'langgraph'
     });
 
-    emitAgentQueue(res, 'planner', completed, '正在拆解任务和选择工具路线');
-    const plannerNote = [
-      '识别用户问题中的核心词、语法点或学习目标。',
-      'Researcher 优先调用 lookup_word 与 external_search 查证词义、敬语和例句。',
-      '如果当前上下文涉及复习，读取 memory_status 并交给 Memory Manager 更新学习建议。',
-      'Tutor 用表格、例句、误用提醒和下一步练习组织最终答案。'
-    ].join('\n');
-    if (closed) return;
-    writeSse(res, 'agent_note', {
-      agent: 'planner',
-      title: 'Planner 计划',
-      content: plannerNote
+    const graph = createLearningAgentGraph({ res, closedRef });
+    const finalState = await graph.invoke({
+      message,
+      context,
+      systemPrompt,
+      userContent,
+      completed: [],
+      plannerNote: '',
+      messages: [],
+      toolCalls: [],
+      finalAnswer: '',
+      memorySnapshot: null
     });
-    completed.push('planner');
 
-    emitAgentQueue(res, 'researcher', completed, '正在调用工具收集事实');
-    const messages = [
-      {
-        role: 'system',
-        content: `${systemPrompt}
-你现在扮演 Researcher。你的任务是通过工具收集事实，不要给最终长答案。
-可用工具包括外部搜索、词典查询、相似词推荐、记忆状态、加入记忆卡。
-如果用户问词义、语法、例句或敬语差异，优先使用 lookup_word 和 external_search。
-如果问题涉及复习安排，使用 memory_status。`
-      },
-      { role: 'user', content: `${userContent}\n\nPlanner 计划：${plannerNote}` }
-    ];
-    const toolCalls = [];
-
-    const terms = extractJapaneseTerms(message);
-    const plannedTools = [
-      ...terms.slice(0, 3).map(word => ({ name: 'lookup_word', arguments: { word } })),
-      { name: 'external_search', arguments: { query: message } },
-      ...(terms[0] ? [{ name: 'recommend_similar', arguments: { word: terms[0] } }] : []),
-      { name: 'memory_status', arguments: {} }
-    ];
-
-    for (const tool of plannedTools) {
-      if (closed) return;
-      writeSse(res, 'tool_start', tool);
-      const result = await executeAgentTool(tool.name, tool.arguments);
-      const summarized = summarizeToolResult(result);
-      const toolRecord = { ...tool, result: summarized };
-      toolCalls.push(toolRecord);
-      writeSse(res, 'tool_end', toolRecord);
-      messages.push({
-        role: 'user',
-        content: `Researcher 工具 ${tool.name} 参数 ${JSON.stringify(tool.arguments)} 返回：${JSON.stringify(result)}`
-      });
-    }
-    completed.push('researcher');
-
-    emitAgentQueue(res, 'tutor', completed, '正在流式生成最终回答');
-    const finalMessages = [
-      {
-        role: 'system',
-        content: `${systemPrompt}
-你现在扮演 Tutor。基于 Researcher 的工具结果给最终答案。
-请使用 Markdown，但不要写“我作为 AI”。必须包含：核心结论、对比或结构化说明、例句、误用提醒、下一步练习。`
-      },
-      ...messages,
-      {
-        role: 'user',
-        content: `请基于以上计划和工具结果，回答用户原问题：${message}`
-      }
-    ];
-
-    let finalAnswer = '';
-    try {
-      await streamLlmText({
-        messages: finalMessages,
-        model: getDefaultLlmModel(),
-        temperature: 0.25,
-        maxTokens: 1700,
-        onToken: (content) => {
-          finalAnswer += content;
-          writeSse(res, 'token', { content });
-        }
-      });
-    } catch (e) {
-      finalAnswer = buildFallbackTutorAnswer(message, toolCalls);
-      writeSse(res, 'agent_note', {
-        agent: 'tutor',
-        title: 'Tutor 降级',
-        content: 'DeepSeek token 流暂时超时，已基于工具结果生成本地摘要。'
-      });
-      emitTextAsTokens(res, finalAnswer);
-    }
-    completed.push('tutor');
-
-    emitAgentQueue(res, 'memory_manager', completed, '正在刷新记忆队列');
-    const memorySnapshot = await executeAgentTool('memory_status', {});
-    writeSse(res, 'agent_note', {
-      agent: 'memory_manager',
-      title: 'Memory Manager',
-      content: `当前记忆卡 ${memorySnapshot.memory.total} 张，待复习 ${memorySnapshot.memory.due} 张，已稳定 ${memorySnapshot.memory.mastered} 张。`
-    });
-    completed.push('memory_manager');
-
-    emitAgentQueue(res, '', completed, '本轮 Agent 工作流完成');
+    emitAgentQueue(res, '', finalState.completed, '本轮 Agent 工作流完成');
     writeSse(res, 'done', {
-      answer: finalAnswer,
-      toolCalls,
-      memory: memorySnapshot.memory
+      answer: finalState.finalAnswer,
+      toolCalls: finalState.toolCalls,
+      memory: finalState.memorySnapshot?.memory || null,
+      runtime: 'langgraph'
     });
     res.end();
   } catch (error) {

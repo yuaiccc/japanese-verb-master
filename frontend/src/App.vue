@@ -10,11 +10,6 @@
       <div class="header-top">
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">日</span>
-          <div>
-            <p class="eyebrow">Japanese Word Master</p>
-            <h1>日语词汇与动词活用</h1>
-            <p class="subtitle">查词、活用、例句和练习集中在一个工作台里。</p>
-          </div>
         </div>
 
         <div class="preference-bar" aria-label="显示偏好设置">
@@ -2698,21 +2693,22 @@ const fetchAiExplanation = async () => {
 
 .agent-runtime {
   display: flex;
-  gap: 8px;
-  margin: 12px 0 8px;
+  gap: 6px;
+  margin: 10px 0 6px;
   overflow-x: auto;
-  padding-bottom: 2px;
+  padding-bottom: 3px;
+  scrollbar-width: thin;
 }
 
 .agent-runtime-node {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  min-width: 148px;
-  padding: 7px 10px;
+  gap: 6px;
+  min-height: 30px;
+  min-width: 108px;
+  padding: 5px 8px;
   border: 1px solid var(--surface-border);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   background: transparent;
   opacity: 0.68;
   transform: translateY(0);
@@ -2727,7 +2723,7 @@ const fetchAiExplanation = async () => {
     var(--primary-soft);
   background-size: 220% 100%;
   transform: translateY(-1px);
-  box-shadow: 0 8px 20px rgba(22, 125, 119, 0.12);
+  box-shadow: 0 5px 14px rgba(22, 125, 119, 0.1);
   animation: agentSheen 1.6s ease-in-out infinite;
 }
 
@@ -2736,8 +2732,8 @@ const fetchAiExplanation = async () => {
 }
 
 .runtime-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--surface-border);
   flex: 0 0 auto;
@@ -2745,7 +2741,7 @@ const fetchAiExplanation = async () => {
 
 .agent-runtime-node--running .runtime-dot {
   background: var(--primary);
-  box-shadow: 0 0 0 6px var(--primary-soft);
+  box-shadow: 0 0 0 4px var(--primary-soft);
   animation: pulseDot 1.25s ease-in-out infinite;
 }
 
@@ -2756,14 +2752,16 @@ const fetchAiExplanation = async () => {
 .agent-runtime-node strong {
   display: block;
   color: var(--text-primary);
-  font-size: 0.84rem;
+  font-size: 0.78rem;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .agent-runtime-node span:not(.runtime-dot) {
   display: none;
-  margin-top: 2px;
+  margin-top: 1px;
   color: var(--text-muted);
-  font-size: 0.76rem;
+  font-size: 0.7rem;
   line-height: 1.35;
 }
 
@@ -2990,9 +2988,9 @@ const fetchAiExplanation = async () => {
 }
 
 .tool-step {
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-sm);
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
   background: var(--primary-soft);
   color: var(--primary);
   display: inline-flex;
@@ -3000,6 +2998,7 @@ const fetchAiExplanation = async () => {
   justify-content: center;
   flex-shrink: 0;
   font-weight: 800;
+  font-size: 0.72rem;
 }
 
 .agent-tool-card strong {
@@ -4514,9 +4513,13 @@ select:focus-visible,
 
   .dojo-scene-grid,
   .dojo-profile-stats,
-  .agent-capability-grid,
-  .agent-runtime {
+  .agent-capability-grid {
     grid-template-columns: 1fr;
+  }
+
+  .agent-runtime-node {
+    min-width: 96px;
+    padding-inline: 7px;
   }
 
   .result-grid {

@@ -752,10 +752,11 @@ function buildInteractivePractice({ message = '', intent = {}, context = {}, mem
     const answer = conjugation[form.key];
     if (!answer) return null;
 
+    const options = buildPracticeOptions(conjugation, form.key, answer);
     const displayVerb = sourceLookup?.dictionaryForm || sourceLookup?.word || sourceLookup?.parsedAs || candidateWord;
     return {
       mode: 'agent_practice',
-      prompt: `请写出「${displayVerb}」的 ${form.label}`,
+      prompt: `「${displayVerb}」的 ${form.label} 是哪一个？`,
       question: {
         verb: displayVerb,
         reading: sourceLookup?.reading || normalizedVerb,
@@ -766,6 +767,7 @@ function buildInteractivePractice({ message = '', intent = {}, context = {}, mem
         formKey: form.key,
         formLabel: form.label,
         answer,
+        options,
         sceneId: 'agent-practice',
         sceneName: 'Agent 练习'
       }
@@ -773,6 +775,29 @@ function buildInteractivePractice({ message = '', intent = {}, context = {}, mem
   } catch (error) {
     return null;
   }
+}
+
+// 用同一动词的其他活用形作为干扰项——这些恰好是学习者最容易混淆的形式，最具教学价值。
+function buildPracticeOptions(conjugation, answerKey, answer) {
+  const distractorKeys = ['teForm', 'taForm', 'negative', 'polite', 'potential', 'passive', 'causative', 'volitional', 'imperative'];
+  const seen = new Set([answer]);
+  const distractors = [];
+  for (const key of distractorKeys) {
+    if (key === answerKey) continue;
+    const value = conjugation[key];
+    if (value && !seen.has(value)) {
+      seen.add(value);
+      distractors.push(value);
+    }
+    if (distractors.length >= 3) break;
+  }
+  const options = [answer, ...distractors];
+  // Fisher–Yates 洗牌，避免正确答案总在首位。
+  for (let i = options.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [options[i], options[j]] = [options[j], options[i]];
+  }
+  return options;
 }
 
 async function generateStructuredAgentExamples({ message, finalAnswer, toolCalls, memoryCandidates = [] }) {

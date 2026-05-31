@@ -63,6 +63,48 @@
       <line x1="18" y1="6" x2="6" y2="18"></line>
       <line x1="6" y1="6" x2="18" y2="18"></line>
     </template>
+
+    <template v-else-if="name === 'arrow-up'">
+      <line x1="12" y1="19" x2="12" y2="6"></line>
+      <polyline points="6 11 12 5 18 11"></polyline>
+    </template>
+
+    <template v-else-if="name === 'arrow-right'">
+      <line x1="5" y1="12" x2="18" y2="12"></line>
+      <polyline points="12 6 18 12 12 18"></polyline>
+    </template>
+
+    <template v-else-if="name === 'plus'">
+      <line x1="12" y1="5" x2="12" y2="19"></line>
+      <line x1="5" y1="12" x2="19" y2="12"></line>
+    </template>
+
+    <template v-else-if="name === 'minus'">
+      <line x1="5" y1="12" x2="19" y2="12"></line>
+    </template>
+
+    <template v-else-if="name === 'sun'">
+      <circle cx="12" cy="12" r="4"></circle>
+      <line x1="12" y1="3" x2="12" y2="5.5"></line>
+      <line x1="12" y1="18.5" x2="12" y2="21"></line>
+      <line x1="3" y1="12" x2="5.5" y2="12"></line>
+      <line x1="18.5" y1="12" x2="21" y2="12"></line>
+      <line x1="5.6" y1="5.6" x2="7.4" y2="7.4"></line>
+      <line x1="16.6" y1="16.6" x2="18.4" y2="18.4"></line>
+      <line x1="5.6" y1="18.4" x2="7.4" y2="16.6"></line>
+      <line x1="16.6" y1="7.4" x2="18.4" y2="5.6"></line>
+    </template>
+
+    <template v-else-if="name === 'moon'">
+      <path d="M20.5 14.2A8.2 8.2 0 1 1 10.3 3.6 6.4 6.4 0 0 0 20.5 14.2z"></path>
+    </template>
+
+    <template v-else-if="name === 'accessibility'">
+      <circle cx="12" cy="4.6" r="1.7"></circle>
+      <line x1="4.5" y1="8.4" x2="19.5" y2="8.4"></line>
+      <path d="M12 8.4v6"></path>
+      <path d="M8.8 20.5 12 14.4l3.2 6.1"></path>
+    </template>
   </svg>
 </template>
 

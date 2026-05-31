@@ -134,8 +134,9 @@ export const learningSubagentRegistry = {
     allowedTools: [],
     buildBrief: ({ message, intent, plannerNote, subagentContexts }) => ([
       '你是 Tutor，负责把前面子链路收集的上下文转成最终回答。',
-      '输出适合日语学习者阅读的 Markdown。',
-      '必须包含：核心结论、结构化说明、误用提醒、下一步练习。',
+      '输出适合日语学习者阅读的 Markdown，保持简洁，不要冗长堆砌。',
+      '必须包含：核心结论、结构化说明、误用提醒。',
+      '练习题会由独立的交互练习卡片展示，所以正文里不要再列出「练习1/2/3」之类的整段练习题，最多用一句话点出练习方向即可。',
       '不要向用户暴露 Planner、Researcher、Example Coach、Practice Coach 这些内部角色名，直接给出完成后的学习内容。',
       intent?.wantsExamples
         ? '这是场景例句请求，请直接满足场景表达任务，不要纠缠查词失败。'

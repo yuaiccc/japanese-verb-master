@@ -13,28 +13,30 @@
         </div>
 
         <div class="preference-bar" aria-label="显示偏好设置">
-          <label class="pref-toggle">
-            <input
-              v-model="darkMode"
-              type="checkbox"
-              class="pref-toggle-input"
-            >
-            <span class="pref-toggle-track" aria-hidden="true">
-              <span class="pref-toggle-thumb"></span>
-            </span>
-            <span>深色模式</span>
-          </label>
-          <label class="pref-toggle">
-            <input
-              v-model="accessibilityMode"
-              type="checkbox"
-              class="pref-toggle-input"
-            >
-            <span class="pref-toggle-track" aria-hidden="true">
-              <span class="pref-toggle-thumb"></span>
-            </span>
-            <span>无障碍模式</span>
-          </label>
+          <button
+            type="button"
+            class="pref-icon"
+            :class="{ 'is-on': darkMode }"
+            role="switch"
+            :aria-checked="darkMode"
+            :title="darkMode ? '切换为浅色模式' : '切换为深色模式'"
+            aria-label="深色模式"
+            @click="darkMode = !darkMode"
+          >
+            <Icon :name="darkMode ? 'moon' : 'sun'" />
+          </button>
+          <button
+            type="button"
+            class="pref-icon"
+            :class="{ 'is-on': accessibilityMode }"
+            role="switch"
+            :aria-checked="accessibilityMode"
+            title="无障碍模式"
+            aria-label="无障碍模式"
+            @click="accessibilityMode = !accessibilityMode"
+          >
+            <Icon name="accessibility" />
+          </button>
         </div>
       </div>
 
@@ -91,8 +93,16 @@
             @keyup.enter="handleAgentEnter"
             autocomplete="off"
           >
-          <button class="search-btn" :disabled="loading || !agentInput.trim()" @click="submitAgentCommand">
-            {{ agentRunning ? '切换' : loading ? '查询中' : '执行' }}
+          <button
+            class="search-btn search-btn--icon"
+            :class="{ 'is-loading': loading }"
+            :disabled="loading || !agentInput.trim()"
+            :aria-label="agentRunning ? '切换' : loading ? '查询中' : '执行'"
+            :title="agentRunning ? '切换' : loading ? '查询中' : '执行'"
+            @click="submitAgentCommand"
+          >
+            <span v-if="loading" class="search-btn__spinner" aria-hidden="true"></span>
+            <Icon v-else name="arrow-up" class="search-btn__arrow" />
           </button>
         </div>
 
@@ -155,11 +165,15 @@
             :key="`${item.word}-${item.reading}`"
             class="agent-memory-pill"
             :class="{ 'agent-memory-pill--added': item.added }"
+            :title="item.added ? '从记忆库移除' : '加入记忆库'"
+            :aria-label="item.added ? `从记忆库移除 ${item.word}` : `加入记忆库 ${item.word}`"
             @click="addAgentMemoryCandidate(item)"
           >
             <strong>{{ item.word }}</strong>
             <span v-if="item.reading">{{ item.reading }}</span>
-            <em>{{ item.added ? '取消记忆' : '加入记忆' }}</em>
+            <span class="agent-memory-pill__toggle" aria-hidden="true">
+              <Icon :name="item.added ? 'minus' : 'plus'" />
+            </span>
           </button>
         </div>
         <p v-if="latestUserMessage" class="agent-answer-question">{{ latestUserMessage }}</p>
@@ -174,48 +188,68 @@
           class="agent-markdown markdown-body typewriter-output"
           v-html="renderMarkdown(latestAssistantMessage.content)"
         ></div>
-        <div v-if="agentInteractivePractice" class="agent-practice-panel">
-          <div class="agent-practice-header">
-            <strong>即时练习</strong>
-            <span>{{ agentInteractivePractice.question.formLabel }}</span>
+        <div v-if="agentInteractivePractice" class="agent-practice-card">
+          <div class="agent-practice-card__head">
+            <span class="agent-practice-card__eyebrow">即时练习 · 选择题</span>
+            <span class="agent-practice-card__tag">{{ agentInteractivePractice.question.formLabel }}</span>
           </div>
-          <p class="agent-practice-prompt">{{ agentInteractivePractice.prompt }}</p>
-          <div class="agent-practice-input-row">
-            <input
-              v-model="agentPracticeInput"
-              class="agent-practice-input"
-              type="text"
-              placeholder="输入你的答案"
+          <p class="agent-practice-card__prompt">{{ agentInteractivePractice.prompt }}</p>
+          <div class="agent-practice-options" role="radiogroup">
+            <button
+              v-for="(option, idx) in practiceOptions"
+              :key="`${option}-${idx}`"
+              class="agent-practice-option"
+              :class="optionStateClass(option)"
               :disabled="agentPracticeBusy || !!agentPracticeFeedback"
-              @keyup.enter="submitAgentPracticeAnswer"
+              role="radio"
+              :aria-checked="agentPracticeInput === option"
+              @click="selectPracticeOption(option)"
             >
-            <button class="agent-chip" :disabled="agentPracticeBusy || !!agentPracticeFeedback" @click="requestAgentPracticeHint">提示</button>
-            <button class="search-btn" :disabled="agentPracticeBusy || !agentPracticeInput.trim() || !!agentPracticeFeedback" @click="submitAgentPracticeAnswer">提交</button>
+              <span class="agent-practice-option__index">{{ optionLabels[idx] }}</span>
+              <span class="agent-practice-option__text">{{ option }}</span>
+              <Icon
+                v-if="agentPracticeFeedback && option === agentPracticeFeedback.correctAnswer"
+                name="check"
+                class="agent-practice-option__icon"
+              />
+              <Icon
+                v-else-if="agentPracticeFeedback && agentPracticeInput === option"
+                name="x"
+                class="agent-practice-option__icon"
+              />
+            </button>
           </div>
-          <div v-if="agentPracticeHint && !agentPracticeFeedback" class="dojo-coach-hint agent-practice-hint">
-            {{ agentPracticeHint }}
+          <div class="agent-practice-card__actions" v-if="!agentPracticeFeedback">
+            <button class="agent-ghost-btn" :disabled="agentPracticeBusy" @click="requestAgentPracticeHint">需要提示</button>
           </div>
-          <div
-            v-if="agentPracticeFeedback"
-            class="dojo-feedback agent-practice-feedback"
-            :class="agentPracticeFeedback.isCorrect ? 'feedback-correct' : 'feedback-error'"
-          >
-            <div class="feedback-msg">
-              <template v-if="agentPracticeFeedback.isCorrect">
-                <Icon name="check" class="icon-check" /> 回答正确
-              </template>
-              <template v-else>
-                <Icon name="error" class="icon-error" /> 正确答案是: <strong>{{ agentPracticeFeedback.correctAnswer }}</strong>
-              </template>
+          <transition name="card-fade">
+            <div v-if="agentPracticeHint && !agentPracticeFeedback" class="agent-practice-hint">
+              <Icon name="sparkles" class="agent-practice-hint__icon" /> {{ agentPracticeHint }}
             </div>
-            <p v-if="agentPracticeFeedback.explanation" class="dojo-feedback-copy">{{ agentPracticeFeedback.explanation }}</p>
-            <p v-if="agentPracticeFeedback.memoryNote" class="agent-practice-memory-note">
-              <Icon name="brain" class="icon-memory" /> {{ agentPracticeFeedback.memoryNote }}
-            </p>
-            <div class="dojo-action-row">
-              <button class="agent-chip" @click="resetAgentPracticeState">再答一次</button>
+          </transition>
+          <transition name="card-fade">
+            <div
+              v-if="agentPracticeFeedback"
+              class="agent-practice-result"
+              :class="agentPracticeFeedback.isCorrect ? 'is-correct' : 'is-wrong'"
+            >
+              <div class="agent-practice-result__msg">
+                <template v-if="agentPracticeFeedback.isCorrect">
+                  <Icon name="check" class="agent-practice-result__icon" /> 回答正确
+                </template>
+                <template v-else>
+                  <Icon name="error" class="agent-practice-result__icon" /> 正确答案是 <strong>{{ agentPracticeFeedback.correctAnswer }}</strong>
+                </template>
+              </div>
+              <p v-if="agentPracticeFeedback.explanation" class="agent-practice-result__copy">{{ agentPracticeFeedback.explanation }}</p>
+              <p v-if="agentPracticeFeedback.memoryNote" class="agent-practice-memory-note">
+                <Icon name="brain" class="icon-memory" /> {{ agentPracticeFeedback.memoryNote }}
+              </p>
+              <div class="agent-practice-card__actions">
+                <button class="agent-ghost-btn" @click="resetAgentPracticeState">再答一次</button>
+              </div>
             </div>
-          </div>
+          </transition>
         </div>
         <div v-if="agentExamples.length > 0" class="agent-examples-panel">
           <div class="examples-grid">
@@ -331,10 +365,10 @@
             </a>
           </div>
         </div>
-        <div class="memory-stats">
-          <span>{{ memoryStats.total }} 张</span>
-          <span>{{ memoryStats.due }} 待复习</span>
-          <span>{{ memoryStats.mastered }} 稳定</span>
+        <div class="memory-traffic" role="img" :aria-label="`待复习 ${memoryStats.due}，学习中 ${memoryStats.learning}，已稳定 ${memoryStats.mastered}`">
+          <span class="traffic-dot traffic-dot--red" :class="{ 'is-active': memoryStats.due > 0 }" title="待复习">{{ memoryStats.due }}</span>
+          <span class="traffic-dot traffic-dot--amber" :class="{ 'is-active': memoryStats.learning > 0 }" title="学习中">{{ memoryStats.learning }}</span>
+          <span class="traffic-dot traffic-dot--green" :class="{ 'is-active': memoryStats.mastered > 0 }" title="已稳定">{{ memoryStats.mastered }}</span>
         </div>
       </div>
 
@@ -1254,6 +1288,32 @@ const markStreamRendererDone = () => {
   resolveStreamDrain();
 };
 
+const optionLabels = ['A', 'B', 'C', 'D'];
+
+const practiceOptions = computed(() => {
+  const q = agentInteractivePractice.value?.question;
+  if (!q) return [];
+  if (Array.isArray(q.options) && q.options.length > 0) return q.options;
+  // 兜底：旧数据没有 options 时，至少展示正确答案。
+  return q.answer ? [q.answer] : [];
+});
+
+const optionStateClass = (option) => {
+  const feedback = agentPracticeFeedback.value;
+  if (!feedback) {
+    return { 'is-selected': agentPracticeInput.value === option };
+  }
+  if (option === feedback.correctAnswer) return { 'is-answer': true };
+  if (agentPracticeInput.value === option) return { 'is-missed': true };
+  return { 'is-dimmed': true };
+};
+
+const selectPracticeOption = (option) => {
+  if (agentPracticeBusy.value || agentPracticeFeedback.value) return;
+  agentPracticeInput.value = option;
+  submitAgentPracticeAnswer();
+};
+
 const resetAgentPracticeState = () => {
   agentPracticeInput.value = '';
   agentPracticeBusy.value = false;
@@ -1629,11 +1689,18 @@ const activeMemoryCard = computed(() => {
   };
 });
 
-const memoryStats = computed(() => ({
-  total: memoryCards.value.length,
-  due: dueMemoryCards.value.length,
-  mastered: memoryCards.value.filter(card => card.intervalDays >= 7).length
-}));
+const memoryStats = computed(() => {
+  const total = memoryCards.value.length;
+  const due = dueMemoryCards.value.length;
+  const mastered = memoryCards.value.filter(card => card.intervalDays >= 7).length;
+  return {
+    total,
+    due,
+    mastered,
+    // 学习中：既未稳定也不在待复习队列里的卡片
+    learning: Math.max(0, total - mastered - due)
+  };
+});
 
 const nextMemoryText = computed(() => {
   const futureCards = memoryCards.value
@@ -2120,6 +2187,7 @@ onMounted(async () => {
   accessibilityMode.value = readBooleanPreference('jvmAccessibilityMode', false);
   applyDisplayPreferences();
   startAgentPlaceholderAnimation();
+  initTts();
 
   const [modelsResult, scenesResult, profileResult, userProfileResult] = await Promise.allSettled([
     axios.get('/api/ai-models'),
@@ -2215,20 +2283,78 @@ const wordTypeDisplayMap = {
 // 语音朗读（浏览器 SpeechSynthesis API）
 const isSpeaking = ref(false);
 
+// ── 语音播报：启动即解析并缓存最佳日语嗓音 + 预热引擎，文本出现即预建 utterance ──
+let cachedJaVoice = null;
+const ttsVoiceReady = ref(false);
+const ttsUtteranceCache = new Map(); // text -> SpeechSynthesisUtterance
+
+// 嗓音优选：神经/在线嗓音 > Google > Microsoft/Edge > 其它日语嗓音
+const pickBestJaVoice = () => {
+  const voices = window.speechSynthesis?.getVoices() || [];
+  const jaVoices = voices.filter(v => v.lang.toLowerCase().startsWith('ja'));
+  if (jaVoices.length === 0) return null;
+  const score = (v) => {
+    const name = v.name.toLowerCase();
+    let s = 0;
+    if (/natural|neural|online/.test(name)) s += 6;
+    if (/google/.test(name)) s += 4;
+    if (/microsoft|edge/.test(name)) s += 3;
+    if (/nanami|keita|sayaka|kyoko|otoya|o-?ren/.test(name)) s += 2;
+    if (v.localService === false) s += 1; // 在线嗓音通常更自然
+    return s;
+  };
+  return [...jaVoices].sort((a, b) => score(b) - score(a))[0];
+};
+
+const buildUtterance = (text) => {
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'ja-JP';
+  u.rate = 0.9;
+  u.pitch = 1;
+  if (cachedJaVoice) u.voice = cachedJaVoice;
+  return u;
+};
+
+// 预缓存：文本一出现就提前构建好（嗓音已绑定），点击时零查找
+const prepareSpeech = (text) => {
+  if (!text || !window.speechSynthesis || ttsUtteranceCache.has(text)) return;
+  ttsUtteranceCache.set(text, buildUtterance(text));
+};
+
+const prewarmSpeech = (texts = []) => {
+  texts.filter(Boolean).forEach(prepareSpeech);
+};
+
+const refreshTtsVoice = () => {
+  const voice = pickBestJaVoice();
+  if (!voice) return;
+  cachedJaVoice = voice;
+  ttsVoiceReady.value = true;
+  // 嗓音就绪后回填已缓存的 utterance
+  ttsUtteranceCache.forEach((u) => { u.voice = voice; });
+};
+
+const initTts = () => {
+  if (!window.speechSynthesis) return;
+  refreshTtsVoice();
+  // 嗓音是异步加载的，列表就绪后再解析一次
+  window.speechSynthesis.addEventListener?.('voiceschanged', refreshTtsVoice);
+  // 静音预热，消除首次合成的引擎冷启动延迟
+  try {
+    const warm = new SpeechSynthesisUtterance('');
+    warm.volume = 0;
+    window.speechSynthesis.speak(warm);
+  } catch (e) {
+    /* 部分浏览器需用户手势，忽略即可 */
+  }
+};
+
 const speak = (text) => {
   if (!text || !window.speechSynthesis) return;
   // 停止上一次朗读
   window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'ja-JP';
-  utterance.rate = 0.85;
-  utterance.pitch = 1;
-
-  const voices = window.speechSynthesis.getVoices();
-  const jaVoice = voices.find(v => /microsoft|edge/i.test(v.name) && v.lang.toLowerCase().startsWith('ja'))
-    || voices.find(v => /microsoft|edge/i.test(v.name))
-    || voices.find(v => v.lang.toLowerCase().startsWith('ja'));
-  if (jaVoice) utterance.voice = jaVoice;
+  const utterance = ttsUtteranceCache.get(text) || buildUtterance(text);
+  if (cachedJaVoice && !utterance.voice) utterance.voice = cachedJaVoice;
   utterance.onstart = () => isSpeaking.value = true;
   utterance.onend = () => isSpeaking.value = false;
   utterance.onerror = () => isSpeaking.value = false;
@@ -2267,6 +2393,12 @@ watch(result, async (val) => {
     furiganaDict.value = '';
     return;
   }
+  // 预缓存原形 + 各活用形的朗读，点击朗读按钮时零延迟
+  prewarmSpeech([
+    val.dictionaryForm, val.word,
+    val.negative, val.polite, val.teForm, val.taForm,
+    val.potential, val.passive, val.causative, val.imperative, val.volitional
+  ]);
   const word = val.dictionaryForm || val.word;
   if (word) {
     const results = await fetchFurigana([word]);
@@ -2289,10 +2421,16 @@ watch(aiExamples, async (examples) => {
     return;
   }
   const jaTexts = examples.map(ex => ex.japanese);
+  prewarmSpeech(jaTexts);
   const results = await fetchFurigana(jaTexts);
   if (requestId !== latestFuriganaExamplesRequest) return;
   furiganaExamples.value = results;
 });
+
+// Agent 回答的例句一到达就预缓存朗读
+watch(agentExamples, (examples) => {
+  prewarmSpeech((examples || []).map(ex => ex.japanese));
+}, { deep: true });
 
 // 监听输入，双轨联想补全：先立即返回本地结果，再异步追加远程结果
 let remoteAbortController = null;
@@ -2615,7 +2753,9 @@ const fetchAiExplanation = async () => {
   margin: 0;
   background: #f4f1ea;
   color: #191714;
-  font-family: "Styrene B", "Styrene A", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", "Noto Sans SC", sans-serif;
+  font-family: "Songti SC", "STSong", "Source Han Serif SC", "Noto Serif SC", "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", "游明朝", serif;
+  font-feature-settings: "palt" 1;
+  -webkit-font-smoothing: antialiased;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 
@@ -2656,8 +2796,15 @@ const fetchAiExplanation = async () => {
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 20px;
+  --space-6: 28px;
   --radius-sm: 6px;
-  --radius-md: 8px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --font-ui: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+  /* Apple 风格非线性缓动：spring 带轻微回弹，out 为平滑减速 */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   min-height: 100vh;
   padding: 28px 22px 48px;
   max-width: 1240px;
@@ -2791,10 +2938,10 @@ const fetchAiExplanation = async () => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: white;
+  color: #fdf6ec;
   background:
-    linear-gradient(135deg, rgba(22, 125, 119, 0.96), rgba(79, 70, 229, 0.92));
-  box-shadow: 0 16px 30px rgba(22, 125, 119, 0.22);
+    linear-gradient(150deg, var(--primary), color-mix(in srgb, var(--primary) 55%, #2b1b14));
+  box-shadow: 0 14px 26px color-mix(in srgb, var(--primary) 28%, transparent);
   font-size: 1.7rem;
   font-weight: 800;
 }
@@ -2831,60 +2978,57 @@ const fetchAiExplanation = async () => {
   flex-wrap: wrap;
 }
 
-.pref-toggle {
+.pref-icon {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 7px 10px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   color: var(--text-secondary);
   background: var(--surface);
   border: 1px solid var(--surface-border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
   box-shadow: 0 10px 22px rgba(24, 35, 31, 0.06);
-  user-select: none;
+  transition: color 0.25s var(--ease-out), background 0.25s var(--ease-out),
+    border-color 0.25s var(--ease-out), transform 0.35s var(--ease-spring),
+    box-shadow 0.25s var(--ease-out);
 }
 
-.pref-toggle-input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
+.pref-icon .icon {
+  width: 20px;
+  height: 20px;
+  transition: transform 0.45s var(--ease-spring);
 }
 
-.pref-toggle-track {
-  position: relative;
-  width: 38px;
-  height: 22px;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.38);
-  border: 1px solid var(--surface-border);
-  transition: background-color 0.2s ease, border-color 0.2s ease;
-  flex-shrink: 0;
+.pref-icon:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  transform: translateY(-1px);
 }
 
-.pref-toggle-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: white;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.2);
-  transition: transform 0.2s ease;
+.pref-icon:active {
+  transform: scale(0.92);
 }
 
-.pref-toggle-input:checked + .pref-toggle-track {
+.pref-icon.is-on {
+  color: #fff;
   background: var(--primary);
   border-color: var(--primary);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--primary) 32%, transparent);
 }
 
-.pref-toggle-input:checked + .pref-toggle-track .pref-toggle-thumb {
-  transform: translateX(16px);
+.pref-icon.is-on:hover {
+  color: #fff;
 }
 
-.pref-toggle:focus-within {
+/* 点亮时图标转入，月亮/无障碍带轻微旋转 */
+.pref-icon.is-on .icon {
+  transform: rotate(-12deg) scale(1.05);
+}
+
+.pref-icon:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -2996,16 +3140,53 @@ const fetchAiExplanation = async () => {
 .search-btn:hover {
   transform: translateY(-1px);
   background: var(--primary-hover);
-  box-shadow: 0 10px 24px rgba(22, 125, 119, 0.28);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
 .search-btn:active {
-  transform: scale(0.98);
+  transform: scale(0.95);
 }
 
 .search-btn:disabled {
-  opacity: 0.7;
+  opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* 圆形箭头执行按钮 */
+.search-btn--icon {
+  min-width: 0;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 999px;
+  transition: transform 0.32s var(--ease-spring), background 0.2s var(--ease-out), box-shadow 0.32s var(--ease-out), opacity 0.2s;
+}
+
+.search-btn--icon:not(:disabled):hover {
+  transform: translateY(-1px) scale(1.06);
+}
+
+.search-btn--icon:not(:disabled):active {
+  transform: scale(0.9);
+}
+
+.search-btn__arrow {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2.4;
+}
+
+.search-btn__spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2.2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: spinnerRotate 0.7s linear infinite;
+}
+
+@keyframes spinnerRotate {
+  to { transform: rotate(360deg); }
 }
 
 /* === 下拉补全 === */
@@ -3257,14 +3438,6 @@ const fetchAiExplanation = async () => {
   color: var(--primary);
 }
 
-.memory-stats {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.memory-stats span,
 .agent-status {
   padding: 4px 7px;
   border: 1px solid var(--surface-border);
@@ -3272,6 +3445,67 @@ const fetchAiExplanation = async () => {
   background: var(--panel-bg);
   color: var(--text-secondary);
   font-size: 0.75rem;
+}
+
+/* 记忆状态红绿灯：暗色灯箱内三个发光圆灯，只标数字 */
+.memory-traffic {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #2a2723, #1c1916);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.14);
+}
+
+.traffic-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.06);
+  --dot: #6b7280;
+  transition: color 0.4s var(--ease-out), background 0.4s var(--ease-out), box-shadow 0.4s var(--ease-out), transform 0.4s var(--ease-spring);
+}
+
+.traffic-dot--red { --dot: #ff5f56; }
+.traffic-dot--amber { --dot: #febc2e; }
+.traffic-dot--green { --dot: #28c840; }
+
+/* 点亮：实色 + 外发光 + 轻微放大，呼吸脉冲 */
+.traffic-dot.is-active {
+  color: #fff;
+  background: var(--dot);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--dot) 60%, transparent),
+    0 0 12px color-mix(in srgb, var(--dot) 70%, transparent);
+  transform: scale(1.04);
+}
+
+.traffic-dot--red.is-active {
+  animation: trafficPulse 2.4s var(--ease-in-out) infinite;
+}
+
+@keyframes trafficPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--dot) 60%, transparent),
+      0 0 10px color-mix(in srgb, var(--dot) 55%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--dot) 70%, transparent),
+      0 0 18px color-mix(in srgb, var(--dot) 90%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .traffic-dot--red.is-active { animation: none; }
+  .search-btn__spinner { animation-duration: 1.2s; }
 }
 
 .memory-review {
@@ -3505,7 +3739,7 @@ const fetchAiExplanation = async () => {
 }
 
 .agent-panel--hero {
-  border-color: rgba(22, 125, 119, 0.32);
+  border-color: color-mix(in srgb, var(--primary) 32%, var(--surface-border));
   box-shadow: var(--shadow-lift);
 }
 
@@ -3646,6 +3880,17 @@ const fetchAiExplanation = async () => {
   padding: 10px;
 }
 
+/* 主搜索框：方形（圆角矩形），聚焦时主色描边 */
+.agent-panel--hero .agent-chat {
+  border-radius: var(--radius-md);
+  transition: border-color 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
+}
+
+.agent-panel--hero .agent-chat:focus-within {
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+
 .agent-chat--conversation {
   margin-top: 12px;
   background: var(--panel-bg);
@@ -3675,9 +3920,9 @@ const fetchAiExplanation = async () => {
   content: '';
   position: absolute;
   inset: 0 0 auto;
-  height: 3px;
-  background: linear-gradient(90deg, var(--primary), var(--accent), var(--primary));
-  opacity: 0.8;
+  height: 2px;
+  background: var(--primary);
+  opacity: 0.55;
 }
 
 .agent-answer-core--streaming {
@@ -3748,19 +3993,47 @@ const fetchAiExplanation = async () => {
   background: var(--primary-soft);
 }
 
-.agent-memory-pill span {
+.agent-memory-pill span:not(.agent-memory-pill__toggle) {
   color: var(--text-muted);
 }
 
-.agent-memory-pill em {
+/* 加号 / 减号圆形徽标 */
+.agent-memory-pill__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--primary-soft);
   color: var(--primary);
-  font-style: normal;
-  font-weight: 700;
+  transition: transform 0.32s var(--ease-spring), background 0.2s var(--ease-out), color 0.2s var(--ease-out);
 }
 
-.agent-memory-pill--added {
-  opacity: 0.62;
-  cursor: default;
+.agent-memory-pill__toggle .icon {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.6;
+}
+
+.agent-memory-pill:hover .agent-memory-pill__toggle {
+  transform: rotate(90deg) scale(1.08);
+}
+
+/* 已加入：徽标变实色减号，悬停旋转回去暗示「移除」 */
+.agent-memory-pill--added .agent-memory-pill__toggle {
+  background: var(--primary);
+  color: #fff;
+}
+
+.agent-memory-pill--added:hover {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.agent-memory-pill--added:hover .agent-memory-pill__toggle {
+  background: var(--danger);
+  transform: scale(1.12);
 }
 
 .typewriter-output {
@@ -3796,15 +4069,18 @@ const fetchAiExplanation = async () => {
   50% { opacity: 0; }
 }
 
-.agent-flow-enter-active,
+.agent-flow-enter-active {
+  transition: opacity 0.4s var(--ease-out), transform 0.5s var(--ease-spring);
+}
+
 .agent-flow-leave-active {
-  transition: opacity 0.22s ease, transform 0.22s ease;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .agent-flow-enter-from,
 .agent-flow-leave-to {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(12px) scale(0.99);
 }
 
 .agent-chat-log {
@@ -4438,92 +4714,289 @@ ruby rt {
 .example-box {
   background: var(--panel-bg);
   padding: var(--space-3);
-  border-radius: var(--radius-sm);
-  border-left: 4px solid var(--primary);
-  animation: slideUp 0.35s ease both;
-  transition: transform 0.2s;
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--primary);
+  animation: slideUp 0.5s var(--ease-out) both;
+  transition: transform 0.3s var(--ease-spring), box-shadow 0.3s var(--ease-out);
 }
 
-.example-box:nth-child(2) {
-  animation-delay: 0.08s;
-}
+.example-box:nth-child(1) { animation-delay: 0.04s; }
+.example-box:nth-child(2) { animation-delay: 0.12s; }
+.example-box:nth-child(3) { animation-delay: 0.2s; }
 
 .example-box:hover {
-  transform: translateX(3px);
+  transform: translateX(4px);
+  box-shadow: var(--shadow-soft);
 }
 
+/* 例句：清晰成组的卡片区，与正文用留白分隔而非挤在一起 */
 .agent-examples-panel {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--surface-border);
+  margin-top: var(--space-6);
 }
 
-.agent-practice-panel {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--surface-border);
+.agent-examples-panel::before {
+  content: '例句';
+  display: block;
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
 }
 
-.agent-practice-header {
+/* ── 即时练习：独立的和风选择题卡片 ── */
+.agent-practice-card {
+  position: relative;
+  margin-top: var(--space-6);
+  padding: 18px 20px 20px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-soft);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+  animation: slideUp 0.55s var(--ease-out) both;
+}
+
+/* 左侧竖线点缀，呼应和风装帧 */
+.agent-practice-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--primary);
+  opacity: 0.85;
+}
+
+.agent-practice-card__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  color: var(--text-secondary);
-  font-size: 0.92rem;
+  gap: 12px;
 }
 
-.agent-practice-header strong {
-  color: var(--text-primary);
+.agent-practice-card__eyebrow {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
 }
 
-.agent-practice-prompt {
-  margin: 10px 0 0;
+.agent-practice-card__tag {
+  padding: 3px 11px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.agent-practice-card__prompt {
+  margin: 12px 0 16px;
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: 1.12rem;
   font-weight: 600;
+  line-height: 1.5;
 }
 
-.agent-practice-input-row {
+.agent-practice-options {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.agent-practice-option {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-  flex-wrap: wrap;
-}
-
-.agent-practice-input {
-  flex: 1;
-  min-width: 220px;
-  border: 1px solid var(--surface-border);
-  border-radius: 12px;
+  gap: 12px;
+  width: 100%;
   padding: 12px 14px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
   background: var(--field-bg);
   color: var(--text-primary);
-  font-size: 0.98rem;
+  font: inherit;
+  font-size: 1.04rem;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.25s var(--ease-out), background 0.25s var(--ease-out), transform 0.35s var(--ease-spring), box-shadow 0.25s var(--ease-out);
 }
 
-.agent-practice-input:focus {
-  outline: none;
+.agent-practice-option:not(:disabled):hover {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(35, 103, 244, 0.12);
+  transform: translateX(3px);
+  box-shadow: var(--shadow-soft);
 }
 
-.agent-practice-hint,
-.agent-practice-feedback {
-  margin-top: 12px;
+.agent-practice-option:not(:disabled):active {
+  transform: scale(0.99);
+}
+
+.agent-practice-option__index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.agent-practice-option__text {
+  flex: 1;
+}
+
+.agent-practice-option__icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.agent-practice-option.is-selected {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.agent-practice-option.is-answer {
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success);
+}
+
+.agent-practice-option.is-answer .agent-practice-option__index {
+  background: var(--success);
+  color: #fff;
+}
+
+.agent-practice-option.is-missed {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.agent-practice-option.is-missed .agent-practice-option__index {
+  background: var(--danger);
+  color: #fff;
+}
+
+.agent-practice-option.is-dimmed {
+  opacity: 0.5;
+}
+
+.agent-practice-option:disabled {
+  cursor: default;
+}
+
+.agent-practice-card__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.agent-ghost-btn {
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 7px 16px;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.18s, color 0.18s;
+}
+
+.agent-ghost-btn:not(:disabled):hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.agent-ghost-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.agent-practice-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--primary-soft);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.agent-practice-hint__icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--primary);
+}
+
+.agent-practice-result {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+}
+
+.agent-practice-result.is-correct {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--success) 36%, transparent);
+}
+
+.agent-practice-result.is-wrong {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+}
+
+.agent-practice-result__msg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.agent-practice-result__icon {
+  width: 18px;
+  height: 18px;
+}
+
+.agent-practice-result.is-correct .agent-practice-result__icon {
+  color: var(--success);
+}
+
+.agent-practice-result.is-wrong .agent-practice-result__icon {
+  color: var(--danger);
+}
+
+.agent-practice-result__copy {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.65;
 }
 
 .agent-practice-memory-note {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  font-size: 13px;
-  color: #6d28d9;
-  background: rgba(124, 58, 237, 0.08);
+  gap: 7px;
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.84rem;
+  color: var(--primary);
+  background: var(--primary-soft);
 }
 
 .agent-practice-memory-note .icon-memory {
@@ -4908,7 +5381,7 @@ ruby rt {
 .profile-badge {
   font-size: 0.78rem;
   color: var(--primary);
-  background: rgba(35, 103, 244, 0.1);
+  background: var(--primary-soft);
   padding: 4px 10px;
   border-radius: 999px;
 }
@@ -5057,7 +5530,7 @@ ruby rt {
 
 .dojo-scene-pill {
   padding: 4px 10px;
-  background: rgba(35, 103, 244, 0.1);
+  background: var(--primary-soft);
   color: var(--primary);
   border-radius: 999px;
   font-size: 0.82rem;
@@ -5106,7 +5579,7 @@ ruby rt {
 .dojo-prompt strong {
   color: var(--primary);
   padding: 2px 8px;
-  background: rgba(35, 103, 244, 0.1);
+  background: var(--primary-soft);
   border-radius: 6px;
   margin: 0 4px;
 }
@@ -5359,11 +5832,11 @@ ruby rt {
 }
 
 .card-fade-enter-active {
-  animation: cardIn 0.4s ease both;
+  animation: cardIn 0.5s var(--ease-spring) both;
 }
 
 .card-fade-leave-active {
-  animation: cardIn 0.25s ease reverse both;
+  animation: cardIn 0.22s var(--ease-out) reverse both;
 }
 
 @keyframes cardIn {
@@ -5530,9 +6003,9 @@ select:focus-visible,
 }
 
 .app-dark .brand-mark {
-  color: #102019;
-  background: linear-gradient(135deg, #5eead4, #facc15);
-  box-shadow: 0 16px 34px rgba(94, 234, 212, 0.18);
+  color: #1d1410;
+  background: linear-gradient(150deg, var(--primary), color-mix(in srgb, var(--primary) 60%, #f0d9b5));
+  box-shadow: 0 16px 30px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
 .app-dark .search-bar--success {

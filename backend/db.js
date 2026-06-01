@@ -70,6 +70,43 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS agent_runs (
+    run_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    question TEXT NOT NULL DEFAULT '',
+    intent_type TEXT NOT NULL DEFAULT 'lookup',
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'running',
+    summary TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS subagent_tasks (
+    task_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL DEFAULT '',
+    subagent_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    sandbox TEXT NOT NULL DEFAULT '{}',
+    result TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    events TEXT NOT NULL DEFAULT '[]',
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL
+  )
+`);
+
 // 创建索引
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_words_kanji ON words(kanji);
@@ -83,6 +120,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_practice_correct ON practice_records(is_correct);
   CREATE INDEX IF NOT EXISTS idx_memory_due_at ON memory_cards(due_at);
   CREATE INDEX IF NOT EXISTS idx_memory_word_type ON memory_cards(word_type);
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_updated_at ON agent_runs(updated_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+  CREATE INDEX IF NOT EXISTS idx_subagent_tasks_run_id ON subagent_tasks(run_id, updated_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_subagent_tasks_status ON subagent_tasks(status);
 `);
 
 // 查询函数：多字段 LIKE 模糊匹配
@@ -256,7 +297,8 @@ const defaultMemorySettings = {
   easePenalty: 0.1,
   lapsePenalty: 0.25,
   maxIntervalDays: 180,
-  autoAddSimilar: false
+  autoAddSimilar: false,
+  exampleDifficulty: 'auto'
 };
 
 const getSettingStmt = db.prepare('SELECT value FROM app_settings WHERE key = ?');
@@ -277,6 +319,8 @@ export function getMemorySettings() {
 }
 
 export function saveMemorySettings(settings = {}) {
+  const rawDifficulty = String(settings.exampleDifficulty || defaultMemorySettings.exampleDifficulty).trim();
+  const normalizedDifficulty = rawDifficulty.toLowerCase() === 'auto' ? 'auto' : rawDifficulty.toUpperCase();
   const next = {
     ...defaultMemorySettings,
     ...settings,
@@ -286,7 +330,10 @@ export function saveMemorySettings(settings = {}) {
     lapseMinutes: Math.min(1440, Math.max(5, Number(settings.lapseMinutes) || defaultMemorySettings.lapseMinutes)),
     hardMultiplier: Math.min(2.5, Math.max(1, Number(settings.hardMultiplier) || defaultMemorySettings.hardMultiplier)),
     maxIntervalDays: Math.min(3650, Math.max(7, Number(settings.maxIntervalDays) || defaultMemorySettings.maxIntervalDays)),
-    autoAddSimilar: !!settings.autoAddSimilar
+    autoAddSimilar: !!settings.autoAddSimilar,
+    exampleDifficulty: ['auto', 'N5', 'N4', 'N3', 'N2', 'N1'].includes(normalizedDifficulty)
+      ? normalizedDifficulty
+      : defaultMemorySettings.exampleDifficulty
   };
   upsertSettingStmt.run('memory_settings', JSON.stringify(next), new Date().toISOString());
   return next;
@@ -494,6 +541,292 @@ export function findSimilarWords({ word, kana = '', wordType = '', meaning = '',
     .filter(item => item.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
+}
+
+const createAgentRunStmt = db.prepare(`
+  INSERT INTO agent_runs (
+    run_id,
+    title,
+    question,
+    intent_type,
+    provider,
+    model,
+    status,
+    summary,
+    error,
+    metadata,
+    created_at,
+    updated_at,
+    completed_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(run_id) DO UPDATE SET
+    title = excluded.title,
+    question = excluded.question,
+    intent_type = excluded.intent_type,
+    provider = excluded.provider,
+    model = excluded.model,
+    status = excluded.status,
+    summary = excluded.summary,
+    error = excluded.error,
+    metadata = excluded.metadata,
+    updated_at = excluded.updated_at,
+    completed_at = excluded.completed_at
+`);
+
+const getAgentRunStmt = db.prepare(`
+  SELECT
+    run_id AS runId,
+    title,
+    question,
+    intent_type AS intentType,
+    provider,
+    model,
+    status,
+    summary,
+    error,
+    metadata,
+    created_at AS createdAt,
+    updated_at AS updatedAt,
+    completed_at AS completedAt
+  FROM agent_runs
+  WHERE run_id = ?
+  LIMIT 1
+`);
+
+const listAgentRunsStmt = db.prepare(`
+  SELECT
+    run_id AS runId,
+    title,
+    question,
+    intent_type AS intentType,
+    provider,
+    model,
+    status,
+    summary,
+    error,
+    metadata,
+    created_at AS createdAt,
+    updated_at AS updatedAt,
+    completed_at AS completedAt
+  FROM agent_runs
+  ORDER BY datetime(updated_at) DESC, rowid DESC
+  LIMIT ?
+`);
+
+const upsertSubagentTaskStmt = db.prepare(`
+  INSERT INTO subagent_tasks (
+    task_id,
+    run_id,
+    subagent_id,
+    title,
+    status,
+    sandbox,
+    result,
+    error,
+    events,
+    cancel_requested,
+    created_at,
+    started_at,
+    completed_at,
+    updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(task_id) DO UPDATE SET
+    run_id = excluded.run_id,
+    subagent_id = excluded.subagent_id,
+    title = excluded.title,
+    status = excluded.status,
+    sandbox = excluded.sandbox,
+    result = excluded.result,
+    error = excluded.error,
+    events = excluded.events,
+    cancel_requested = excluded.cancel_requested,
+    started_at = excluded.started_at,
+    completed_at = excluded.completed_at,
+    updated_at = excluded.updated_at
+`);
+
+const getSubagentTaskStmt = db.prepare(`
+  SELECT
+    task_id AS taskId,
+    run_id AS runId,
+    subagent_id AS subagentId,
+    title,
+    status,
+    sandbox,
+    result,
+    error,
+    events,
+    cancel_requested AS cancelRequested,
+    created_at AS createdAt,
+    started_at AS startedAt,
+    completed_at AS completedAt,
+    updated_at AS updatedAt
+  FROM subagent_tasks
+  WHERE task_id = ?
+  LIMIT 1
+`);
+
+const listSubagentTasksBaseSql = `
+  SELECT
+    task_id AS taskId,
+    run_id AS runId,
+    subagent_id AS subagentId,
+    title,
+    status,
+    sandbox,
+    result,
+    error,
+    events,
+    cancel_requested AS cancelRequested,
+    created_at AS createdAt,
+    started_at AS startedAt,
+    completed_at AS completedAt,
+    updated_at AS updatedAt
+  FROM subagent_tasks
+`;
+
+function parseJsonField(value, fallback) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function normalizeAgentRunRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    metadata: parseJsonField(row.metadata, {})
+  };
+}
+
+function normalizeSubagentTaskRow(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    sandbox: parseJsonField(row.sandbox, {}),
+    events: parseJsonField(row.events, []),
+    cancelRequested: !!row.cancelRequested
+  };
+}
+
+export function createAgentRun(record = {}) {
+  const now = new Date().toISOString();
+  const completedAt = record.completedAt || (['completed', 'failed', 'cancelled', 'timed_out'].includes(record.status) ? now : null);
+  createAgentRunStmt.run(
+    record.runId,
+    record.title || '',
+    record.question || '',
+    record.intentType || 'lookup',
+    record.provider || '',
+    record.model || '',
+    record.status || 'running',
+    record.summary || '',
+    record.error || '',
+    JSON.stringify(record.metadata || {}),
+    record.createdAt || now,
+    record.updatedAt || now,
+    completedAt
+  );
+  return getAgentRun(record.runId);
+}
+
+export function updateAgentRun(runId, patch = {}) {
+  const current = getAgentRun(runId);
+  if (!current) return null;
+  const now = new Date().toISOString();
+  const next = {
+    ...current,
+    ...patch,
+    runId,
+    metadata: patch.metadata !== undefined
+      ? patch.metadata
+      : current.metadata,
+    updatedAt: patch.updatedAt || now
+  };
+  if (!next.completedAt && ['completed', 'failed', 'cancelled', 'timed_out'].includes(next.status)) {
+    next.completedAt = now;
+  }
+  createAgentRunStmt.run(
+    next.runId,
+    next.title || '',
+    next.question || '',
+    next.intentType || 'lookup',
+    next.provider || '',
+    next.model || '',
+    next.status || 'running',
+    next.summary || '',
+    next.error || '',
+    JSON.stringify(next.metadata || {}),
+    next.createdAt || now,
+    next.updatedAt || now,
+    next.completedAt || null
+  );
+  return getAgentRun(runId);
+}
+
+export function getAgentRun(runId) {
+  return normalizeAgentRunRow(getAgentRunStmt.get(runId));
+}
+
+export function listAgentRuns(limit = 50) {
+  return listAgentRunsStmt.all(Math.max(1, Math.min(200, Number(limit) || 50))).map(normalizeAgentRunRow);
+}
+
+export function listAgentRunsByThread({ threadId = '', limit = 50 } = {}) {
+  const normalizedThreadId = String(threadId || '').trim();
+  if (!normalizedThreadId) {
+    return listAgentRuns(limit);
+  }
+  return listAgentRuns(Math.max(20, limit * 3))
+    .filter(run => String(run.metadata?.threadId || '') === normalizedThreadId)
+    .slice(0, Math.max(1, Math.min(200, Number(limit) || 50)));
+}
+
+export function upsertSubagentTask(task = {}) {
+  const now = new Date().toISOString();
+  upsertSubagentTaskStmt.run(
+    task.taskId,
+    task.runId || '',
+    task.subagentId || '',
+    task.title || '',
+    task.status || 'pending',
+    JSON.stringify(task.sandbox || {}),
+    task.result ? JSON.stringify(task.result) : '',
+    task.error || '',
+    JSON.stringify(task.events || []),
+    task.cancelRequested ? 1 : 0,
+    task.createdAt || now,
+    task.startedAt || null,
+    task.completedAt || null,
+    task.updatedAt || now
+  );
+  return getSubagentTask(task.taskId);
+}
+
+export function getSubagentTask(taskId) {
+  return normalizeSubagentTaskRow(getSubagentTaskStmt.get(taskId));
+}
+
+export function listSubagentTasks({ runId = '', status = '', limit = 0 } = {}) {
+  const clauses = [];
+  const params = [];
+  if (runId) {
+    clauses.push('run_id = ?');
+    params.push(runId);
+  }
+  if (status) {
+    clauses.push('status = ?');
+    params.push(status);
+  }
+  const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+  const sql = `${listSubagentTasksBaseSql}${where} ORDER BY datetime(updated_at) DESC, rowid DESC${limit > 0 ? ' LIMIT ?' : ''}`;
+  if (limit > 0) {
+    params.push(Math.max(1, Math.min(500, Number(limit) || 50)));
+  }
+  return db.prepare(sql).all(...params).map(normalizeSubagentTaskRow);
 }
 
 export default db;

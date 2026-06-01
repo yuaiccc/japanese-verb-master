@@ -37,13 +37,56 @@
           >
             <Icon name="accessibility" />
           </button>
+          <button
+            type="button"
+            class="pref-link"
+            :class="{ active: currentMode === 'credits' }"
+            title="开源致谢"
+            aria-label="开源致谢"
+            @click="currentMode = 'credits'"
+          >
+            致谢
+          </button>
         </div>
       </div>
 
       <div class="header-bottom">
         <div class="mode-switch" aria-label="功能模式">
-          <button :class="{ active: currentMode === 'dict' }" @click="currentMode = 'dict'">词典查询</button>
-          <button :class="{ active: currentMode === 'dojo' }" @click="currentMode = 'dojo'">变形道场</button>
+          <button
+            v-if="currentMode === 'credits'"
+            class="active"
+            @click="currentMode = 'dict'"
+          >
+            返回工作台
+          </button>
+          <button
+            v-if="currentMode !== 'credits'"
+            :class="{ active: workbenchSection === 'dict' }"
+            @click="workbenchSection = 'dict'"
+          >
+            词典查询
+          </button>
+          <button
+            v-if="currentMode !== 'credits'"
+            :class="{ active: workbenchSection === 'memory' }"
+            @click="workbenchSection = 'memory'"
+          >
+            单词复习
+          </button>
+          <button
+            v-if="currentMode !== 'credits'"
+            :class="{ active: workbenchSection === 'docs' }"
+            @click="workbenchSection = 'docs'"
+          >
+            说明
+          </button>
+          <button
+            v-if="currentMode !== 'credits'"
+            :class="{ active: workbenchSection === 'dojo' }"
+            @click="workbenchSection = 'dojo'"
+          >
+            变形道场
+          </button>
         </div>
         <button class="nav-llm-toggle" @click="showLlmSettings = !showLlmSettings">
           {{ llmSettings.provider }} · {{ llmSettings.model || 'model' }}
@@ -76,8 +119,8 @@
       </transition>
     </header>
 
-    <template v-if="currentMode === 'dict'">
-    <section class="agent-panel agent-panel--hero card">
+    <template v-if="currentMode !== 'credits'">
+    <section v-if="workbenchSection === 'dict'" class="agent-panel agent-panel--hero card">
       <div class="agent-chat">
         <div class="agent-chat-input">
           <input
@@ -94,6 +137,14 @@
             autocomplete="off"
           >
           <button
+            v-if="activeAgentRunIsRunning"
+            class="agent-stop-btn"
+            type="button"
+            @click="stopActiveAgentRun"
+          >
+            停止
+          </button>
+          <button
             class="search-btn search-btn--icon"
             :class="{ 'is-loading': loading }"
             :disabled="loading || !agentInput.trim()"
@@ -104,11 +155,6 @@
             <span v-if="loading" class="search-btn__spinner" aria-hidden="true"></span>
             <Icon v-else name="arrow-up" class="search-btn__arrow" />
           </button>
-        </div>
-
-        <div class="agent-secondary-actions">
-          <button class="agent-chip" @click="memoryRevealed = !!activeMemoryCard">复习</button>
-          <button class="agent-chip" @click="showMemorySettings = !showMemorySettings">参数</button>
         </div>
 
         <ul v-if="showDropdown && (suggestions.length > 0 || showHistory)" class="suggestions-list agent-suggestions">
@@ -152,6 +198,43 @@
       </div>
 
       <transition name="agent-flow">
+      <div v-if="agentRuns.length > 0" class="agent-run-history">
+        <button
+          v-for="run in agentRuns"
+          :key="run.id"
+          class="agent-run-chip"
+          :class="{ active: activeAgentRunId === run.id, 'is-running': run.status === 'running' }"
+          @click="activeAgentRunId = run.id"
+        >
+          <span class="agent-run-chip__title">{{ run.title }}</span>
+          <span v-if="run.status === 'running'" class="agent-run-chip__dot" aria-hidden="true"></span>
+        </button>
+      </div>
+      </transition>
+
+      <transition name="agent-flow">
+      <section v-if="currentAgentThreadSummary" class="agent-thread-summary card">
+        <div class="agent-thread-summary__head">
+          <strong>线程摘要</strong>
+          <span v-if="currentAgentRun?.compactSummary?.mode">{{ currentAgentRun.compactSummary.mode }}</span>
+        </div>
+        <p v-if="currentAgentThreadSummary.digest" class="agent-thread-summary__digest">{{ currentAgentThreadSummary.digest }}</p>
+        <div v-if="currentAgentThreadSummary.focusWords?.length" class="agent-thread-summary__group">
+          <span class="agent-thread-summary__label">焦点词</span>
+          <div class="agent-thread-summary__pills">
+            <span v-for="word in currentAgentThreadSummary.focusWords" :key="word" class="agent-thread-summary__pill">{{ word }}</span>
+          </div>
+        </div>
+        <div v-if="currentAgentThreadSummary.practiceFocuses?.length" class="agent-thread-summary__group">
+          <span class="agent-thread-summary__label">练习焦点</span>
+          <div class="agent-thread-summary__pills">
+            <span v-for="item in currentAgentThreadSummary.practiceFocuses" :key="item" class="agent-thread-summary__pill agent-thread-summary__pill--muted">{{ item }}</span>
+          </div>
+        </div>
+      </section>
+      </transition>
+
+      <transition name="agent-flow">
       <section
         v-if="latestAssistantMessage"
         class="agent-answer-core"
@@ -159,9 +242,9 @@
         aria-live="polite"
       >
         <span v-if="agentRunning" class="agent-answer-pulse" aria-hidden="true"></span>
-        <div v-if="agentMemoryCandidates.length > 0" class="agent-memory-suggestions agent-memory-suggestions--top">
+        <div v-if="currentAgentMemoryCandidates.length > 0" class="agent-memory-suggestions agent-memory-suggestions--top">
           <button
-            v-for="item in agentMemoryCandidates"
+            v-for="item in currentAgentMemoryCandidates"
             :key="`${item.word}-${item.reading}`"
             class="agent-memory-pill"
             :class="{ 'agent-memory-pill--added': item.added }"
@@ -177,9 +260,47 @@
           </button>
         </div>
         <p v-if="latestUserMessage" class="agent-answer-question">{{ latestUserMessage }}</p>
-        <p v-if="agentRunning && agentRuntimeNote" class="agent-runtime-note">{{ agentRuntimeNote }}</p>
+        <p v-if="activeAgentRunIsRunning && agentRuntimeNote" class="agent-runtime-note">{{ agentRuntimeNote }}</p>
+        <div v-if="currentSubagentTasks.length > 0" class="agent-subagent-strip">
+          <button
+            v-for="task in currentSubagentTasks"
+            :key="task.taskId"
+            class="agent-subagent-pill"
+            :class="`agent-subagent-pill--${task.status || 'running'}`"
+            type="button"
+            @click="toggleSubagentTask(task.taskId)"
+          >
+            <span class="agent-subagent-pill__name">{{ task.label || task.agent }}</span>
+            <span class="agent-subagent-pill__status">{{ formatSubagentTaskStatus(task.status) }}</span>
+          </button>
+        </div>
+        <div v-if="activeSubagentTaskDetails" class="agent-subagent-card">
+          <div class="agent-subagent-card__head">
+            <strong>{{ activeSubagentTaskDetails.label || activeSubagentTaskDetails.agent }}</strong>
+            <span>{{ formatSubagentTaskStatus(activeSubagentTaskDetails.status) }}</span>
+          </div>
+          <div class="agent-subagent-card__meta">
+            <span v-if="activeSubagentTaskDetails.sandbox?.policy">policy · {{ activeSubagentTaskDetails.sandbox.policy }}</span>
+            <span v-if="activeSubagentTaskDetails.sandbox?.timeoutMs">timeout · {{ activeSubagentTaskDetails.sandbox.timeoutMs }}ms</span>
+            <span v-if="activeSubagentTaskDetails.sandbox?.maxCompletionTokens">budget · {{ activeSubagentTaskDetails.sandbox.maxCompletionTokens }}</span>
+          </div>
+          <div v-if="activeSubagentTaskDetails.events?.length" class="agent-subagent-card__events">
+            <div
+              v-for="(entry, idx) in activeSubagentTaskDetails.events"
+              :key="`${activeSubagentTaskDetails.taskId}-${idx}`"
+              class="agent-subagent-card__event"
+            >
+              <span>{{ entry.type }}</span>
+              <small>{{ entry.message }}</small>
+            </div>
+          </div>
+        </div>
+        <div v-if="agentUsageSummary" class="agent-usage-banner" :class="`agent-usage-banner--${agentUsageSummary.level}`">
+          <span>{{ agentUsageSummary.label }}</span>
+          <strong v-if="agentUsageSummary.warning">{{ agentUsageSummary.warning }}</strong>
+        </div>
         <div
-          v-if="agentRunning"
+          v-if="activeAgentRunIsRunning"
           class="agent-markdown markdown-body typewriter-output typewriter-output--live is-streaming"
           v-html="renderedStreamingMarkdown"
         ></div>
@@ -188,12 +309,12 @@
           class="agent-markdown markdown-body typewriter-output"
           v-html="renderMarkdown(latestAssistantMessage.content)"
         ></div>
-        <div v-if="agentInteractivePractice" class="agent-practice-card">
+        <div v-if="currentAgentInteractivePractice" class="agent-practice-card">
           <div class="agent-practice-card__head">
             <span class="agent-practice-card__eyebrow">即时练习 · 选择题</span>
-            <span class="agent-practice-card__tag">{{ agentInteractivePractice.question.formLabel }}</span>
+            <span class="agent-practice-card__tag">{{ currentAgentInteractivePractice.question.formLabel }}</span>
           </div>
-          <p class="agent-practice-card__prompt">{{ agentInteractivePractice.prompt }}</p>
+          <p class="agent-practice-card__prompt">{{ currentAgentInteractivePractice.prompt }}</p>
           <div class="agent-practice-options" role="radiogroup">
             <button
               v-for="(option, idx) in practiceOptions"
@@ -251,32 +372,71 @@
             </div>
           </transition>
         </div>
-        <div v-if="agentExamples.length > 0" class="agent-examples-panel">
+        <div v-if="currentAgentExamples.length > 0" class="agent-examples-panel">
           <div class="examples-grid">
-            <div v-for="(ex, idx) in agentExamples" :key="`${ex.japanese}-${idx}`" class="example-box">
+            <div v-for="(ex, idx) in currentAgentExamples" :key="`${ex.japanese}-${idx}`" class="example-box">
               <div class="ex-row">
-                <div class="ex-japanese">{{ ex.japanese }}</div>
+                <div class="ex-japanese">
+                  <template v-for="(segment, segmentIndex) in buildExampleSegments(ex)" :key="`${ex.japanese}-${idx}-${segmentIndex}`">
+                    <button
+                      v-if="segment.isComponent"
+                      type="button"
+                      class="example-highlight example-highlight--button"
+                      :class="[segment.highlightClass, { 'is-active': isExampleComponentActive(ex, idx, segment.component) }]"
+                      :title="`查看${segment.component.label}说明`"
+                      @click="toggleExampleComponent(ex, idx, segment.component)"
+                    >
+                      {{ segment.text }}
+                    </button>
+                    <span v-else>{{ segment.text }}</span>
+                  </template>
+                </div>
                 <button class="btn-speak btn-speak--sm" @click="speak(ex.japanese)" title="朗读例句">
                   <Icon name="volume" class="icon-volume" />
                 </button>
               </div>
               <div v-if="ex.kana" class="ex-kana">{{ ex.kana }}</div>
               <div class="ex-chinese">{{ ex.chinese }}</div>
+              <div
+                v-if="getActiveExampleComponent(ex, idx)"
+                class="example-inspector"
+              >
+                <div class="example-inspector__title">
+                  {{ getActiveExampleComponent(ex, idx).label }} · {{ getActiveExampleComponent(ex, idx).text }}
+                </div>
+                <div class="example-inspector__body">
+                  {{ explainExampleComponent(getActiveExampleComponent(ex, idx), ex) }}
+                </div>
+              </div>
             </div>
           </div>
         </div>
+        <div v-if="currentAgentFollowUpQuestions.length > 0" class="agent-followups">
+          <div class="agent-followups-header">继续追问</div>
+          <div class="agent-followups-list">
+            <button
+              v-for="question in currentAgentFollowUpQuestions"
+              :key="question"
+              class="agent-followup-chip"
+              @click="askSuggestedFollowUp(question)"
+            >
+              {{ question }}
+            </button>
+          </div>
+        </div>
+        <div v-else-if="currentAgentFollowUpLoading" class="agent-followups-loading">正在生成追问建议…</div>
       </section>
       </transition>
 
       <transition name="agent-flow">
-      <div class="agent-chat agent-chat--trace" v-if="agentToolCalls.length > 0 && !agentRunning">
-        <details v-if="agentToolCalls.length > 0" class="agent-tool-trace">
+      <div class="agent-chat agent-chat--trace" v-if="currentAgentToolCalls.length > 0 && !activeAgentRunIsRunning">
+        <details v-if="currentAgentToolCalls.length > 0" class="agent-tool-trace">
           <summary class="tool-trace-header">
             <span>工具</span>
-            <small>{{ agentToolCalls.length }}</small>
+            <small>{{ currentAgentToolCalls.length }}</small>
           </summary>
           <transition-group name="agent-tool-list">
-          <div v-for="(call, index) in agentToolCalls" :key="`${call.name}-${index}`" class="agent-tool-card" :class="`agent-tool-card--${call.status || 'done'}`">
+          <div v-for="(call, index) in currentAgentToolCalls" :key="`${call.name}-${index}`" class="agent-tool-card" :class="`agent-tool-card--${call.status || 'done'}`">
             <span class="tool-step">{{ index + 1 }}</span>
             <div>
               <strong>{{ toolNameLabel(call.name) }}</strong>
@@ -288,38 +448,6 @@
         </details>
       </div>
       </transition>
-
-      <div v-if="showMemorySettings" class="memory-settings">
-        <label>
-          <span>目标保持率</span>
-          <input v-model.number="memorySettings.desiredRetention" type="number" min="0.7" max="0.98" step="0.01">
-        </label>
-        <label>
-          <span>每日新卡</span>
-          <input v-model.number="memorySettings.newCardsPerDay" type="number" min="1" max="100">
-        </label>
-        <label>
-          <span>每日复习上限</span>
-          <input v-model.number="memorySettings.reviewLimitPerDay" type="number" min="5" max="300">
-        </label>
-        <label>
-          <span>忘记后间隔(分钟)</span>
-          <input v-model.number="memorySettings.lapseMinutes" type="number" min="5" max="1440">
-        </label>
-        <label>
-          <span>困难倍率</span>
-          <input v-model.number="memorySettings.hardMultiplier" type="number" min="1" max="2.5" step="0.1">
-        </label>
-        <label>
-          <span>最大间隔(天)</span>
-          <input v-model.number="memorySettings.maxIntervalDays" type="number" min="7" max="3650">
-        </label>
-        <label class="settings-check">
-          <input v-model="memorySettings.autoAddSimilar" type="checkbox">
-          <span>查词后自动收集推荐词</span>
-        </label>
-        <button class="search-btn settings-save" @click="saveMemorySettingsToServer">保存参数</button>
-      </div>
 
       <div v-if="similarWords.length > 0" class="agent-section">
         <h3>相似词推荐</h3>
@@ -349,7 +477,7 @@
       </div>
     </section>
 
-    <section class="memory-panel card">
+    <section v-if="workbenchSection === 'memory'" class="memory-panel card">
       <div class="memory-header">
         <div>
           <h2>记忆复习</h2>
@@ -369,6 +497,57 @@
           <span class="traffic-dot traffic-dot--red" :class="{ 'is-active': memoryStats.due > 0 }" title="待复习">{{ memoryStats.due }}</span>
           <span class="traffic-dot traffic-dot--amber" :class="{ 'is-active': memoryStats.learning > 0 }" title="学习中">{{ memoryStats.learning }}</span>
           <span class="traffic-dot traffic-dot--green" :class="{ 'is-active': memoryStats.mastered > 0 }" title="已稳定">{{ memoryStats.mastered }}</span>
+        </div>
+      </div>
+
+      <div class="memory-settings memory-settings--panel">
+        <div class="memory-settings__header">
+          <h3>参数</h3>
+          <button class="agent-chip" @click="showMemorySettings = !showMemorySettings">
+            {{ showMemorySettings ? '收起' : '展开' }}
+          </button>
+        </div>
+        <div v-if="showMemorySettings" class="memory-settings__grid">
+          <label>
+            <span>目标保持率</span>
+            <input v-model.number="memorySettings.desiredRetention" type="number" min="0.7" max="0.98" step="0.01">
+          </label>
+          <label>
+            <span>每日新卡</span>
+            <input v-model.number="memorySettings.newCardsPerDay" type="number" min="1" max="100">
+          </label>
+          <label>
+            <span>每日复习上限</span>
+            <input v-model.number="memorySettings.reviewLimitPerDay" type="number" min="5" max="300">
+          </label>
+          <label>
+            <span>忘记后间隔(分钟)</span>
+            <input v-model.number="memorySettings.lapseMinutes" type="number" min="5" max="1440">
+          </label>
+          <label>
+            <span>困难倍率</span>
+            <input v-model.number="memorySettings.hardMultiplier" type="number" min="1" max="2.5" step="0.1">
+          </label>
+          <label>
+            <span>最大间隔(天)</span>
+            <input v-model.number="memorySettings.maxIntervalDays" type="number" min="7" max="3650">
+          </label>
+          <label>
+            <span>学习等级</span>
+            <select v-model="memorySettings.exampleDifficulty">
+              <option value="auto">自动</option>
+              <option value="N5">N5</option>
+              <option value="N4">N4</option>
+              <option value="N3">N3</option>
+              <option value="N2">N2</option>
+              <option value="N1">N1</option>
+            </select>
+          </label>
+          <label class="settings-check">
+            <input v-model="memorySettings.autoAddSimilar" type="checkbox">
+            <span>查词后自动收集推荐词</span>
+          </label>
+          <button class="search-btn settings-save" @click="saveMemorySettingsToServer">保存参数</button>
         </div>
       </div>
 
@@ -440,7 +619,7 @@
       </div>
     </section>
 
-    <main class="main-content" v-if="result || loadingAi">
+    <main class="main-content" v-if="workbenchSection === 'dict' && (result || loadingAi)">
       <!-- 左侧：活用变形 / 字典结果 -->
       <section class="left-section">
 
@@ -593,22 +772,19 @@
       </section>
     </main>
     <!-- 底部：文档区 -->
-    <div class="doc-wrapper">
+    <div v-if="workbenchSection === 'docs'" class="doc-wrapper">
       <section class="doc-section">
         <div class="card doc-card">
-          <div class="doc-header" @click="showDocs = !showDocs">
+          <div class="doc-header">
             <h2 class="doc-title">
               <span class="title-with-icon">
                 <Icon name="book" class="icon-book" />
                 动词分类指南与活用形式说明
               </span>
             </h2>
-            <button class="toggle-btn" aria-label="Toggle Documents">
-              <Icon name="chevron" class="icon-chevron" :class="{ 'down': showDocs, 'right': !showDocs }" />
-            </button>
           </div>
           
-          <div v-show="showDocs" class="doc-content">
+          <div class="doc-content">
             <div class="guide-group">
               <h3>
                 <span class="title-with-icon">
@@ -686,8 +862,7 @@
     </div>
     </template>
 
-    <!-- Dojo 模式 -->
-    <div v-if="currentMode === 'dojo'" class="dojo-wrapper">
+    <div v-if="workbenchSection === 'dojo'" class="dojo-wrapper">
       <transition name="card-fade" mode="out-in">
         <!-- 准备界面 -->
         <div v-if="dojoState === 'start'" class="card dojo-card dojo-start" key="start">
@@ -700,7 +875,7 @@
               :key="scene.id"
               class="scene-card"
               :class="{ active: selectedSceneId === scene.id }"
-              @click="selectedSceneId = scene.id"
+              @click="selectDojoScene(scene.id)"
             >
               <span class="scene-card-title">{{ scene.name }}</span>
               <span class="scene-card-desc">{{ scene.description }}</span>
@@ -779,10 +954,6 @@
             </div>
           </div>
           <p v-else class="dojo-profile-empty">完成几轮挑战后，这里会出现你的薄弱变形、场景掌握度和推荐练习。</p>
-          <button class="search-btn btn-dojo-start" @click="startDojo" :disabled="dojoLoading">
-            <span v-if="dojoLoading" class="spinner-small"></span>
-            <span v-else>开始{{ selectedSceneName }}挑战</span>
-          </button>
         </div>
 
         <!-- 游戏界面 -->
@@ -874,6 +1045,66 @@
         </div>
       </transition>
     </div>
+
+    <section v-if="currentMode === 'credits'" class="credits-page">
+      <div class="card credits-hero">
+        <div>
+          <p class="credits-eyebrow">Open Source Credits</p>
+          <h2>这个项目用到的开源项目</h2>
+          <p class="credits-copy">把真正参与运行、记忆调度、Agent 编排、前端渲染和产品思路借鉴的项目都放在这里，方便单独致谢。</p>
+        </div>
+      </div>
+
+      <div class="credits-grid">
+        <section class="card credits-card" v-for="group in creditsGroups" :key="group.title">
+          <div class="credits-card-header">
+            <h3>{{ group.title }}</h3>
+            <span>{{ group.items.length }} 项</span>
+          </div>
+          <div class="credits-list">
+            <a
+              v-for="item in group.items"
+              :key="item.name"
+              class="credits-item"
+              :href="item.url"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <div class="credits-item-main">
+                <strong>{{ item.name }}</strong>
+                <p>{{ item.note }}</p>
+                <small class="credits-item-url">{{ item.repo }}</small>
+              </div>
+              <div class="credits-item-side">
+                <span class="credits-item-tag">{{ item.tag }}</span>
+                <span class="credits-item-jump">GitHub</span>
+              </div>
+            </a>
+          </div>
+        </section>
+      </div>
+
+      <section class="card credits-card credits-card--notes">
+        <div class="credits-card-header">
+          <h3>上下文压缩参考</h3>
+          <span>后续方向</span>
+        </div>
+        <div class="credits-notes">
+          <div class="credits-note">
+            <strong>DeerFlow</strong>
+            <p>现在最接近我们后端形态的参考。它用 SummarizationMiddleware 在接近 token 上限时压缩旧对话，并把 token usage 单独记录下来。</p>
+          </div>
+          <div class="credits-note">
+            <strong>Claude Code</strong>
+            <p>核心是 auto-compaction：上下文接近容量时自动总结旧对话，并允许通过 Compact Instructions 控制“压缩时保留什么”。这个思路适合我们做“保留词条、误用点、练习结果”的摘要。</p>
+          </div>
+          <div class="credits-note">
+            <strong>Hermes Agent</strong>
+            <p>更强调 context compression + caching 组合。对我们来说，比较值得借的是“先告警，再压缩，再把摘要放回上下文”的多阶段策略。</p>
+          </div>
+        </div>
+      </section>
+    </section>
   </div>
 
 </template>
@@ -886,7 +1117,8 @@ import * as wanakana from 'wanakana';
 import Icon from './components/Icon.vue';
 
 // 全局模式
-const currentMode = ref('dict'); // 'dict' | 'dojo'
+const currentMode = ref('dict'); // 'dict' | 'credits'
+const workbenchSection = ref('dict'); // 'dict' | 'memory' | 'docs' | 'dojo'
 const isComposing = ref(false); // 跟踪输入法状态，防止回车键误触
 const darkMode = ref(false);
 const accessibilityMode = ref(false);
@@ -977,6 +1209,8 @@ const userProfile = ref({
   recentAccuracy: 0,
   recommendations: []
 });
+const agentThreadSummary = ref(null);
+const agentThreadId = ref('');
 
 const currentQuestion = computed(() => {
   return dojoQuestions.value[dojoCurrentIndex.value] || {};
@@ -1066,6 +1300,12 @@ const startDojo = async () => {
   }
 };
 
+const selectDojoScene = async (sceneId) => {
+  if (dojoLoading.value) return;
+  selectedSceneId.value = sceneId;
+  await startDojo();
+};
+
 const submitDojoAnswer = async () => {
   if (dojoFeedback.value || !dojoInput.value.trim()) return;
   const q = currentQuestion.value;
@@ -1124,9 +1364,6 @@ const nextDojoQuestion = () => {
 
 const dojoError = ref('');
 
-// 文档区折叠状态
-const showDocs = ref(false);
-
 // 查询历史
 const MAX_HISTORY = 20;
 const history = ref([]);
@@ -1140,25 +1377,32 @@ const agentLoading = ref(false);
 const agentRunning = ref(false);
 const agentInput = ref('');
 const agentMessages = ref([]);
+const agentRuns = ref([]);
+const activeAgentRunId = ref(null);
 const agentToolCalls = ref([]);
 const agentEvents = ref([]);
 const agentMemoryCandidates = ref([]);
 const agentExamples = ref([]);
 const agentInteractivePractice = ref(null);
+const agentFollowUpQuestions = ref([]);
+const agentFollowUpLoading = ref(false);
+const agentUsage = ref(null);
 const agentPracticeInput = ref('');
 const agentPracticeBusy = ref(false);
 const agentPracticeHint = ref('');
 const agentPracticeFeedback = ref(null);
 const streamedAssistantText = ref('');
 const agentAbortController = ref(null);
-const agentPlaceholderExamples = [
+const defaultAgentPlaceholderExamples = [
   '问日语：食べる 和 召し上がる 有什么区别',
   '问日语：为什么 〜ている 有时表示状态',
   '问日语：给我 3 个便利店场景例句',
   '问日语：把 猫 翻成日语并推荐相近词'
 ];
-const animatedAgentPlaceholder = ref(agentPlaceholderExamples[0]);
+const agentPlaceholderExamples = ref([...defaultAgentPlaceholderExamples]);
+const animatedAgentPlaceholder = ref(agentPlaceholderExamples.value[0]);
 let placeholderInterval = null;
+let placeholderRefreshInterval = null;
 const agentRuntimeEngine = ref('LangGraph');
 let agentRunSeq = 0;
 const defaultAgentQueue = [
@@ -1186,7 +1430,8 @@ const memorySettings = ref({
   lapseMinutes: 20,
   hardMultiplier: 1.2,
   maxIntervalDays: 180,
-  autoAddSimilar: false
+  autoAddSimilar: false,
+  exampleDifficulty: 'auto'
 });
 const memoryEngineMeta = {
   current: '当前调度: 内置 SM-2 风格间隔复习',
@@ -1198,6 +1443,38 @@ const memoryLibraryFilters = [
   { id: 'due', label: '待复习' },
   { id: 'mastered', label: '稳定' }
 ];
+const creditsGroups = [
+  {
+    title: '前端与交互',
+    items: [
+      { name: 'Vue 3', url: 'https://github.com/vuejs/core', repo: 'vuejs/core', tag: 'UI', note: '整个前端应用的响应式框架。' },
+      { name: 'Vite', url: 'https://github.com/vitejs/vite', repo: 'vitejs/vite', tag: 'Build', note: '本地开发与构建工具。' },
+      { name: 'Axios', url: 'https://github.com/axios/axios', repo: 'axios/axios', tag: 'HTTP', note: '前后端接口调用。' },
+      { name: 'Marked', url: 'https://github.com/markedjs/marked', repo: 'markedjs/marked', tag: 'Markdown', note: 'Agent 回答的 Markdown 渲染。' },
+      { name: 'WanaKana', url: 'https://github.com/WaniKani/WanaKana', repo: 'WaniKani/WanaKana', tag: 'Japanese', note: '假名、罗马音和输入规范化处理。' }
+    ]
+  },
+  {
+    title: 'Agent 与后端运行时',
+    items: [
+      { name: 'LangGraph', url: 'https://github.com/langchain-ai/langgraphjs', repo: 'langchain-ai/langgraphjs', tag: 'Agent Runtime', note: '多节点 Agent 编排与流式状态图。' },
+      { name: 'Express', url: 'https://github.com/expressjs/express', repo: 'expressjs/express', tag: 'API', note: '后端 HTTP / SSE 服务。' },
+      { name: 'better-sqlite3', url: 'https://github.com/WiseLibs/better-sqlite3', repo: 'WiseLibs/better-sqlite3', tag: 'Storage', note: '本地词典、记忆卡与配置存储。' },
+      { name: 'js-tiktoken', url: 'https://github.com/dqbd/tiktoken', repo: 'dqbd/tiktoken', tag: 'Tokens', note: '上下文 usage 估算与 token 统计。' },
+      { name: 'Ollama JS', url: 'https://github.com/ollama/ollama-js', repo: 'ollama/ollama-js', tag: 'LLM', note: '本地模型 provider 接入。' },
+      { name: 'CORS', url: 'https://github.com/expressjs/cors', repo: 'expressjs/cors', tag: 'Middleware', note: '开发环境跨域支持。' }
+    ]
+  },
+  {
+    title: '日语处理与学习能力',
+    items: [
+      { name: 'Kuromoji', url: 'https://github.com/takuyaa/kuromoji.js', repo: 'takuyaa/kuromoji.js', tag: 'Japanese NLP', note: '日语分词、动词类型识别和读音处理。' },
+      { name: 'ts-fsrs', url: 'https://github.com/open-spaced-repetition/ts-fsrs', repo: 'open-spaced-repetition/ts-fsrs', tag: 'Memory', note: '记忆调度参数设计的主要参考。' },
+      { name: 'deer-flow', url: 'https://github.com/bytedance/deer-flow', repo: 'bytedance/deer-flow', tag: 'Agent Architecture', note: 'subagent、suggestions、usage 和上下文管理的重要参考。' },
+      { name: 'cc-switch', url: 'https://github.com/farion1231/cc-switch', repo: 'farion1231/cc-switch', tag: 'LLM Switch', note: '多 provider 切换面板的产品思路参考。' }
+    ]
+  }
+];
 
 const llmStatusLabel = computed(() => {
   const provider = llmStatus.value.provider || 'ollama';
@@ -1205,23 +1482,372 @@ const llmStatusLabel = computed(() => {
   return `${provider} · ${ready ? (llmStatus.value.model || 'model') : '未配置'}`;
 });
 
+const ensureAgentThreadId = () => {
+  if (agentThreadId.value) return agentThreadId.value;
+  const storageKey = 'jwm-agent-thread-id';
+  let value = '';
+  try {
+    value = localStorage.getItem(storageKey) || '';
+    if (!value) {
+      value = `thread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      localStorage.setItem(storageKey, value);
+    }
+  } catch (error) {
+    value = `thread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+  agentThreadId.value = value;
+  return value;
+};
+
+const buildAgentRunTitle = (text = '') => {
+  const normalized = String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[？?！!。]+$/g, '')
+    .trim();
+  if (!normalized) return '新问题';
+  const firstClause = normalized.split(/[，。！？；,.!?:：]/)[0]?.trim() || normalized;
+  return firstClause.length > 18 ? `${firstClause.slice(0, 18)}…` : firstClause;
+};
+
+const currentAgentRun = computed(() => {
+  if (!agentRuns.value.length) return null;
+  return agentRuns.value.find(run => run.id === activeAgentRunId.value) || agentRuns.value[agentRuns.value.length - 1];
+});
+
+const activeAgentRunIsRunning = computed(() => currentAgentRun.value?.status === 'running');
+
+const currentAgentMemoryCandidates = computed(() => currentAgentRun.value?.memoryCandidates || []);
+const currentAgentExamples = computed(() => currentAgentRun.value?.examples || []);
+const currentAgentInteractivePractice = computed(() => currentAgentRun.value?.interactivePractice || null);
+const currentAgentFollowUpQuestions = computed(() => currentAgentRun.value?.followUpQuestions || []);
+const currentAgentFollowUpLoading = computed(() => !!currentAgentRun.value?.followUpLoading);
+const currentAgentToolCalls = computed(() => currentAgentRun.value?.toolCalls || []);
+const currentSubagentTasks = computed(() => currentAgentRun.value?.subagentTasks || []);
+const activeSubagentTaskId = ref('');
+const activeSubagentTaskDetails = computed(() => currentSubagentTasks.value.find(task => task.taskId === activeSubagentTaskId.value) || null);
+const activeExampleInspector = ref({});
+
+const escapeHtml = (value = '') => String(value || '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#39;');
+
+const componentHighlightClassMap = {
+  主题: 'is-topic',
+  主语: 'is-subject',
+  宾语: 'is-object',
+  谓语: 'is-predicate',
+  补足: 'is-support',
+  时间: 'is-time',
+  地点: 'is-location',
+  '地点/方式': 'is-location',
+  '方式/场所': 'is-location',
+  方向: 'is-direction',
+  '对象/并列': 'is-support',
+  '起点/原因': 'is-support',
+  终点: 'is-support',
+  比较基准: 'is-support',
+  补语: 'is-support',
+  追加主题: 'is-topic'
+};
+
+const buildExampleComponentKey = (example, index, component) => {
+  const label = component?.label || '';
+  const text = component?.text || '';
+  return `${currentAgentRun.value?.id || 'run'}::${index}::${example?.japanese || ''}::${label}::${text}`;
+};
+
+const buildExampleSegments = (example) => {
+  const japanese = String(example?.japanese || '');
+  const components = Array.isArray(example?.components) ? example.components : [];
+  if (!japanese) return [];
+  if (!components.length) return [{ text: japanese, isComponent: false }];
+
+  let cursor = 0;
+  const segments = [];
+
+  for (const component of components) {
+    const text = String(component?.text || '');
+    if (!text) continue;
+    const start = japanese.indexOf(text, cursor);
+    if (start === -1) continue;
+    if (start > cursor) {
+      segments.push({ text: japanese.slice(cursor, start), isComponent: false });
+    }
+    segments.push({
+      text,
+      isComponent: true,
+      component,
+      highlightClass: componentHighlightClassMap[component.label] || 'is-support'
+    });
+    cursor = start + text.length;
+  }
+
+  if (cursor < japanese.length) {
+    segments.push({ text: japanese.slice(cursor), isComponent: false });
+  }
+
+  return segments.length > 0 ? segments : [{ text: japanese, isComponent: false }];
+};
+
+const toggleExampleComponent = (example, index, component) => {
+  const key = `${currentAgentRun.value?.id || 'run'}::${index}::${example?.japanese || ''}`;
+  const nextKey = buildExampleComponentKey(example, index, component);
+  activeExampleInspector.value[key] = activeExampleInspector.value[key] === nextKey ? null : nextKey;
+};
+
+const getActiveExampleComponent = (example, index) => {
+  const key = `${currentAgentRun.value?.id || 'run'}::${index}::${example?.japanese || ''}`;
+  const activeKey = activeExampleInspector.value[key];
+  if (!activeKey) return null;
+  return (example?.components || []).find(component => buildExampleComponentKey(example, index, component) === activeKey) || null;
+};
+
+const isExampleComponentActive = (example, index, component) => {
+  const active = getActiveExampleComponent(example, index);
+  return !!active && active.label === component.label && active.text === component.text;
+};
+
+const explainExampleComponent = (component, example) => {
+  if (!component) return '';
+  const text = String(component.text || '');
+  const label = String(component.label || '');
+  const particle = [...text].at(-1) || '';
+  const readingHint = example?.kana ? `这一句的读音是「${example.kana}」。` : '';
+
+  const explanations = {
+    主题: `这里用「${particle}」把「${text}」提出来当整句的话题，后面是在围绕它继续说明。${readingHint}`,
+    追加主题: `这里的「${particle}」有“也”的感觉，把「${text}」并入当前话题，表示它也适用同样的说明。${readingHint}`,
+    主语: `这里常见是因为后面的动作或状态由「${text}」来承担，所以它被看作主语。${readingHint}`,
+    宾语: `这里带有「${particle}」的提示，说明「${text}」是动作直接作用到的对象，所以是宾语。${readingHint}`,
+    谓语: `这一段放在句子后半段，真正说出了“做什么/是什么/怎么样”，所以它是谓语核心。${readingHint}`,
+    时间: `这一段在交代动作发生的时间点或时间范围，通常会和「に」这类助词一起出现。${readingHint}`,
+    地点: `这里是在说明动作发生或目标所在的地点，所以被归为地点成分。${readingHint}`,
+    '地点/方式': `这一段既可能表示地点，也可能表示进行动作的方式，要结合后面的动作一起理解。${readingHint}`,
+    '方式/场所': `这里不是动作对象，而是在补充“在哪里/用什么方式”完成这个动作。${readingHint}`,
+    方向: `这里常带方向感，说明动作朝向哪里去。${readingHint}`,
+    '对象/并列': `这里通常是在说明动作的对象，或者把两个并列项连接起来。${readingHint}`,
+    '起点/原因': `这一段常常表示“从哪里开始”或“为什么如此”，属于补充说明。${readingHint}`,
+    终点: `这里交代动作、范围或时间延伸到哪里结束。${readingHint}`,
+    比较基准: `这里是拿来做比较的参照物，帮助理解差异从哪里来。${readingHint}`,
+    补语: `这一段是在补充条件、状态或落点，让句意更完整。${readingHint}`,
+    补足: `这部分是对句子核心的补充说明，帮助把场景、条件或细节交代清楚。${readingHint}`
+  };
+
+  return explanations[label] || `${text} 在这句里承担的是「${label}」作用，用来帮助句子把关系说完整。${readingHint}`;
+};
+
+const syncAgentRun = (runId, patch = {}) => {
+  const target = agentRuns.value.find(run => run.id === runId);
+  if (!target) return;
+  Object.assign(target, patch);
+};
+
+const normalizePersistedAgentRun = (run = {}) => ({
+  id: run.runId,
+  threadId: run.metadata?.threadId || '',
+  title: run.title || buildAgentRunTitle(run.question || ''),
+  question: run.question || '',
+  answer: run.summary || '',
+  status: run.status || 'done',
+  toolCalls: [],
+  memoryCandidates: [],
+  examples: [],
+  interactivePractice: null,
+  followUpQuestions: [],
+  followUpLoading: false,
+  usage: run.metadata?.usage || null,
+  compactSummary: run.metadata?.compactSummary || null,
+  compactEntry: run.metadata?.compactEntry || null,
+  subagentTasks: []
+});
+
+const normalizeSubagentTaskRecord = (task = {}) => ({
+  taskId: task.taskId,
+  runId: task.runId || '',
+  agent: task.agent || task.subagentId,
+  label: task.label || task.title || task.subagentId,
+  status: task.status || 'running',
+  sandbox: task.sandbox || null,
+  startedAt: task.startedAt || null,
+  completedAt: task.completedAt || null,
+  error: task.error || null,
+  cancelRequested: !!task.cancelRequested,
+  events: Array.isArray(task.events) ? task.events.slice(-8) : []
+});
+
+const formatSubagentTaskStatus = (status = '') => {
+  const map = {
+    pending: '排队中',
+    running: '运行中',
+    completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+    timed_out: '超时'
+  };
+  return map[status] || status || '运行中';
+};
+
+const toggleSubagentTask = (taskId) => {
+  activeSubagentTaskId.value = activeSubagentTaskId.value === taskId ? '' : taskId;
+};
+
+const upsertSubagentTask = (runId, payload = {}) => {
+  const target = agentRuns.value.find(run => run.id === runId);
+  if (!target) return;
+  if (!Array.isArray(target.subagentTasks)) {
+    target.subagentTasks = [];
+  }
+  const existingIndex = target.subagentTasks.findIndex(task => task.taskId === payload.taskId);
+  const record = {
+    ...normalizeSubagentTaskRecord({
+      taskId: payload.taskId,
+      runId: payload.runId,
+      agent: payload.agent,
+      title: payload.title,
+      status: payload.status,
+      sandbox: payload.sandbox,
+      startedAt: payload.startedAt,
+      completedAt: payload.completedAt,
+      error: payload.error,
+      cancelRequested: payload.cancelRequested,
+      events: payload.eventEntry ? [payload.eventEntry] : []
+    })
+  };
+  if (existingIndex >= 0) {
+    const existing = target.subagentTasks[existingIndex];
+    const nextEvents = payload.eventEntry
+      ? [...(existing.events || []), payload.eventEntry].slice(-8)
+      : (existing.events || []);
+    target.subagentTasks.splice(existingIndex, 1, {
+      ...existing,
+      ...record,
+      events: nextEvents
+    });
+  } else {
+    target.subagentTasks.push(record);
+  }
+  if (!activeSubagentTaskId.value) {
+    activeSubagentTaskId.value = payload.taskId;
+  }
+};
+
+const cancelAgentRunTasks = async (runId = '') => {
+  if (!runId) return;
+  try {
+    await fetch(`/api/agent-runs/${encodeURIComponent(runId)}/cancel`, {
+      method: 'POST'
+    });
+  } catch (error) {
+    console.warn('Failed to cancel run tasks:', error);
+  }
+};
+
+const refreshRunTaskHistory = async (runId = '') => {
+  if (!runId) return;
+  try {
+    const response = await fetch(`/api/subagent-tasks?runId=${encodeURIComponent(runId)}&limit=24`);
+    if (!response.ok) return;
+    const tasks = await response.json();
+    syncAgentRun(runId, {
+      subagentTasks: Array.isArray(tasks)
+        ? tasks.map(normalizeSubagentTaskRecord)
+        : []
+    });
+  } catch (error) {
+    console.warn('Failed to refresh run task history:', error);
+  }
+};
+
+const loadPersistedAgentRuns = async () => {
+  try {
+    const threadId = ensureAgentThreadId();
+    const response = await fetch(`/api/agent-runs?limit=16&threadId=${encodeURIComponent(threadId)}`);
+    if (!response.ok) return;
+    const runs = await response.json();
+    if (!Array.isArray(runs) || runs.length === 0) return;
+    const normalized = runs.map(normalizePersistedAgentRun);
+    for (const run of normalized.reverse()) {
+      const existingIndex = agentRuns.value.findIndex(item => item.id === run.id);
+      if (existingIndex >= 0) {
+        agentRuns.value.splice(existingIndex, 1, {
+          ...agentRuns.value[existingIndex],
+          ...run
+        });
+      } else {
+        agentRuns.value.unshift(run);
+      }
+    }
+    if (!activeAgentRunId.value && agentRuns.value.length > 0) {
+      activeAgentRunId.value = agentRuns.value[agentRuns.value.length - 1].id;
+    }
+  } catch (error) {
+    console.warn('Failed to load persisted agent runs:', error);
+  }
+};
+
+const loadAgentThreadSummary = async (currentRunId = '') => {
+  try {
+    const threadId = ensureAgentThreadId();
+    const query = currentRunId
+      ? `?limit=8&threadId=${encodeURIComponent(threadId)}&currentRunId=${encodeURIComponent(currentRunId)}`
+      : `?limit=8&threadId=${encodeURIComponent(threadId)}`;
+    const response = await fetch(`/api/agent-thread-summary${query}`);
+    if (!response.ok) return;
+    agentThreadSummary.value = await response.json();
+  } catch (error) {
+    console.warn('Failed to load agent thread summary:', error);
+  }
+};
+
 const agentRuntimeLabel = computed(() => {
   return agentRuntimeEngine.value ? `${agentRuntimeEngine.value} · ${llmStatusLabel.value}` : llmStatusLabel.value;
 });
 
+const agentUsageSummary = computed(() => {
+  const usage = currentAgentRun.value?.usage || agentUsage.value;
+  if (!usage) return null;
+  const used = typeof usage.totalTokens === 'number' ? usage.totalTokens.toLocaleString() : '--';
+  const limit = typeof usage.contextWindow === 'number' ? usage.contextWindow.toLocaleString() : '--';
+  const ratio = typeof usage.usageRatio === 'number' ? Math.round(usage.usageRatio * 100) : null;
+  return {
+    level: usage.level || 'ok',
+    warning: usage.warning || '',
+    label: `上下文 ${used} / ${limit} tokens${ratio !== null ? ` · ${ratio}%` : ''}${usage.estimated ? ' · 预估' : ''}`
+  };
+});
+
+const currentAgentThreadSummary = computed(() => {
+  const summary = currentAgentRun.value?.compactSummary?.threadSummary;
+  if (summary?.digest || summary?.focusWords?.length || summary?.practiceFocuses?.length) {
+    return summary;
+  }
+  return agentThreadSummary.value;
+});
+
+watch(activeAgentRunId, (runId) => {
+  if (!runId) return;
+  const target = agentRuns.value.find(run => run.id === runId);
+  if (!target) return;
+  if (!Array.isArray(target.subagentTasks) || target.subagentTasks.length === 0) {
+    refreshRunTaskHistory(runId);
+  }
+  loadAgentThreadSummary(runId);
+});
+
 const latestAssistantMessage = computed(() => {
-  return [...agentMessages.value].reverse().find(message => message.role === 'assistant') || null;
+  if (!currentAgentRun.value?.answer) return null;
+  return { role: 'assistant', content: currentAgentRun.value.answer };
 });
 
 const latestUserMessage = computed(() => {
-  return [...agentMessages.value].reverse().find(message => message.role === 'user')?.content || '';
+  return currentAgentRun.value?.question || '';
 });
 
 const latestAssistantText = computed(() => {
-  if (agentRunning.value) {
-    return streamedAssistantText.value;
-  }
-  return latestAssistantMessage.value?.content || '';
+  return currentAgentRun.value?.answer || '';
 });
 
 const renderedStreamingMarkdown = computed(() => {
@@ -1291,7 +1917,7 @@ const markStreamRendererDone = () => {
 const optionLabels = ['A', 'B', 'C', 'D'];
 
 const practiceOptions = computed(() => {
-  const q = agentInteractivePractice.value?.question;
+  const q = currentAgentInteractivePractice.value?.question;
   if (!q) return [];
   if (Array.isArray(q.options) && q.options.length > 0) return q.options;
   // 兜底：旧数据没有 options 时，至少展示正确答案。
@@ -1322,11 +1948,11 @@ const resetAgentPracticeState = () => {
 };
 
 const requestAgentPracticeHint = async () => {
-  if (!agentInteractivePractice.value?.question || agentPracticeFeedback.value) return;
+  if (!currentAgentInteractivePractice.value?.question || agentPracticeFeedback.value) return;
   agentPracticeBusy.value = true;
   try {
     const { data } = await axios.post('/api/dojo-agent-turn', {
-      question: agentInteractivePractice.value.question,
+      question: currentAgentInteractivePractice.value.question,
       action: 'hint'
     });
     agentPracticeHint.value = data.hint || '';
@@ -1338,11 +1964,11 @@ const requestAgentPracticeHint = async () => {
 };
 
 const submitAgentPracticeAnswer = async () => {
-  if (!agentInteractivePractice.value?.question || !agentPracticeInput.value.trim() || agentPracticeFeedback.value) return;
+  if (!currentAgentInteractivePractice.value?.question || !agentPracticeInput.value.trim() || agentPracticeFeedback.value) return;
   agentPracticeBusy.value = true;
   try {
     const { data } = await axios.post('/api/dojo-agent-turn', {
-      question: agentInteractivePractice.value.question,
+      question: currentAgentInteractivePractice.value.question,
       userAnswer: agentPracticeInput.value.trim(),
       action: 'check',
       hintUsed: !!agentPracticeHint.value,
@@ -1350,7 +1976,7 @@ const submitAgentPracticeAnswer = async () => {
     });
     agentPracticeFeedback.value = {
       isCorrect: !!data.isCorrect,
-      correctAnswer: data.correctAnswer || agentInteractivePractice.value.question.answer,
+      correctAnswer: data.correctAnswer || currentAgentInteractivePractice.value.question.answer,
       explanation: data.explanation || '',
       memoryNote: ''
     };
@@ -1377,6 +2003,74 @@ const submitAgentPracticeAnswer = async () => {
   } finally {
     agentPracticeBusy.value = false;
   }
+};
+
+const buildAgentConversationContext = () => {
+  const threadId = ensureAgentThreadId();
+  const threadRuns = agentRuns.value
+    .filter(run => (run.threadId || threadId) === threadId)
+    .slice()
+    .sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')))
+    .slice(-4);
+
+  const runConversation = threadRuns.flatMap(run => {
+    const parts = [];
+    if (String(run.question || '').trim()) {
+      parts.push({ role: 'user', content: run.question });
+    }
+    if (String(run.answer || '').trim()) {
+      parts.push({ role: 'assistant', content: run.answer });
+    }
+    return parts;
+  });
+
+  const fallbackConversation = agentMessages.value
+    .filter(item => (item?.role === 'user' || item?.role === 'assistant') && String(item.content || '').trim())
+    .map(item => ({
+      role: item.role,
+      content: item.content || ''
+    }));
+
+  const source = runConversation.length > 0 ? runConversation : fallbackConversation;
+  return source.slice(-8);
+};
+
+const fetchFollowUpSuggestions = async ({ message, answer }) => {
+  const runId = activeAgentRunId.value;
+  agentFollowUpLoading.value = true;
+  if (runId) syncAgentRun(runId, { followUpLoading: true });
+  try {
+    const conversation = buildAgentConversationContext();
+    if (conversation.length > 0 && conversation[conversation.length - 1]?.role === 'assistant') {
+      conversation[conversation.length - 1] = { role: 'assistant', content: answer };
+    }
+    const { data } = await axios.post('/api/agent/follow-ups', {
+      message,
+      answer,
+      context: {
+        lookup: result.value,
+        memoryStats: memoryStats.value,
+        userProfile: userProfile.value,
+        conversation,
+        memoryCandidates: agentMemoryCandidates.value,
+        exampleDifficulty: memorySettings.value.exampleDifficulty
+      }
+    });
+    const suggestions = Array.isArray(data.suggestions) ? data.suggestions.slice(0, 3) : [];
+    agentFollowUpQuestions.value = suggestions;
+    if (runId) syncAgentRun(runId, { followUpQuestions: suggestions, followUpLoading: false });
+  } catch (e) {
+    console.error('追问建议生成失败', e);
+    agentFollowUpQuestions.value = [];
+    if (runId) syncAgentRun(runId, { followUpQuestions: [], followUpLoading: false });
+  } finally {
+    agentFollowUpLoading.value = false;
+  }
+};
+
+const askSuggestedFollowUp = async (question) => {
+  agentInput.value = question;
+  await submitAgentCommand();
 };
 
 const waitForStreamRendererDrain = () => {
@@ -1588,6 +2282,7 @@ const toolNameLabel = (name) => ({
 const resetAgentRuntime = () => {
   agentQueue.value = defaultAgentQueue.map(item => ({ ...item }));
   agentRuntimeNote.value = '';
+  agentUsage.value = null;
 };
 
 const applyAgentQueue = (payload = {}) => {
@@ -1855,6 +2550,7 @@ const runAgent = async () => {
   const message = agentInput.value.trim();
   if (!message) return;
   if (agentRunning.value && agentAbortController.value) {
+    cancelAgentRunTasks(activeAgentRunId.value);
     agentAbortController.value.abort();
   }
 
@@ -1864,10 +2560,32 @@ const runAgent = async () => {
   agentEvents.value = [];
   agentMemoryCandidates.value = [];
   agentExamples.value = [];
+  agentFollowUpQuestions.value = [];
+  agentFollowUpLoading.value = false;
   agentInteractivePractice.value = null;
   resetAgentPracticeState();
   resetStreamRenderer();
   resetAgentRuntime();
+  const runId = `run-${Date.now()}-${runSeq}`;
+  const runRecord = {
+    id: runId,
+    threadId: ensureAgentThreadId(),
+    title: buildAgentRunTitle(message),
+    question: message,
+    answer: '',
+    status: 'running',
+    toolCalls: [],
+    memoryCandidates: [],
+    examples: [],
+    interactivePractice: null,
+    followUpQuestions: [],
+    followUpLoading: false,
+    usage: null,
+    subagentTasks: []
+  };
+  agentRuns.value.push(runRecord);
+  activeAgentRunId.value = runId;
+  activeSubagentTaskId.value = '';
   agentMessages.value.push({ role: 'user', content: message });
   const assistantMessage = { role: 'assistant', content: '' };
   agentMessages.value.push(assistantMessage);
@@ -1890,11 +2608,15 @@ const runAgent = async () => {
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
       body: JSON.stringify({
+        runId,
+        threadId: ensureAgentThreadId(),
         message,
         context: {
           lookup: result.value,
           memoryStats: memoryStats.value,
-          userProfile: userProfile.value
+          userProfile: userProfile.value,
+          conversation: buildAgentConversationContext(),
+          exampleDifficulty: memorySettings.value.exampleDifficulty
         }
       })
     });
@@ -1920,6 +2642,14 @@ const runAgent = async () => {
         }
         setStreamingPlaceholder('处理中...');
       } else if (event === 'run_start') {
+        if (payload.id && payload.id !== runId) {
+          syncAgentRun(runId, { id: payload.id });
+          activeAgentRunId.value = payload.id;
+        }
+        syncAgentRun(runId, {
+          threadId: payload.threadId || ensureAgentThreadId(),
+          compactSummary: payload.compactSummary || null
+        });
         agentRuntimeEngine.value = payload.runtime === 'langgraph' ? 'LangGraph' : 'Agent';
         pushAgentEvent({
           title: '开始',
@@ -1937,8 +2667,36 @@ const runAgent = async () => {
           status: 'done'
         });
         setStreamingPlaceholder('处理中...');
+      } else if (event === 'subagent_task') {
+        upsertSubagentTask(runId, {
+          ...payload,
+          eventEntry: {
+            type: payload.type,
+            message: `${payload.title} · ${formatSubagentTaskStatus(payload.status)}`
+          }
+        });
+        pushAgentEvent({
+          title: payload.title || payload.agent || 'Subagent Task',
+          body: `${formatSubagentTaskStatus(payload.status)} · ${payload.sandbox?.policy || 'sandbox'}`,
+          status: payload.status === 'failed' || payload.status === 'timed_out' ? 'error' : payload.status === 'completed' ? 'done' : 'running'
+        });
+      } else if (event === 'usage') {
+        agentUsage.value = payload;
+        syncAgentRun(runId, { usage: payload });
+        if (payload.warning) {
+          agentRuntimeNote.value = payload.warning;
+        }
+      } else if (event === 'runtime_state') {
+        syncAgentRun(runId, {
+          threadId: payload.threadId || ensureAgentThreadId(),
+          compactSummary: payload.compactSummary || null
+        });
+        if (payload.threadSummary) {
+          agentThreadSummary.value = payload.threadSummary;
+        }
       } else if (event === 'tool_start') {
         upsertStreamingToolCall(payload, 'running');
+        syncAgentRun(runId, { toolCalls: agentToolCalls.value.map(call => ({ ...call })) });
         pushAgentEvent({
           title: toolNameLabel(payload.name),
           body: `调用工具：${formatToolArgs(payload.arguments || {})}`,
@@ -1947,6 +2705,7 @@ const runAgent = async () => {
         setStreamingPlaceholder('处理中...');
       } else if (event === 'tool_end') {
         upsertStreamingToolCall(payload, 'done');
+        syncAgentRun(runId, { toolCalls: agentToolCalls.value.map(call => ({ ...call })) });
         pushAgentEvent({
           title: `${toolNameLabel(payload.name)} 完成`,
           body: formatToolResult({ ...payload, status: 'done' }),
@@ -1965,6 +2724,7 @@ const runAgent = async () => {
           });
         }
         enqueueStreamText(payload.content || '', assistantMessage);
+        syncAgentRun(runId, { answer: `${assistantMessage.content || ''}${payload.content || ''}` });
       } else if (event === 'done') {
         streamDone = true;
         pushAgentEvent({
@@ -1977,6 +2737,9 @@ const runAgent = async () => {
         agentExamples.value = Array.isArray(payload.examples) ? payload.examples.slice(0, 3) : [];
         agentInteractivePractice.value = payload.interactivePractice || null;
         resetAgentPracticeState();
+        if (payload.usage) {
+          agentUsage.value = payload.usage;
+        }
         if (payload.answer && !assistantMessage.content.trim()) {
           assistantMessage.content = payload.answer;
           streamedAssistantText.value = payload.answer;
@@ -1984,6 +2747,40 @@ const runAgent = async () => {
         if (Array.isArray(payload.toolCalls) && payload.toolCalls.length > 0) {
           agentToolCalls.value = payload.toolCalls.map(call => ({ ...call, status: 'done' }));
         }
+        syncAgentRun(runId, {
+          answer: payload.answer || assistantMessage.content || '',
+          status: 'done',
+          toolCalls: agentToolCalls.value.map(call => ({ ...call })),
+          memoryCandidates: [...agentMemoryCandidates.value],
+          examples: [...agentExamples.value],
+          interactivePractice: agentInteractivePractice.value,
+          usage: agentUsage.value || null,
+          compactSummary: agentRuns.value.find(run => run.id === runId)?.compactSummary || null,
+          subagentTasks: [...(agentRuns.value.find(run => run.id === runId)?.subagentTasks || [])]
+        });
+        loadAgentThreadSummary(runId);
+        fetchFollowUpSuggestions({
+          message,
+          answer: payload.answer || assistantMessage.content || ''
+        });
+      } else if (event === 'cancelled') {
+        streamDone = true;
+        assistantMessage.content ||= '已停止当前请求。';
+        streamedAssistantText.value = assistantMessage.content;
+        pushAgentEvent({
+          title: '已停止',
+          body: payload.message || '本轮 Agent 运行已停止',
+          status: 'done'
+        });
+        syncAgentRun(runId, {
+          answer: assistantMessage.content,
+          status: 'cancelled',
+          toolCalls: agentToolCalls.value.map(call => ({ ...call })),
+          memoryCandidates: [...agentMemoryCandidates.value],
+          examples: [...agentExamples.value],
+          interactivePractice: agentInteractivePractice.value,
+          usage: agentUsage.value || null
+        });
       } else if (event === 'error') {
         throw new Error(payload.message || 'Agent stream failed.');
       }
@@ -2011,6 +2808,17 @@ const runAgent = async () => {
       assistantMessage.content = '我暂时没有得到明确结果。';
       streamedAssistantText.value = assistantMessage.content;
     }
+    syncAgentRun(runId, {
+      answer: assistantMessage.content,
+      status: 'done',
+      toolCalls: agentToolCalls.value.map(call => ({ ...call })),
+      memoryCandidates: [...agentMemoryCandidates.value],
+      examples: [...agentExamples.value],
+      interactivePractice: agentInteractivePractice.value,
+      followUpQuestions: [...agentFollowUpQuestions.value],
+      usage: agentUsage.value || null
+    });
+    await refreshRunTaskHistory(runId);
     await loadMemoryCards();
   } catch (e) {
     if (e.name === 'AbortError') {
@@ -2026,6 +2834,17 @@ const runAgent = async () => {
         agentRuntimeNote.value = e.message || 'Agent 调用失败。';
       }
     }
+    syncAgentRun(runId, {
+      answer: assistantMessage.content,
+      status: e.name === 'AbortError' || /cancelled/i.test(e?.message || '') ? 'cancelled' : 'error',
+      toolCalls: agentToolCalls.value.map(call => ({ ...call })),
+      memoryCandidates: [...agentMemoryCandidates.value],
+      examples: [...agentExamples.value],
+      interactivePractice: agentInteractivePractice.value,
+      followUpQuestions: [...agentFollowUpQuestions.value],
+      usage: agentUsage.value || null
+    });
+    await refreshRunTaskHistory(runId);
   } finally {
     if (timeoutId) {
       window.clearTimeout(timeoutId);
@@ -2042,6 +2861,14 @@ const submitAgentCommand = async () => {
   if (!value) return;
   showDropdown.value = false;
   await runAgent();
+};
+
+const stopActiveAgentRun = async () => {
+  const runId = activeAgentRunId.value;
+  if (!runId || !agentAbortController.value) return;
+  agentRuntimeNote.value = '正在停止当前 Agent 运行...';
+  await cancelAgentRunTasks(runId);
+  agentAbortController.value.abort();
 };
 
 const handleAgentEnter = async (e) => {
@@ -2161,7 +2988,10 @@ const startAgentPlaceholderAnimation = () => {
     if (holdUntil && Date.now() < holdUntil) {
       return;
     }
-    const current = agentPlaceholderExamples[exampleIndex];
+    const examples = agentPlaceholderExamples.value.length > 0
+      ? agentPlaceholderExamples.value
+      : defaultAgentPlaceholderExamples;
+    const current = examples[exampleIndex % examples.length];
     if (!deleting) {
       charIndex += 1;
       animatedAgentPlaceholder.value = current.slice(0, charIndex);
@@ -2176,17 +3006,36 @@ const startAgentPlaceholderAnimation = () => {
     if (charIndex <= 0) {
       holdUntil = 0;
       deleting = false;
-      exampleIndex = (exampleIndex + 1) % agentPlaceholderExamples.length;
+      exampleIndex = (exampleIndex + 1) % examples.length;
     }
   }, 90);
 };
 
+const loadHotPlaceholderExamples = async (force = false) => {
+  try {
+    const { data } = await axios.get('/api/hot-placeholders', {
+      params: force ? { force: 1 } : {}
+    });
+    if (Array.isArray(data?.examples) && data.examples.length > 0) {
+      agentPlaceholderExamples.value = data.examples;
+    }
+  } catch (error) {
+    console.error('加载热点占位词失败', error);
+    agentPlaceholderExamples.value = [...defaultAgentPlaceholderExamples];
+  }
+};
+
 onMounted(async () => {
+  ensureAgentThreadId();
   const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches || false;
   darkMode.value = readBooleanPreference('jvmDarkMode', prefersDark);
   accessibilityMode.value = readBooleanPreference('jvmAccessibilityMode', false);
   applyDisplayPreferences();
   startAgentPlaceholderAnimation();
+  loadHotPlaceholderExamples();
+  placeholderRefreshInterval = window.setInterval(() => {
+    loadHotPlaceholderExamples(true);
+  }, 30 * 60 * 1000);
   initTts();
 
   const [modelsResult, scenesResult, profileResult, userProfileResult] = await Promise.allSettled([
@@ -2231,6 +3080,8 @@ onMounted(async () => {
     console.error('获取长期画像失败', userProfileResult.reason);
   }
   loadHistory();
+  await loadPersistedAgentRuns();
+  await loadAgentThreadSummary();
   await loadMemoryCards();
   await loadMemorySettings();
   await loadLlmSettings();
@@ -2523,6 +3374,7 @@ const completeProgress = () => {
 onUnmounted(() => {
   if (aiProgressInterval) clearInterval(aiProgressInterval);
   if (placeholderInterval) window.clearInterval(placeholderInterval);
+  if (placeholderRefreshInterval) window.clearInterval(placeholderRefreshInterval);
 });
 
 const conjugate = async () => {
@@ -3033,6 +3885,41 @@ const fetchAiExplanation = async () => {
   box-shadow: var(--focus-ring);
 }
 
+.pref-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.25s var(--ease-out), border-color 0.25s var(--ease-out),
+    background 0.25s var(--ease-out), transform 0.3s var(--ease-spring);
+}
+
+.pref-link:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--surface-border));
+  background: var(--field-bg);
+  transform: translateY(-1px);
+}
+
+.pref-link.active {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--surface-border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--field-bg));
+}
+
+.pref-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 /* === 模式切换 === */
 .mode-switch {
   display: inline-flex;
@@ -3059,6 +3946,160 @@ const fetchAiExplanation = async () => {
   background: var(--field-bg);
   color: var(--text-primary);
   box-shadow: 0 8px 18px rgba(24, 35, 31, 0.09);
+}
+
+/* === 致谢页 === */
+.credits-page {
+  display: grid;
+  gap: 20px;
+}
+
+.credits-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-height: 150px;
+}
+
+.credits-eyebrow {
+  margin: 0 0 6px;
+  color: var(--primary);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.credits-hero h2 {
+  margin: 0;
+  font-size: 1.85rem;
+  line-height: 1.08;
+}
+
+.credits-copy {
+  max-width: 720px;
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 0.98rem;
+  line-height: 1.7;
+}
+
+.credits-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.credits-card {
+  display: grid;
+  gap: 16px;
+}
+
+.credits-card--notes {
+  gap: 18px;
+}
+
+.credits-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.credits-card-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.credits-card-header span {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.credits-list {
+  display: grid;
+  gap: 10px;
+}
+
+.credits-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--surface-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.25s var(--ease-out),
+    transform 0.28s var(--ease-spring), background 0.25s var(--ease-out),
+    box-shadow 0.25s var(--ease-out);
+}
+
+.credits-item:hover {
+  border-color: color-mix(in srgb, var(--primary) 32%, var(--surface-border));
+  background: var(--field-bg);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 26px rgba(24, 35, 31, 0.06);
+}
+
+.credits-item-main {
+  min-width: 0;
+}
+
+.credits-item-main strong {
+  display: block;
+  margin: 0 0 4px;
+  font-size: 0.98rem;
+}
+
+.credits-item-main p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.credits-item-tag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 10%, var(--field-bg));
+  color: var(--primary);
+  font-size: 0.76rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.credits-notes {
+  display: grid;
+  gap: 12px;
+}
+
+.credits-note {
+  padding: 16px 18px;
+  border: 1px solid var(--surface-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+}
+
+.credits-note strong {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 0.96rem;
+}
+
+.credits-note p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.65;
 }
 
 /* === 搜索栏 === */
@@ -3896,6 +4937,128 @@ const fetchAiExplanation = async () => {
   background: var(--panel-bg);
 }
 
+.agent-run-history {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.agent-run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 8px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease, color 0.2s ease;
+}
+
+.agent-run-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--primary);
+  color: var(--text-primary);
+}
+
+.agent-run-chip.active {
+  background: color-mix(in srgb, var(--primary) 10%, var(--panel-bg));
+  border-color: color-mix(in srgb, var(--primary) 38%, var(--surface-border));
+  color: var(--text-primary);
+}
+
+.agent-run-chip.is-running {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--surface-border));
+}
+
+.agent-run-chip__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-run-chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 14%, transparent);
+  animation: pulseDot 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.agent-thread-summary {
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg);
+  display: grid;
+  gap: 10px;
+}
+
+.agent-thread-summary__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-thread-summary__head strong {
+  font-size: 0.92rem;
+  color: var(--text-primary);
+}
+
+.agent-thread-summary__head span {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.agent-thread-summary__digest {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.agent-thread-summary__group {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-thread-summary__label {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.agent-thread-summary__pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-thread-summary__pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 8%, var(--panel-bg));
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, var(--surface-border));
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.agent-thread-summary__pill--muted {
+  background: var(--field-bg);
+  border-color: var(--surface-border);
+}
+
 .agent-chat--trace {
   margin-top: 6px;
   padding: 0 4px;
@@ -3962,6 +5125,113 @@ const fetchAiExplanation = async () => {
   color: var(--text-muted);
   font-size: 0.8rem;
   line-height: 1.45;
+}
+
+.agent-subagent-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -2px 0 12px;
+}
+
+.agent-subagent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  color: var(--text-secondary);
+  padding: 6px 11px;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.agent-subagent-pill__name {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.agent-subagent-pill--running {
+  border-color: color-mix(in srgb, var(--primary) 28%, var(--surface-border));
+  background: color-mix(in srgb, var(--primary-soft) 68%, transparent);
+}
+
+.agent-subagent-pill--completed {
+  border-color: color-mix(in srgb, var(--success) 26%, var(--surface-border));
+}
+
+.agent-subagent-pill--failed,
+.agent-subagent-pill--timed_out {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--surface-border));
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.agent-subagent-card {
+  margin: -2px 0 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg);
+}
+
+.agent-subagent-card__head,
+.agent-subagent-card__meta,
+.agent-subagent-card__event {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-subagent-card__head {
+  margin-bottom: 7px;
+  color: var(--text-primary);
+}
+
+.agent-subagent-card__meta {
+  flex-wrap: wrap;
+  margin-bottom: 7px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.agent-subagent-card__events {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-subagent-card__event {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.agent-usage-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -2px 0 12px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.agent-usage-banner strong {
+  font-weight: 700;
+}
+
+.agent-usage-banner--ok strong {
+  color: var(--text-secondary);
+}
+
+.agent-usage-banner--warn strong {
+  color: #9a6700;
+}
+
+.agent-usage-banner--danger strong {
+  color: var(--danger);
 }
 
 .agent-memory-suggestions {
@@ -4326,6 +5596,29 @@ const fetchAiExplanation = async () => {
 
 .agent-chat-input input:focus {
   outline: none;
+}
+
+.agent-stop-btn {
+  flex-shrink: 0;
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger, #b85c38) 12%, var(--field-bg));
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.agent-stop-btn:hover {
+  border-color: color-mix(in srgb, var(--danger, #b85c38) 46%, var(--surface-border));
+  color: var(--text-primary);
+}
+
+.agent-stop-btn:active {
+  transform: scale(0.98);
 }
 
 .memory-settings {
@@ -5005,6 +6298,48 @@ ruby rt {
   flex-shrink: 0;
 }
 
+.agent-followups {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--surface-border);
+}
+
+.agent-followups-header {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  margin-bottom: 10px;
+}
+
+.agent-followups-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.agent-followups-loading {
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.agent-followup-chip {
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  padding: 9px 14px;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.agent-followup-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--primary);
+  background: rgba(35, 103, 244, 0.06);
+}
+
 .ex-row {
   display: flex;
   align-items: center;
@@ -5017,6 +6352,59 @@ ruby rt {
   color: var(--text-primary);
   margin-bottom: 3px;
   flex: 1;
+  line-height: 1.7;
+}
+
+.ex-japanese :deep(mark),
+.ex-japanese mark {
+  padding: 0.06em 0.22em;
+  border-radius: 0.3em;
+  color: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.example-highlight--button {
+  border: 0;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+}
+
+.example-highlight--button:hover {
+  transform: translateY(-1px);
+  filter: saturate(1.06);
+}
+
+.example-highlight--button.is-active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 16%, transparent), 0 0 0 2px color-mix(in srgb, var(--panel-bg) 86%, transparent);
+}
+
+.example-highlight.is-topic {
+  background: color-mix(in srgb, #f6d84b 56%, transparent);
+}
+
+.example-highlight.is-subject {
+  background: color-mix(in srgb, #73d0ff 54%, transparent);
+}
+
+.example-highlight.is-object {
+  background: color-mix(in srgb, #9ae6b4 56%, transparent);
+}
+
+.example-highlight.is-predicate {
+  background: color-mix(in srgb, #f8b4d9 58%, transparent);
+}
+
+.example-highlight.is-location,
+.example-highlight.is-time,
+.example-highlight.is-direction {
+  background: color-mix(in srgb, #c4b5fd 48%, transparent);
+}
+
+.example-highlight.is-support {
+  background: color-mix(in srgb, var(--surface-border) 72%, transparent);
 }
 
 .ex-kana {
@@ -5028,6 +6416,27 @@ ruby rt {
 .ex-chinese {
   font-size: 0.95em;
   color: var(--text-secondary);
+}
+
+.example-inspector {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel-bg) 74%, var(--surface-soft));
+  border: 1px solid var(--surface-border);
+}
+
+.example-inspector__title {
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.example-inspector__body {
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.65;
 }
 
 .ai-loading {
@@ -6117,6 +7526,23 @@ select:focus-visible,
 
   .mode-switch button {
     flex: 1;
+  }
+
+  .pref-link {
+    min-height: 38px;
+  }
+
+  .credits-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .credits-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .credits-item-tag {
+    align-self: flex-start;
   }
 
   .search-bar {

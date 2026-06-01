@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import kuromoji from 'kuromoji';
 import * as wanakana from 'wanakana';
+import { encodingForModel, getEncoding } from 'js-tiktoken';
 import { conjugate } from './conjugationEngine.js';
 import fs from 'fs';
 import path from 'path';
@@ -24,7 +25,12 @@ import {
   getMemorySettings,
   saveMemorySettings,
   getLlmSettings,
-  saveLlmSettings
+  saveLlmSettings,
+  createAgentRun,
+  updateAgentRun,
+  getAgentRun,
+  listAgentRuns,
+  listAgentRunsByThread
 } from './db.js';
 import { getSceneById, getSceneCatalog, getSceneIdsForVerb, getVerbsForScene } from './sceneData.js';
 import {
@@ -37,6 +43,13 @@ import {
 } from './learningSubagents.js';
 import { formatPlannerNote } from './subagentContexts.js';
 import { buildSpecialistNodeExecutor } from './subagentNodeHelpers.js';
+import { SubagentExecutor } from './subagentExecutor.js';
+import {
+  getBackgroundTaskResult,
+  listBackgroundTasks,
+  requestCancelBackgroundTask,
+  requestCancelTasksForRun
+} from './subagentTaskRuntime.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,10 +68,112 @@ const formLabelMap = {
   imperative: '命令形',
   volitional: '意向形'
 };
+const defaultHotPlaceholderExamples = [
+  '问日语：食べる 和 召し上がる 有什么区别',
+  '问日语：为什么 〜ている 有时表示状态',
+  '问日语：给我 3 个便利店场景例句',
+  '问日语：把 猫 翻成日语并推荐相近词'
+];
+const hotPlaceholderCache = {
+  updatedAt: 0,
+  ttlMs: 30 * 60 * 1000,
+  source: 'fallback',
+  examples: [...defaultHotPlaceholderExamples]
+};
 
 function getDateKey(value) {
   const date = new Date(value);
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+function decodeXmlEntities(text = '') {
+  return String(text || '')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'");
+}
+
+function stripFeedSource(title = '') {
+  return String(title || '')
+    .replace(/\s*[-｜|]\s*[^-｜|]+$/u, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function compactHotTopic(title = '') {
+  const stripped = stripFeedSource(title)
+    .replace(/（[^）]*）/g, '')
+    .replace(/\([^)]*\)/g, '')
+    .replace(/[「」『』【】]/g, '')
+    .trim();
+  if (!stripped) return '';
+
+  const firstClause = stripped.split(/[、。！？!?:：]/)[0]?.trim() || stripped;
+  const candidate = firstClause.length >= 6 ? firstClause : stripped;
+  return candidate.length > 24 ? `${candidate.slice(0, 24)}…` : candidate;
+}
+
+function buildHotPlaceholderExamplesFromTitles(titles = []) {
+  const prompts = [];
+  const patterns = [
+    (topic) => `问日语：用简单日语解释「${topic}」`,
+    (topic) => `问日语：围绕「${topic}」给我 3 个场景例句`,
+    (topic) => `问日语：把「${topic}」改写成更自然的日语表达`,
+    (topic) => `问日语：看到「${topic}」时，日语里常怎么说`
+  ];
+
+  titles.slice(0, 6).forEach((title, index) => {
+    const topic = compactHotTopic(title);
+    if (!topic) return;
+    prompts.push(patterns[index % patterns.length](topic));
+  });
+
+  return [...new Set(prompts)].slice(0, 6);
+}
+
+async function fetchHotPlaceholderExamples(force = false) {
+  if (!force && Date.now() - hotPlaceholderCache.updatedAt < hotPlaceholderCache.ttlMs && hotPlaceholderCache.examples.length > 0) {
+    return hotPlaceholderCache;
+  }
+
+  try {
+    const response = await fetch('https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja', {
+      headers: {
+        'User-Agent': 'JapaneseWordMaster/1.0 (+https://localhost)'
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`Hot placeholders upstream failed: ${response.status}`);
+    }
+    const xml = await response.text();
+    const matches = [...xml.matchAll(/<item>[\s\S]*?<title>([\s\S]*?)<\/title>/g)];
+    const titles = matches
+      .map(match => decodeXmlEntities(match[1]))
+      .map(stripFeedSource)
+      .filter(Boolean)
+      .filter(title => !/Google ニュース|トップニュース/.test(title));
+    const examples = buildHotPlaceholderExamplesFromTitles(titles);
+
+    if (examples.length > 0) {
+      hotPlaceholderCache.updatedAt = Date.now();
+      hotPlaceholderCache.source = 'google-news-jp';
+      hotPlaceholderCache.examples = examples;
+      return hotPlaceholderCache;
+    }
+  } catch (error) {
+    console.error('Failed to refresh hot placeholders:', error.message);
+  }
+
+  if (!hotPlaceholderCache.updatedAt) {
+    hotPlaceholderCache.updatedAt = Date.now();
+  }
+  hotPlaceholderCache.source = hotPlaceholderCache.source || 'fallback';
+  hotPlaceholderCache.examples = hotPlaceholderCache.examples?.length > 0
+    ? hotPlaceholderCache.examples
+    : [...defaultHotPlaceholderExamples];
+  return hotPlaceholderCache;
 }
 
 function buildPracticeProfile(records) {
@@ -670,19 +785,71 @@ function extractFirstJsonObject(text = '') {
   }
 }
 
+function normalizeJlptLevel(raw = '') {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const text = String(value || '').trim().toUpperCase();
+  const match = text.match(/N[1-5]/);
+  return match ? match[0] : '';
+}
+
+function resolveDifficultyLevel({
+  requested = 'auto',
+  lookup = null,
+  memoryCandidates = []
+} = {}) {
+  const normalizedRequested = String(requested || 'auto').trim();
+  if (normalizedRequested && normalizedRequested !== 'auto') {
+    const explicit = normalizeJlptLevel(normalizedRequested);
+    return explicit || 'N3';
+  }
+
+  const lookupLevel = normalizeJlptLevel(lookup?.jlpt);
+  if (lookupLevel) return lookupLevel;
+
+  for (const item of memoryCandidates) {
+    const candidateLevel = normalizeJlptLevel(item?.jlpt);
+    if (candidateLevel) return candidateLevel;
+  }
+
+  return 'N3';
+}
+
+function buildDifficultyInstruction(level = 'N3') {
+  const instructions = {
+    N5: '使用最基础、最短的句式，优先日常词汇，避免从句、被动、使役、敬语嵌套。',
+    N4: '保持句式简单自然，可加入少量常见补语，但避免明显超纲表达。',
+    N3: '允许常见复合句和场景表达，保持清楚易懂，不要过度书面化。',
+    N2: '可以使用更自然的书面/会话表达，允许适度复杂句，但仍需便于学习者拆解。',
+    N1: '可以使用更成熟自然的复杂表达、书面感和语气变化，但要保持例句可分析。'
+  };
+  return instructions[level] || instructions.N3;
+}
+
 function normalizeAgentExamples(items = []) {
   return items
     .filter(item => item && (item.japanese || item.kana || item.chinese))
     .map(item => ({
       japanese: String(item.japanese || '').trim(),
       kana: String(item.kana || '').trim(),
-      chinese: String(item.chinese || '').trim()
+      chinese: String(item.chinese || '').trim(),
+      components: Array.isArray(item.components)
+        ? item.components
+          .map(part => ({
+            label: String(part?.label || '').trim(),
+            text: String(part?.text || '').trim()
+          }))
+          .filter(part => part.label && part.text)
+        : []
     }))
     .filter(item => item.japanese && item.chinese)
+    .map(item => ({
+      ...item,
+      components: item.components.length > 0 ? item.components : annotateSentenceComponents(item.japanese)
+    }))
     .slice(0, 3);
 }
 
-function buildFallbackAgentExamples({ message, memoryCandidates = [] }) {
+function buildFallbackAgentExamples({ message, memoryCandidates = [], difficultyLevel = 'N3' }) {
   const source = memoryCandidates.length > 0
     ? memoryCandidates
     : extractJapaneseTerms(message).slice(0, 3).map(word => ({ word, reading: '' }));
@@ -690,24 +857,63 @@ function buildFallbackAgentExamples({ message, memoryCandidates = [] }) {
   const examples = source.slice(0, 3).map((item, index) => {
     const word = item.word || 'この表現';
     const reading = item.reading || word;
-    const templates = [
+    const templatesByDifficulty = {
+      N5: [
+        {
+          japanese: `わたしは ${word} を つかいます。`,
+          kana: `わたしは ${reading} を つかいます。`,
+          chinese: `我会使用“${word}”。`
+        },
+        {
+          japanese: `きょう ${word} を れんしゅうします。`,
+          kana: `きょう ${reading} を れんしゅうします。`,
+          chinese: `今天我来练习“${word}”。`
+        }
+      ],
+      N4: [
+        {
+          japanese: `会話では「${word}」をよく使います。`,
+          kana: `かいわでは「${reading}」をよくつかいます。`,
+          chinese: `在会话里经常会用到“${word}”。`
+        },
+        {
+          japanese: `授業で「${word}」を使って文を作りました。`,
+          kana: `じゅぎょうで「${reading}」をつかってぶんをつくりました。`,
+          chinese: `上课时我用“${word}”造了句子。`
+        }
+      ],
+      N3: [
+        {
+          japanese: `会話では「${word}」のほうが自然に聞こえることがあります。`,
+          kana: `かいわでは「${reading}」のほうがしぜんにきこえることがあります。`,
+          chinese: `在会话里，“${word}”有时听起来会更自然。`
+        },
+        {
+          japanese: `授業のあとで、「${word}」を使って短い文を作ってみました。`,
+          kana: `じゅぎょうのあとで、「${reading}」をつかってみじかいぶんをつくってみました。`,
+          chinese: `课后我试着用“${word}”造了一个短句。`
+        },
+        {
+          japanese: `この場面では「${word}」と似た表現の違いも意識すると覚えやすいです。`,
+          kana: `このばめんでは「${reading}」とにたひょうげんのちがいもいしきするとおぼえやすいです。`,
+          chinese: `在这个场景里，顺便注意“${word}”和近义表达的区别会更容易记住。`
+        }
+      ]
+    };
+    const templates = templatesByDifficulty[difficultyLevel] || templatesByDifficulty.N3;
+    const fallbackTemplates = [
       {
-        japanese: `会話では「${word}」のほうが自然に聞こえることがあります。`,
-        kana: `かいわでは「${reading}」のほうがしぜんにきこえることがあります。`,
-        chinese: `在会话里，“${word}”有时听起来会更自然。`
+        japanese: `この場面では「${word}」を自然に使えると表現の幅が広がります。`,
+        kana: `このばめんでは「${reading}」をしぜんにつかえるとひょうげんのはばがひろがります。`,
+        chinese: `在这个场景里能自然使用“${word}”，表达会更丰富。`
       },
       {
-        japanese: `授業のあとで、「${word}」を使って短い文を作ってみました。`,
-        kana: `じゅぎょうのあとで、「${reading}」をつかってみじかいぶんをつくってみました。`,
-        chinese: `课后我试着用“${word}”造了一个短句。`
-      },
-      {
-        japanese: `この場面では「${word}」と似た表現の違いも意識すると覚えやすいです。`,
-        kana: `このばめんでは「${reading}」とにたひょうげんのちがいもいしきするとおぼえやすいです。`,
-        chinese: `在这个场景里，顺便注意“${word}”和近义表达的区别会更容易记住。`
+        japanese: `「${word}」を使って自分の例文を一つ作ると覚えやすいです。`,
+        kana: `「${reading}」をつかってじぶんのれいぶんをひとつつくるとおぼえやすいです。`,
+        chinese: `自己用“${word}”造一个句子会更容易记住。`
       }
     ];
-    return templates[index % templates.length];
+    return [...templates, ...fallbackTemplates][index % [...templates, ...fallbackTemplates].length];
   });
 
   return normalizeAgentExamples(examples);
@@ -729,8 +935,132 @@ function pickPracticeForm(message = '') {
   return matched || { key: 'teForm', label: formLabelMap.teForm };
 }
 
+function inferMarkedRole(text = '', marker = '') {
+  const trimmed = String(text || '').trim();
+  if (!trimmed || !marker) return '补足';
+  const timePattern = /(今日|きょう|明日|あした|昨日|きのう|今朝|けさ|今晩|こんばん|毎日|まいにち|毎週|毎月|毎年|週末|しゅうまつ|朝|昼|夜|時|分|月|年|曜日)$/;
+  const locationPattern = /(学校|がっこう|会社|かいしゃ|店|みせ|コンビニ|駅|えき|家|いえ|うち|教室|きょうしつ|部屋|へや|日本|にほん|東京|とうきょう|レストラン|スーパー)$/;
+
+  switch (marker) {
+    case 'は':
+      return '主题';
+    case 'も':
+      return '追加主题';
+    case 'が':
+      return '主语';
+    case 'を':
+      return '宾语';
+    case 'へ':
+      return '方向';
+    case 'と':
+      return '对象/并列';
+    case 'から':
+      return '起点/原因';
+    case 'まで':
+      return '终点';
+    case 'より':
+      return '比较基准';
+    case 'に':
+      if (timePattern.test(trimmed)) return '时间';
+      if (locationPattern.test(trimmed)) return '地点';
+      return '补语';
+    case 'で':
+      if (locationPattern.test(trimmed)) return '地点/方式';
+      return '方式/场所';
+    default:
+      return '补足';
+  }
+}
+
+function inferPredicateStart(tokens = []) {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index];
+    const pos = token?.pos || '';
+    const surface = token?.surface_form || '';
+    if (['動詞', '形容詞', '助動詞'].includes(pos)) {
+      let start = index;
+      while (start > 0) {
+        const previousPos = tokens[start - 1]?.pos || '';
+        if (!['動詞', '形容詞', '助動詞'].includes(previousPos)) break;
+        start -= 1;
+      }
+      return start;
+    }
+    if (surface && ['です', 'だ', 'でした', 'ます', 'ません', 'ください'].includes(surface)) {
+      let start = Math.max(0, index - 1);
+      while (start > 0) {
+        const previousPos = tokens[start - 1]?.pos || '';
+        if (!['動詞', '形容詞', '助動詞'].includes(previousPos)) break;
+        start -= 1;
+      }
+      return start;
+    }
+  }
+  return -1;
+}
+
+function annotateSentenceComponents(sentence = '') {
+  if (!tokenizer || !sentence) return [];
+
+  try {
+    const tokens = tokenizer.tokenize(sentence).filter(token => token?.surface_form);
+    if (tokens.length === 0) return [];
+
+    const predicateStart = inferPredicateStart(tokens);
+    const components = [];
+    const appendComponent = (label, text) => {
+      const normalizedText = String(text || '').trim();
+      if (!label || !normalizedText) return;
+      const previous = components.at(-1);
+      if (previous && previous.label === label) {
+        previous.text = `${previous.text}${normalizedText}`;
+        return;
+      }
+      components.push({ label, text: normalizedText });
+    };
+
+    const boundary = predicateStart >= 0 ? predicateStart : tokens.length;
+    let buffer = [];
+
+    for (let index = 0; index < boundary; index += 1) {
+      const token = tokens[index];
+      buffer.push(token);
+      if (token.pos === '助詞' && ['は', 'も', 'が', 'を', 'に', 'へ', 'で', 'と', 'から', 'まで', 'より'].includes(token.surface_form)) {
+        const phraseTokens = buffer.slice(0, -1);
+        const phrase = phraseTokens.map(item => item.surface_form).join('');
+        const marker = token.surface_form;
+        appendComponent(inferMarkedRole(phrase, marker), `${phrase}${marker}`);
+        buffer = [];
+      }
+    }
+
+    if (buffer.length > 0) {
+      appendComponent('补足', buffer.map(item => item.surface_form).join(''));
+    }
+
+    if (predicateStart >= 0) {
+      appendComponent('谓语', tokens.slice(predicateStart).map(item => item.surface_form).join(''));
+    }
+
+    return components.slice(0, 6);
+  } catch (error) {
+    return [];
+  }
+}
+
+function shouldOfferInteractivePractice({ message = '', context = {}, memoryCandidates = [] }) {
+  const lowered = String(message || '').toLowerCase();
+  if (/readme|github|repo|sse|langgraph|api|prompt|system prompt|架构|bug|样式|前端|后端|页面|模型|provider|llm|deepseek|openai|tavily/.test(lowered)) {
+    return false;
+  }
+  if (context.lookup?.wordType === 'verb') return true;
+  if (memoryCandidates.some(item => item.wordType === 'verb' || detectVerbType(item.reading || item.word || ''))) return true;
+  if ((context.intent?.terms || []).some(term => detectVerbType(term))) return true;
+  return extractJapaneseTerms(message).some(term => detectVerbType(term));
+}
+
 function buildInteractivePractice({ message = '', intent = {}, context = {}, memoryCandidates = [] }) {
-  if (!intent?.wantsPractice) return null;
+  if (!shouldOfferInteractivePractice({ message, context: { ...context, intent }, memoryCandidates })) return null;
 
   const sourceLookup = context.lookup?.wordType === 'verb' ? context.lookup : null;
   const candidateWord = sourceLookup?.dictionaryForm
@@ -751,8 +1081,12 @@ function buildInteractivePractice({ message = '', intent = {}, context = {}, mem
     const form = pickPracticeForm(message);
     const answer = conjugation[form.key];
     if (!answer) return null;
-
-    const options = buildPracticeOptions(conjugation, form.key, answer);
+    const difficultyLevel = resolveDifficultyLevel({
+      requested: context.exampleDifficulty || getMemorySettings().exampleDifficulty,
+      lookup: sourceLookup,
+      memoryCandidates
+    });
+    const options = buildPracticeOptions(conjugation, form.key, answer, difficultyLevel);
     const displayVerb = sourceLookup?.dictionaryForm || sourceLookup?.word || sourceLookup?.parsedAs || candidateWord;
     return {
       mode: 'agent_practice',
@@ -768,6 +1102,8 @@ function buildInteractivePractice({ message = '', intent = {}, context = {}, mem
         formLabel: form.label,
         answer,
         options,
+        difficultyLevel,
+        jlpt: normalizeJlptLevel(sourceLookup?.jlpt),
         sceneId: 'agent-practice',
         sceneName: 'Agent 练习'
       }
@@ -777,9 +1113,350 @@ function buildInteractivePractice({ message = '', intent = {}, context = {}, mem
   }
 }
 
-// 用同一动词的其他活用形作为干扰项——这些恰好是学习者最容易混淆的形式，最具教学价值。
-function buildPracticeOptions(conjugation, answerKey, answer) {
-  const distractorKeys = ['teForm', 'taForm', 'negative', 'polite', 'potential', 'passive', 'causative', 'volitional', 'imperative'];
+function buildFallbackFollowUpQuestions({ intent = {}, context = {}, memoryCandidates = [] }) {
+  const focusWord = context.lookup?.dictionaryForm || context.lookup?.word || memoryCandidates[0]?.word || '这个表达';
+
+  if (intent?.wantsExamples) {
+    return [
+      `把这些例句改成更礼貌的说法`,
+      `再给我3个更口语的${focusWord}场景`,
+      `把这些例句改成填空练习`
+    ];
+  }
+
+  if (intent?.wantsPractice) {
+    return [
+      `为什么这题要这样变形`,
+      `再给我一个类似难度的练习`,
+      `顺便比较一下相关变形区别`
+    ];
+  }
+
+  return [
+    `再给我3个${focusWord}的场景例句`,
+    `把${focusWord}和相近表达做个对比`,
+    `基于${focusWord}给我出一道小练习`
+  ];
+}
+
+function stripMarkdownCodeFence(text = '') {
+  const stripped = String(text || '').trim();
+  if (!stripped.startsWith('```')) return stripped;
+  const lines = stripped.split('\n');
+  if (lines.length >= 3 && lines[0].startsWith('```') && lines.at(-1)?.startsWith('```')) {
+    return lines.slice(1, -1).join('\n').trim();
+  }
+  return stripped;
+}
+
+function parseJsonStringList(text = '') {
+  const candidate = stripMarkdownCodeFence(text);
+  const arrayStart = candidate.indexOf('[');
+  const arrayEnd = candidate.lastIndexOf(']');
+  if (arrayStart === -1 || arrayEnd === -1 || arrayEnd <= arrayStart) return null;
+  try {
+    const parsed = JSON.parse(candidate.slice(arrayStart, arrayEnd + 1));
+    if (!Array.isArray(parsed)) return null;
+    return parsed
+      .map(item => String(item || '').trim())
+      .filter(Boolean);
+  } catch (error) {
+    return null;
+  }
+}
+
+function formatSuggestionConversation(conversation = []) {
+  return conversation
+    .map((item) => {
+      const role = item?.role === 'assistant' ? 'Assistant' : 'User';
+      return `${role}: ${String(item?.content || '').trim()}`;
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function compactConversationTurns(conversation = [], keepTail = 4) {
+  const safeConversation = Array.isArray(conversation) ? conversation : [];
+  const normalized = safeConversation
+    .map((item) => ({
+      role: item?.role === 'assistant' ? 'assistant' : 'user',
+      content: String(item?.content || '').trim()
+    }))
+    .filter(item => item.content)
+    .map(item => ({ ...item, content: item.content.slice(0, 320) }));
+
+  if (normalized.length <= keepTail) {
+    return {
+      recentConversation: normalized,
+      olderConversationDigest: '',
+      compactedTurnCount: 0
+    };
+  }
+
+  const older = normalized.slice(0, -keepTail);
+  const recentConversation = normalized.slice(-keepTail);
+  const olderConversationDigest = older
+    .map(item => `${item.role === 'assistant' ? 'Assistant' : 'User'}: ${item.content}`)
+    .join('\n')
+    .slice(0, 1600);
+
+  return {
+    recentConversation,
+    olderConversationDigest,
+    compactedTurnCount: older.length
+  };
+}
+
+function isCompactFocusWord(word = '') {
+  const value = String(word || '').trim();
+  if (!value) return false;
+  if (value.length < 2) return false;
+  if (!/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(value)) return false;
+  const denied = new Set(['がる', 'する']);
+  return !denied.has(value);
+}
+
+function normalizeThreadTopic(topic = '') {
+  return String(topic || '')
+    .replace(/\s+/g, '')
+    .replace(/[.…]{2,}$/g, '')
+    .trim();
+}
+
+function buildThreadSummary({ currentRunId = '', threadId = '', limit = 10 } = {}) {
+  const runs = listAgentRunsByThread({ threadId, limit: limit + 2 })
+    .filter(run => run.runId !== currentRunId)
+    .filter(run => ['completed', 'cancelled', 'failed'].includes(run.status))
+    .slice(0, limit);
+
+  const seenTopics = new Set();
+  const topics = runs
+    .map(run => run.title || buildAgentRunTitle(run.question || ''))
+    .filter(Boolean)
+    .filter((topic) => {
+      const normalized = normalizeThreadTopic(topic);
+      if (!normalized || seenTopics.has(normalized)) return false;
+      seenTopics.add(normalized);
+      return true;
+    })
+    .slice(0, 8);
+
+  const focusWords = [...new Set(runs.flatMap(run => run.metadata?.compactEntry?.focusWords || []))]
+    .filter(isCompactFocusWord)
+    .slice(0, 12);
+
+  const practiceFocuses = runs
+    .map(run => run.metadata?.compactEntry?.practiceFocus || '')
+    .filter(Boolean)
+    .filter((item, index, source) => source.indexOf(item) === index)
+    .slice(0, 6);
+
+  const seenSummaryTitles = new Set();
+  const latestSummaries = runs
+    .map(run => {
+      const summary = String(run.metadata?.compactEntry?.summary || run.summary || '').trim();
+      if (!summary) return '';
+      const title = run.title || buildAgentRunTitle(run.question || '');
+      const normalizedTitle = normalizeThreadTopic(title);
+      if (!normalizedTitle || seenSummaryTitles.has(normalizedTitle)) return '';
+      seenSummaryTitles.add(normalizedTitle);
+      return `${title}：${summary}`.slice(0, 140);
+    })
+    .filter(Boolean)
+    .slice(0, 5);
+
+  return {
+    runCount: runs.length,
+    topics,
+    focusWords,
+    practiceFocuses,
+    latestSummaries,
+    digest: latestSummaries.join('\n').slice(0, 900)
+  };
+}
+
+function buildRunCompactEntry({ message = '', intent = {}, context = {}, finalState = {} }) {
+  const focusWords = [
+    context.lookup?.word,
+    ...(Array.isArray(finalState.memoryCandidates) ? finalState.memoryCandidates.map(item => item.word) : [])
+  ]
+    .map(item => String(item || '').trim())
+    .filter(isCompactFocusWord)
+    .filter((item, index, source) => source.indexOf(item) === index)
+    .slice(0, 6);
+
+  const exampleHighlights = Array.isArray(finalState.structuredExamples)
+    ? finalState.structuredExamples
+      .map(item => String(item?.japanese || '').trim())
+      .filter(Boolean)
+      .slice(0, 2)
+    : [];
+
+  return {
+    title: buildAgentRunTitle(message),
+    intentType: intent?.type || 'lookup',
+    focusWords,
+    practiceFocus: finalState.interactivePractice?.question?.formLabel || '',
+    summary: String(finalState.finalAnswer || '').replace(/\s+/g, ' ').trim().slice(0, 320),
+    exampleHighlights
+  };
+}
+
+function buildPersistedCompactSummary({ currentRunId = '', threadId = '', conversation = [], model = '' } = {}) {
+  const threadSummary = buildThreadSummary({ currentRunId, threadId, limit: 8 });
+  const conversationCompact = compactConversationTurns(conversation, 4);
+  const rawConversation = Array.isArray(conversation) ? conversation : [];
+  const rawConversationTokens = estimateChatTokens(
+    rawConversation.map(item => ({
+      role: item?.role || 'user',
+      content: String(item?.content || '').slice(0, 600)
+    })),
+    model || getDefaultLlmModel()
+  );
+  const threadDigestTokens = estimateChatTokens([
+    {
+      role: 'system',
+      content: `${threadSummary.digest}\n${threadSummary.focusWords.join('、')}\n${threadSummary.practiceFocuses.join('、')}`
+    }
+  ], model || getDefaultLlmModel());
+  const contextWindow = getModelContextWindow(model || getDefaultLlmModel());
+  const estimatedRatio = contextWindow > 0 ? (rawConversationTokens + threadDigestTokens) / contextWindow : 0;
+
+  let mode = 'none';
+  if (rawConversation.length > 10 || estimatedRatio >= 0.35) {
+    mode = 'aggressive';
+  } else if (rawConversation.length > 6 || estimatedRatio >= 0.18 || threadSummary.runCount >= 4) {
+    mode = 'standard';
+  } else if (rawConversation.length > 4 || estimatedRatio >= 0.08 || threadSummary.runCount >= 2) {
+    mode = 'light';
+  }
+
+  const applied = mode !== 'none';
+  const recentConversation = !applied
+    ? rawConversation
+      .slice(-6)
+      .map(item => ({
+        role: item?.role === 'assistant' ? 'assistant' : 'user',
+        content: String(item?.content || '').trim().slice(0, 320)
+      }))
+      .filter(item => item.content)
+    : conversationCompact.recentConversation;
+
+  const persistedRunCount = mode === 'none'
+    ? 0
+    : mode === 'light'
+      ? Math.min(2, threadSummary.runCount)
+      : mode === 'standard'
+        ? Math.min(5, threadSummary.runCount)
+        : threadSummary.runCount;
+
+  const focusWords = threadSummary.focusWords.slice(
+    0,
+    mode === 'aggressive' ? 10 : mode === 'standard' ? 8 : 5
+  );
+  const recentTopics = threadSummary.topics.slice(
+    0,
+    mode === 'aggressive' ? 6 : mode === 'standard' ? 5 : 3
+  );
+  const practiceFocuses = threadSummary.practiceFocuses.slice(
+    0,
+    mode === 'aggressive' ? 5 : 3
+  );
+  const historicalDigest = applied
+    ? threadSummary.latestSummaries
+      .slice(0, mode === 'aggressive' ? 5 : mode === 'standard' ? 4 : 2)
+      .join('\n')
+    : '';
+
+  return {
+    applied,
+    mode,
+    estimatedRatio: Number(estimatedRatio.toFixed(4)),
+    estimatedInputTokens: rawConversationTokens + threadDigestTokens,
+    recentConversation,
+    olderConversationDigest: applied ? conversationCompact.olderConversationDigest : '',
+    compactedTurnCount: applied ? conversationCompact.compactedTurnCount : 0,
+    persistedRunCount,
+    recentTopics,
+    focusWords,
+    practiceFocuses,
+    historicalDigest: historicalDigest.slice(0, 900),
+    threadSummary
+  };
+}
+
+async function generateFollowUpQuestions({ message = '', finalAnswer = '', intent = {}, context = {}, memoryCandidates = [] }) {
+  const fallback = buildFallbackFollowUpQuestions({ intent, context, memoryCandidates });
+  const conversation = Array.isArray(context.conversation) ? context.conversation.slice(-6) : [];
+  const conversationText = formatSuggestionConversation([
+    ...conversation,
+    { role: 'user', content: message },
+    { role: 'assistant', content: finalAnswer }
+  ]);
+
+  if (getLlmProvider() === 'ollama') {
+    return fallback;
+  }
+
+  try {
+    const text = await callLlmText({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是日语学习产品里的追问建议器。',
+            '请基于最近完整对话，生成 EXACTLY 3 个用户下一步最可能继续问的问题。',
+            '要求：',
+            '- 必须和刚刚这轮具体内容强相关，不能泛泛而谈',
+            '- 必须使用和用户相同的语言',
+            '- 每条尽量简短自然，不超过 40 个汉字',
+            '- 三条问题的方向要有差异，例如例句/对比/练习/误用/场景',
+            '- 不要编号，不要 markdown，不要解释',
+            '- 输出必须是 JSON 数组，例如 ["问题1","问题2","问题3"]'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: [
+            'Conversation Context:',
+            conversationText || `User: ${message}\nAssistant: ${finalAnswer.slice(0, 1200)}`,
+            '',
+            `Intent: ${intent?.type || 'lookup'}`,
+            `Lookup Focus: ${JSON.stringify(context.lookup || null)}`,
+            `Memory Candidates: ${JSON.stringify(memoryCandidates.slice(0, 4))}`,
+            '',
+            'Generate 3 follow-up questions.'
+          ].join('\n')
+        }
+      ],
+      model: getDefaultLlmModel(),
+      temperature: 0.7,
+      maxTokens: 220
+    });
+
+    const items = parseJsonStringList(text) || [];
+    const normalized = [...new Set(items
+      .map(item => String(item || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+    )].slice(0, 3);
+
+    return normalized.length === 3 ? normalized : fallback;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+// 用同一动词的其他活用形作为干扰项——并根据难度控制“迷惑程度”。
+function buildPracticeOptions(conjugation, answerKey, answer, difficultyLevel = 'N3') {
+  const distractorPools = {
+    N5: ['taForm', 'negative', 'polite', 'teForm'],
+    N4: ['taForm', 'negative', 'polite', 'potential', 'teForm'],
+    N3: ['taForm', 'negative', 'polite', 'potential', 'passive', 'teForm'],
+    N2: ['taForm', 'negative', 'polite', 'potential', 'passive', 'causative', 'volitional', 'teForm'],
+    N1: ['taForm', 'negative', 'polite', 'potential', 'passive', 'causative', 'volitional', 'imperative', 'teForm']
+  };
+  const distractorKeys = distractorPools[difficultyLevel] || distractorPools.N3;
   const seen = new Set([answer]);
   const distractors = [];
   for (const key of distractorKeys) {
@@ -800,7 +1477,13 @@ function buildPracticeOptions(conjugation, answerKey, answer) {
   return options;
 }
 
-async function generateStructuredAgentExamples({ message, finalAnswer, toolCalls, memoryCandidates = [] }) {
+async function generateStructuredAgentExamples({ message, finalAnswer, toolCalls, memoryCandidates = [], context = {} }) {
+  const memorySettings = getMemorySettings();
+  const exampleDifficulty = resolveDifficultyLevel({
+    requested: memorySettings.exampleDifficulty || 'auto',
+    lookup: context.lookup || null,
+    memoryCandidates
+  });
   const prompt = `你是日语学习应用里的 Example Composer。
 请根据用户问题、Agent 最终回答、以及工具结果，输出 2 到 3 条适合学习者复习的例句。
 
@@ -814,7 +1497,9 @@ async function generateStructuredAgentExamples({ message, finalAnswer, toolCalls
 }
 3. 例句必须自然、日常、和当前问题高度相关。
 4. kana 必须是完整平假名，不要留空。
-5. chinese 要简洁、准确。`;
+5. chinese 要简洁、准确。
+6. 例句难度设定：严格按 JLPT ${exampleDifficulty} 学习者可理解的难度来写，避免明显超纲表达。
+7. 难度控制说明：${buildDifficultyInstruction(exampleDifficulty)}`;
 
   const text = await callLlmText({
     messages: [
@@ -828,7 +1513,8 @@ async function generateStructuredAgentExamples({ message, finalAnswer, toolCalls
             name: call.name,
             arguments: call.arguments,
             result: call.result
-          }))
+          })),
+          exampleDifficulty
         })
       }
     ],
@@ -842,7 +1528,7 @@ async function generateStructuredAgentExamples({ message, finalAnswer, toolCalls
   const normalized = normalizeAgentExamples(parsed?.examples || []);
   return normalized.length > 0
     ? normalized
-    : buildFallbackAgentExamples({ message, memoryCandidates });
+    : buildFallbackAgentExamples({ message, memoryCandidates, difficultyLevel: exampleDifficulty });
 }
 
 function emitTextAsTokens(res, text, size = 12) {
@@ -852,6 +1538,7 @@ function emitTextAsTokens(res, text, size = 12) {
 }
 
 const LearningAgentState = Annotation.Root({
+  runId: Annotation({ reducer: (x, y) => y ?? x, default: () => '' }),
   message: Annotation({ reducer: (x, y) => y ?? x, default: () => '' }),
   context: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
   intent: Annotation({ reducer: (x, y) => y ?? x, default: () => ({}) }),
@@ -867,11 +1554,46 @@ const LearningAgentState = Annotation.Root({
   finalAnswer: Annotation({ reducer: (x, y) => y ?? x, default: () => '' }),
   structuredExamples: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
   memorySnapshot: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
-  interactivePractice: Annotation({ reducer: (x, y) => y ?? x, default: () => null })
+  interactivePractice: Annotation({ reducer: (x, y) => y ?? x, default: () => null }),
+  followUpQuestions: Annotation({ reducer: (x, y) => y ?? x, default: () => [] }),
+  usageReport: Annotation({ reducer: (x, y) => y ?? x, default: () => null })
 });
 
-function createLearningAgentGraph({ res, closedRef, intent }) {
+function createLearningAgentGraph({ res, closedRef, intent, runId }) {
   const specialistId = selectSpecialistSubagent(intent);
+  const researcherExecutor = new SubagentExecutor({
+    subagentId: 'researcher',
+    label: 'Researcher',
+    runId,
+    executeTool: executeAgentTool,
+    summarizeToolResult,
+    writeSse,
+    emitAgentQueue,
+    res,
+    closedRef
+  });
+  const memoryExecutor = new SubagentExecutor({
+    subagentId: 'memory_manager',
+    label: 'Memory Manager',
+    runId,
+    executeTool: executeAgentTool,
+    summarizeToolResult,
+    writeSse,
+    emitAgentQueue,
+    res,
+    closedRef
+  });
+  const tutorExecutor = new SubagentExecutor({
+    subagentId: 'tutor',
+    label: 'Tutor',
+    runId,
+    executeTool: executeAgentTool,
+    summarizeToolResult,
+    writeSse,
+    emitAgentQueue,
+    res,
+    closedRef
+  });
 
   let graph = new StateGraph(LearningAgentState)
     .addNode('planner', async (state) => {
@@ -896,126 +1618,159 @@ function createLearningAgentGraph({ res, closedRef, intent }) {
       };
     })
     .addNode('researcher', async (state) => {
-      emitAgentQueue(res, state.agentQueue, 'researcher', state.completed, '正在调用工具收集事实');
       const researcherSpec = learningSubagentRegistry.researcher;
-      const scopedBrief = researcherSpec.buildBrief({
-        message: state.message,
-        intent: state.intent,
-        plannerNote: state.plannerNote,
-        userContent: state.userContent
-      });
-      const messages = [
-        {
-          role: 'system',
-          content: `${state.systemPrompt}\n${scopedBrief.system}`
-        },
-        { role: 'user', content: scopedBrief.user }
-      ];
-      const toolCalls = [];
-      const plannedTools = pickScopedTools(
-        researcherSpec.allowedTools,
-        researcherSpec.planTools({ intent: state.intent, message: state.message })
-      );
-
-      const toolResults = await Promise.all(plannedTools.map(async (tool) => {
-        if (closedRef.closed) return null;
-        writeSse(res, 'tool_start', tool);
-        let result;
-        try {
-          result = await executeAgentTool(tool.name, tool.arguments);
-        } catch (error) {
-          result = { error: error.message || `Tool ${tool.name} failed` };
-        }
-        const summarized = summarizeToolResult(result);
-        const toolRecord = { ...tool, result: summarized, error: !!result?.error };
-        if (!closedRef.closed) {
-          writeSse(res, 'tool_end', toolRecord);
-        }
-        return {
-          toolRecord,
-          rawResult: result,
-          message: {
-            role: 'user',
-            content: `Researcher 工具 ${tool.name} 参数 ${JSON.stringify(tool.arguments)} 返回：${JSON.stringify(result)}`
-          }
-        };
-      }));
-
       const memoryCandidates = [];
-      for (const item of toolResults.filter(Boolean)) {
-        toolCalls.push(item.toolRecord);
-        messages.push(item.message);
-        memoryCandidates.push(...memoryCandidatesFromToolResult(item.toolRecord.name, item.rawResult));
-      }
-      const dedupedMemoryCandidates = dedupeMemoryCandidates(memoryCandidates);
 
-      return {
-        messages,
-        toolCalls,
-        memoryCandidates: dedupedMemoryCandidates,
-        subagentContexts: {
-          ...state.subagentContexts,
-          researcher: {
-            intent: state.intent?.type || 'lookup',
-            usedTools: plannedTools.map(tool => tool.name)
-          }
+      return researcherExecutor.runToolSubagent({
+        state,
+        queueNote: '正在调用工具收集事实',
+        title: 'Researcher',
+        buildBrief: (currentState, sandboxContext) => researcherSpec.buildBrief({
+          message: currentState.message,
+          intent: currentState.intent,
+          plannerNote: currentState.plannerNote,
+          userContent: JSON.stringify({
+            ...JSON.parse(currentState.userContent || '{}'),
+            sandboxContext
+          })
+        }),
+        planTools: (currentState) => pickScopedTools(
+          researcherSpec.allowedTools,
+          researcherSpec.planTools({ intent: currentState.intent, message: currentState.message })
+        ),
+        buildToolMessage: ({ tool, rawResult }) => ({
+          role: 'user',
+          content: `Researcher 工具 ${tool.name} 参数 ${JSON.stringify(tool.arguments)} 返回：${JSON.stringify(rawResult)}`
+        }),
+        onToolResult: ({ toolRecord, rawResult }) => {
+          memoryCandidates.push(...memoryCandidatesFromToolResult(toolRecord.name, rawResult));
         },
-        completed: [...state.completed, 'researcher']
-      };
+        buildStatePatch: ({ state: currentState, brief, sandbox, toolCalls }) => ({
+          messages: [
+            {
+              role: 'system',
+              content: `${currentState.systemPrompt}\n${brief.system}`
+            },
+            { role: 'user', content: brief.user }
+          ],
+          toolCalls,
+          memoryCandidates: dedupeMemoryCandidates(memoryCandidates),
+          subagentContexts: {
+            ...currentState.subagentContexts,
+            researcher: {
+              intent: currentState.intent?.type || 'lookup',
+              usedTools: toolCalls.map(tool => tool.name),
+              sandbox: sandbox.describe()
+            }
+          }
+        })
+      });
     })
     .addNode('tutor', async (state) => {
-      emitAgentQueue(res, state.agentQueue, 'tutor', state.completed, '正在流式生成最终回答');
-      const tutorBrief = learningSubagentRegistry.tutor.buildBrief({
-        message: state.message,
-        intent: state.intent,
-        plannerNote: state.plannerNote,
-        subagentContexts: state.subagentContexts
-      });
-      const finalMessages = [
-        {
-          role: 'system',
-          content: `${state.systemPrompt}\n${tutorBrief}\n例句会由独立结构化卡片展示，所以正文里不要再输出一整段例句列表。`
-        },
-        ...state.messages,
-        {
-          role: 'user',
-          content: `请基于以上计划和工具结果，回答用户原问题：${state.message}`
-        }
-      ];
-
-      let finalAnswer = '';
-      try {
-        await streamLlmText({
-          messages: finalMessages,
-          model: getDefaultLlmModel(),
-          temperature: 0.25,
-          maxTokens: 1700,
-          onToken: (content) => {
-            finalAnswer += content;
-            writeSse(res, 'token', { content });
+      return tutorExecutor.runTextSubagent({
+        state,
+        queueNote: '正在流式生成最终回答',
+        title: 'Tutor',
+        buildBrief: (currentState) => learningSubagentRegistry.tutor.buildBrief({
+          message: currentState.message,
+          intent: currentState.intent,
+          plannerNote: currentState.plannerNote,
+          subagentContexts: currentState.subagentContexts
+        }),
+        buildMessages: (currentState, brief) => [
+          {
+            role: 'system',
+            content: `${currentState.systemPrompt}\n${brief}\n例句会由独立结构化卡片展示，所以正文里不要再输出一整段例句列表。`
+          },
+          ...currentState.messages,
+          {
+            role: 'user',
+            content: `请基于以上计划和工具结果，回答用户原问题：${currentState.message}`
           }
-        });
-      } catch (e) {
-        finalAnswer = buildFallbackTutorAnswer(state.message, state.toolCalls);
-        writeSse(res, 'agent_note', {
-          agent: 'tutor',
-          title: 'Tutor 降级',
-          content: 'DeepSeek token 流暂时超时，已基于工具结果生成本地摘要。'
-        });
-        emitTextAsTokens(res, finalAnswer);
-      }
-
-      return {
-        finalAnswer,
-        completed: [...state.completed, 'tutor']
-      };
+        ],
+        estimateUsage: (messages, sandbox) => {
+          const estimatedPromptTokens = estimateChatTokens(messages, getDefaultLlmModel());
+          const usage = buildUsageReport({
+            model: getDefaultLlmModel(),
+            promptTokens: estimatedPromptTokens,
+            completionTokens: 0,
+            totalTokens: estimatedPromptTokens,
+            estimated: true
+          });
+          writeSse(res, 'usage', {
+            stage: 'preflight',
+            ...usage,
+            agent: 'tutor',
+            sandboxId: sandbox.id
+          });
+          return usage;
+        },
+        streamText: async ({ messages, sandbox, onToken, onUsage }) => {
+          await streamLlmText({
+            messages,
+            model: getDefaultLlmModel(),
+            temperature: 0.25,
+            maxTokens: sandbox.policy.maxCompletionTokens || 1700,
+            onToken,
+            onUsage: (usage) => {
+              const report = buildUsageReport({
+                model: getDefaultLlmModel(),
+                promptTokens: usage.prompt_tokens || 0,
+                completionTokens: usage.completion_tokens || 0,
+                totalTokens: usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)),
+                estimated: false
+              });
+              writeSse(res, 'usage', {
+                stage: 'final',
+                ...report,
+                agent: 'tutor',
+                sandboxId: sandbox.id
+              });
+              onUsage(report);
+            }
+          });
+        },
+        buildFallbackAnswer: (currentState) => buildFallbackTutorAnswer(currentState.message, currentState.toolCalls),
+        onFallback: (_error, sandbox) => {
+          writeSse(res, 'agent_note', {
+            agent: 'tutor',
+            title: 'Tutor 降级',
+            content: `DeepSeek token 流暂时超时，已基于工具结果生成本地摘要。Sandbox timeout ${sandbox.policy.timeoutMs || 0}ms`,
+            sandbox: sandbox.describe()
+          });
+        },
+        emitFallbackText: (text) => emitTextAsTokens(res, text)
+      });
     })
     .addNode('memory_manager', async (state) => {
-      emitAgentQueue(res, state.agentQueue, 'memory_manager', state.completed, '正在刷新记忆队列');
-      const memorySnapshot = await executeAgentTool('memory_status', {});
       const memoryBrief = learningSubagentRegistry.memory_manager.buildBrief({
         context: state.context
       });
+      const memoryResult = await memoryExecutor.runToolSubagent({
+        state,
+        queueNote: '正在刷新记忆队列',
+        title: 'Memory Manager',
+        buildBrief: () => memoryBrief,
+        planTools: () => [{ name: 'memory_status', arguments: {} }],
+        buildToolMessage: ({ tool, rawResult }) => ({
+          role: 'user',
+          content: `Memory Manager 工具 ${tool.name} 返回：${JSON.stringify(rawResult)}`
+        }),
+        buildStatePatch: ({ state: currentState, sandbox, toolPayloads, toolCalls }) => ({
+          messages: currentState.messages,
+          toolCalls: [...currentState.toolCalls, ...toolCalls],
+          subagentContexts: {
+            ...currentState.subagentContexts,
+            memory_manager: {
+              ...memoryBrief,
+              sandbox: sandbox.describe()
+            }
+          },
+          memorySnapshot: toolPayloads[0]?.rawResult || null
+        })
+      });
+
+      const memorySnapshot = memoryResult.memorySnapshot;
       let structuredExamples = [];
       const interactivePractice = buildInteractivePractice({
         message: state.message,
@@ -1028,13 +1783,19 @@ function createLearningAgentGraph({ res, closedRef, intent }) {
           message: state.message,
           finalAnswer: state.finalAnswer,
           toolCalls: state.toolCalls,
-          memoryCandidates: state.memoryCandidates
+          memoryCandidates: state.memoryCandidates,
+          context: state.context
         });
       } catch (error) {
         console.error('Failed to generate structured agent examples:', error);
         structuredExamples = buildFallbackAgentExamples({
           message: state.message,
-          memoryCandidates: state.memoryCandidates
+          memoryCandidates: state.memoryCandidates,
+          difficultyLevel: resolveDifficultyLevel({
+            requested: state.context?.exampleDifficulty || getMemorySettings().exampleDifficulty,
+            lookup: state.context?.lookup || null,
+            memoryCandidates: state.memoryCandidates
+          })
         });
       }
       writeSse(res, 'agent_note', {
@@ -1044,20 +1805,24 @@ function createLearningAgentGraph({ res, closedRef, intent }) {
       });
 
       return {
+        ...memoryResult,
         memorySnapshot,
         structuredExamples,
         interactivePractice,
         subagentContexts: {
-          ...state.subagentContexts,
-          memory_manager: memoryBrief
-        },
-        completed: [...state.completed, 'memory_manager']
+          ...memoryResult.subagentContexts,
+          memory_manager: {
+            ...(memoryResult.subagentContexts?.memory_manager || {}),
+            ...memoryBrief
+          }
+        }
       };
     });
 
   if (specialistId === 'example_designer') {
     graph = graph.addNode('example_designer', buildSpecialistNodeExecutor({
       specialistId: 'example_designer',
+      runId,
       queueNote: '正在整理场景例句 brief',
       stateKey: 'example_designer',
       title: 'Example Coach',
@@ -1067,13 +1832,15 @@ function createLearningAgentGraph({ res, closedRef, intent }) {
       }),
       writeSse,
       emitAgentQueue,
-      res
+      res,
+      closedRef
     }));
   }
 
   if (specialistId === 'practice_coach') {
     graph = graph.addNode('practice_coach', buildSpecialistNodeExecutor({
       specialistId: 'practice_coach',
+      runId,
       queueNote: '正在按画像整理练习 brief',
       stateKey: 'practice_coach',
       title: 'Practice Coach',
@@ -1083,7 +1850,8 @@ function createLearningAgentGraph({ res, closedRef, intent }) {
       }),
       writeSse,
       emitAgentQueue,
-      res
+      res,
+      closedRef
     }));
   }
 
@@ -1106,7 +1874,7 @@ function createLearningAgentGraph({ res, closedRef, intent }) {
   return graph.compile();
 }
 
-async function streamLlmText({ messages, model, temperature = 0.25, maxTokens = 1600, onToken }) {
+async function streamLlmText({ messages, model, temperature = 0.25, maxTokens = 1600, onToken, onUsage, shouldCancel }) {
   if (getLlmProvider() !== 'ollama') {
     const response = await callOpenAiCompatibleChat({ messages, model, stream: true, temperature, maxTokens, timeoutMs: 25000 });
     const reader = response.body.getReader();
@@ -1114,6 +1882,10 @@ async function streamLlmText({ messages, model, temperature = 0.25, maxTokens = 
     let buffer = '';
 
     while (true) {
+      if (shouldCancel?.()) {
+        await reader.cancel().catch(() => {});
+        throw new Error('Tutor cancelled');
+      }
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -1125,8 +1897,15 @@ async function streamLlmText({ messages, model, temperature = 0.25, maxTokens = 
         if (!line) continue;
         const dataStr = line.slice(6).trim();
         if (dataStr === '[DONE]') return;
+        if (shouldCancel?.()) {
+          await reader.cancel().catch(() => {});
+          throw new Error('Tutor cancelled');
+        }
         try {
           const data = JSON.parse(dataStr);
+          if (data.usage && typeof onUsage === 'function') {
+            onUsage(data.usage);
+          }
           const content = data.choices?.[0]?.delta?.content || '';
           if (content) onToken(content);
         } catch (e) {
@@ -1144,6 +1923,9 @@ async function streamLlmText({ messages, model, temperature = 0.25, maxTokens = 
   });
 
   for await (const part of response) {
+    if (shouldCancel?.()) {
+      throw new Error('Tutor cancelled');
+    }
     const content = part.message?.content || '';
     if (content) onToken(content);
   }
@@ -1355,6 +2137,90 @@ const providerDefaults = {
   ollama: { baseUrl: 'http://127.0.0.1:11434', model: 'qwen2.5' }
 };
 
+const contextWindowByModel = {
+  'deepseek-v4-flash': 1_000_000,
+  'gpt-4o-mini': 128_000,
+  'anthropic/claude-3.5-sonnet': 200_000,
+  'deepseek-ai/DeepSeek-V3': 128_000,
+  'qwen2.5': 32_768
+};
+
+function getModelContextWindow(model = '') {
+  return contextWindowByModel[model] || 128_000;
+}
+
+function buildAgentRunTitle(text = '') {
+  const normalized = String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[？?！!。]+$/g, '')
+    .trim();
+  if (!normalized) return '新问题';
+  const firstClause = normalized.split(/[，。！？；,.!?:：]/)[0]?.trim() || normalized;
+  return firstClause.length > 18 ? `${firstClause.slice(0, 18)}…` : firstClause;
+}
+
+function getTokenEncoder(model = '') {
+  try {
+    return encodingForModel(model || 'gpt-4o-mini');
+  } catch (error) {
+    return getEncoding('cl100k_base');
+  }
+}
+
+function estimateChatTokens(messages = [], model = '') {
+  const encoder = getTokenEncoder(model);
+  try {
+    let total = 0;
+    for (const message of messages) {
+      const role = String(message?.role || '');
+      const content = Array.isArray(message?.content)
+        ? JSON.stringify(message.content)
+        : String(message?.content || '');
+      total += 8;
+      total += encoder.encode(role).length;
+      total += encoder.encode(content).length;
+    }
+    return total + 12;
+  } finally {
+    encoder.free?.();
+  }
+}
+
+function buildUsageReport({
+  model,
+  promptTokens = 0,
+  completionTokens = 0,
+  totalTokens = 0,
+  estimated = false
+}) {
+  const contextWindow = getModelContextWindow(model);
+  const ratio = contextWindow > 0 ? totalTokens / contextWindow : 0;
+  const remainingTokens = Math.max(0, contextWindow - totalTokens);
+  let level = 'ok';
+  let warning = '';
+
+  if (ratio >= 0.9) {
+    level = 'danger';
+    warning = '上下文已接近上限，较早对话可能被压缩或忽略。';
+  } else if (ratio >= 0.75) {
+    level = 'warn';
+    warning = '上下文已经较长，继续追问时建议及时收束或让我先总结。';
+  }
+
+  return {
+    model,
+    contextWindow,
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    remainingTokens,
+    usageRatio: Number(ratio.toFixed(4)),
+    estimated,
+    level,
+    warning
+  };
+}
+
 function getRuntimeLlmSettings({ includeSecret = false } = {}) {
   const saved = getLlmSettings({ includeSecret: true });
   const envProvider = process.env.LLM_PROVIDER;
@@ -1415,6 +2281,9 @@ async function callOpenAiCompatibleChat({
     temperature,
     max_tokens: maxTokens
   };
+  if (stream) {
+    body.stream_options = { include_usage: true };
+  }
   // `thinking` 是 DeepSeek 专有字段，OpenAI / OpenRouter 等会因未知参数报 400，需按 provider 区分。
   if (settings.provider === 'deepseek') {
     body.thinking = { type: 'disabled' };
@@ -1429,15 +2298,30 @@ async function callOpenAiCompatibleChat({
     body.tool_choice = toolChoice;
   }
 
-  const response = await fetch(buildChatCompletionsUrl(settings.baseUrl), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${settings.apiKey}`
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs)
-  });
+  const makeRequest = async (requestBody) => {
+    const response = await fetch(buildChatCompletionsUrl(settings.baseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${settings.apiKey}`
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    return response;
+  };
+
+  let response = await makeRequest(body);
+  if (!response.ok && stream && body.stream_options) {
+    const errorText = await response.text().catch(() => '');
+    const unsupportedUsage = response.status === 400 && /stream_options|include_usage|unsupported/i.test(errorText);
+    if (unsupportedUsage) {
+      delete body.stream_options;
+      response = await makeRequest(body);
+    } else {
+      throw new Error(`${settings.provider} API error ${response.status}: ${errorText.slice(0, 240)}`);
+    }
+  }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
@@ -1674,7 +2558,14 @@ function normalizeDojoAnswer(text = '') {
 
 function buildDojoHint(question = {}) {
   const answer = String(question.answer || '');
+  const difficultyLevel = question.difficultyLevel || 'N3';
   if (!answer) return '先想想这个变形对应的是哪一种结尾变化。';
+  if (difficultyLevel === 'N5' || difficultyLevel === 'N4') {
+    return `提示：先看原形词尾，再想 ${question.formLabel || '这个变形'} 的基础变化，答案开头是「${answer[0]}」。`;
+  }
+  if (difficultyLevel === 'N2' || difficultyLevel === 'N1') {
+    return `提示：先判断词尾所属活用组，再排除容易混淆的相近形式，答案开头是「${answer[0]}」。`;
+  }
   return `提示：答案一共 ${answer.length} 个假名，开头是「${answer[0]}」。`;
 }
 
@@ -1682,10 +2573,15 @@ function buildDojoExplanation(question = {}, isCorrect = false) {
   const verb = question.verb || '这个动词';
   const label = question.formLabel || question.formKey || '目标变形';
   const answer = question.answer || '';
+  const difficultyLevel = question.difficultyLevel || 'N3';
   if (isCorrect) {
-    return `很好，${verb} 的 ${label} 就是「${answer}」。继续保持这种先判断词尾再变形的思路。`;
+    return difficultyLevel === 'N5' || difficultyLevel === 'N4'
+      ? `很好，${verb} 的 ${label} 就是「${answer}」。继续保持先看词尾再变形的思路。`
+      : `很好，${verb} 的 ${label} 就是「${answer}」。继续保持这种先判断词尾再变形的思路。`;
   }
-  return `${verb} 这一题考的是 ${label}，正确写法是「${answer}」。先确认原形尾音，再套对应变形规则会更稳。`;
+  return difficultyLevel === 'N2' || difficultyLevel === 'N1'
+    ? `${verb} 这一题考的是 ${label}，正确写法是「${answer}」。先判断活用组，再和相邻变形区分，会更稳。`
+    : `${verb} 这一题考的是 ${label}，正确写法是「${answer}」。先确认原形尾音，再套对应变形规则会更稳。`;
 }
 
 async function generateDojoAgentCopy({ mode = 'check', question = {}, userAnswer = '', isCorrect = false }) {
@@ -1699,8 +2595,8 @@ async function generateDojoAgentCopy({ mode = 'check', question = {}, userAnswer
 
   try {
     const prompt = mode === 'hint'
-      ? '你是日语动词练习里的 Dojo Coach。只输出一句中文提示，不要直接说出完整答案，要帮助学习者自己想出来，限制 35 字内。'
-      : '你是日语动词练习里的 Dojo Coach。只输出一句中文讲解，说明这题为什么对或错，限制 50 字内。';
+      ? `你是日语动词练习里的 Dojo Coach。当前学习者目标难度是 ${question.difficultyLevel || 'N3'}。只输出一句中文提示，不要直接说出完整答案，要帮助学习者自己想出来，限制 35 字内，提示语难度要匹配该等级。`
+      : `你是日语动词练习里的 Dojo Coach。当前学习者目标难度是 ${question.difficultyLevel || 'N3'}。只输出一句中文讲解，说明这题为什么对或错，限制 50 字内，讲解深度要匹配该等级。`;
     const text = await callLlmText({
       messages: [
         { role: 'system', content: prompt },
@@ -1738,6 +2634,23 @@ app.get('/api/llm-status', (req, res) => {
   });
 });
 
+app.get('/api/hot-placeholders', async (req, res) => {
+  try {
+    const data = await fetchHotPlaceholderExamples(String(req.query.force || '') === '1');
+    res.json({
+      source: data.source,
+      updatedAt: data.updatedAt,
+      examples: data.examples
+    });
+  } catch (error) {
+    res.status(500).json({
+      source: 'fallback',
+      updatedAt: Date.now(),
+      examples: [...defaultHotPlaceholderExamples]
+    });
+  }
+});
+
 app.get('/api/llm-settings', (req, res) => {
   res.json(getRuntimeLlmSettings());
 });
@@ -1748,6 +2661,64 @@ app.post('/api/llm-settings', (req, res) => {
   } catch (error) {
     res.status(500).json({ error: 'Failed to save LLM settings.' });
   }
+});
+
+app.get('/api/subagent-tasks', (req, res) => {
+  const limit = Math.max(0, Number.parseInt(String(req.query.limit || '0'), 10) || 0);
+  res.json(listBackgroundTasks({
+    runId: String(req.query.runId || ''),
+    status: String(req.query.status || ''),
+    limit
+  }));
+});
+
+app.get('/api/subagent-tasks/:taskId', (req, res) => {
+  const task = getBackgroundTaskResult(req.params.taskId);
+  if (!task) {
+    return res.status(404).json({ error: 'Task not found.' });
+  }
+  res.json(task);
+});
+
+app.post('/api/subagent-tasks/:taskId/cancel', (req, res) => {
+  const ok = requestCancelBackgroundTask(req.params.taskId);
+  if (!ok) {
+    return res.status(404).json({ error: 'Task not found.' });
+  }
+  res.json({ ok: true, taskId: req.params.taskId });
+});
+
+app.get('/api/agent-runs', (req, res) => {
+  const limit = Math.max(1, Number.parseInt(String(req.query.limit || '30'), 10) || 30);
+  const threadId = String(req.query.threadId || '');
+  res.json(threadId ? listAgentRunsByThread({ threadId, limit }) : listAgentRuns(limit));
+});
+
+app.get('/api/agent-runs/:runId', (req, res) => {
+  const run = getAgentRun(req.params.runId);
+  if (!run) {
+    return res.status(404).json({ error: 'Run not found.' });
+  }
+  res.json(run);
+});
+
+app.get('/api/agent-thread-summary', (req, res) => {
+  const limit = Math.max(1, Number.parseInt(String(req.query.limit || '8'), 10) || 8);
+  res.json(buildThreadSummary({
+    currentRunId: String(req.query.currentRunId || ''),
+    threadId: String(req.query.threadId || ''),
+    limit
+  }));
+});
+
+app.post('/api/agent-runs/:runId/cancel', (req, res) => {
+  updateAgentRun(req.params.runId, {
+    status: 'cancelled',
+    error: 'Cancellation requested by user',
+    summary: '运行被用户主动停止。'
+  });
+  const cancelled = requestCancelTasksForRun(req.params.runId);
+  res.json({ ok: true, runId: req.params.runId, cancelled });
 });
 
 // Furigana API: 用 kuromoji 为日文文本生成 ruby HTML
@@ -2108,7 +3079,8 @@ app.post('/api/agent/run', async (req, res) => {
       userMessage: message,
       currentLookup: context.lookup || null,
       memoryStats: context.memoryStats || null,
-      userProfile: context.userProfile || null
+      userProfile: context.userProfile || null,
+      exampleDifficulty: context.exampleDifficulty || getMemorySettings().exampleDifficulty || 'auto'
     });
 
     if (getLlmProvider() === 'ollama') {
@@ -2194,17 +3166,19 @@ app.post('/api/agent/run', async (req, res) => {
 app.post('/api/agent/stream', async (req, res) => {
   prepareSse(res);
 
-  const closedRef = { closed: false };
-  res.on('close', () => {
-    closedRef.closed = true;
-  });
-
   try {
-    const { message, context = {} } = req.body || {};
+    const { message, context = {}, runId: clientRunId, threadId: clientThreadId } = req.body || {};
     if (!message || !message.trim()) {
       writeSse(res, 'error', { message: 'Missing agent message.' });
       return res.end();
     }
+    const runId = String(clientRunId || `agent-run-${Date.now()}`);
+    const threadId = String(clientThreadId || 'default-thread');
+    const closedRef = { closed: false };
+    res.on('close', () => {
+      closedRef.closed = true;
+      requestCancelTasksForRun(runId);
+    });
 
     const systemPrompt = `你是 Japanese Word Master 的日语学习 Agent 编排器。
 你采用 DeerFlow 风格的多 Agent 工作流：Planner 规划，Researcher 调工具查证，Tutor 输出学习解释，Memory Manager 维护复习上下文。
@@ -2213,28 +3187,86 @@ app.post('/api/agent/stream', async (req, res) => {
 2. 工具结果优先，不确定就说明不确定。
 3. 输出要适合日语学习者：对比表、例句、误用提醒、下一步练习。`;
 
+    const compactSummary = buildPersistedCompactSummary({
+      currentRunId: runId,
+      threadId,
+      conversation: context.conversation || [],
+      model: getDefaultLlmModel()
+    });
+
     const userContent = JSON.stringify({
       userMessage: message,
       currentLookup: context.lookup || null,
       memoryStats: context.memoryStats || null,
-      userProfile: context.userProfile || null
+      userProfile: context.userProfile || null,
+      exampleDifficulty: context.exampleDifficulty || getMemorySettings().exampleDifficulty || 'auto',
+      compactSummary,
+      recentConversation: compactSummary.recentConversation
     });
 
     const intent = detectLearningIntent(message);
     const agentQueue = getAgentQueue(intent);
+    createAgentRun({
+      runId,
+      title: buildAgentRunTitle(message),
+      question: message,
+      intentType: intent.type || 'lookup',
+      provider: getLlmProvider(),
+      model: getDefaultLlmModel(),
+      status: 'running',
+      metadata: {
+        queue: agentQueue,
+        runtime: 'langgraph',
+        exampleDifficulty: context.exampleDifficulty || getMemorySettings().exampleDifficulty || 'auto',
+        threadId,
+        compactSummary
+      }
+    });
 
     writeSse(res, 'run_start', {
-      id: `agent-run-${Date.now()}`,
+      id: runId,
       provider: getLlmProvider(),
       model: getDefaultLlmModel(),
       queue: agentQueue,
-      runtime: 'langgraph'
+      runtime: 'langgraph',
+      threadId,
+      compactSummary
     });
 
-    const graph = createLearningAgentGraph({ res, closedRef, intent });
+    writeSse(res, 'runtime_state', {
+      threadId,
+      compactSummary,
+      threadSummary: compactSummary.threadSummary || null
+    });
+
+    if (compactSummary.applied) {
+      writeSse(res, 'agent_note', {
+        agent: 'runtime',
+        title: 'Compact',
+        content: [
+          `压缩模式：${compactSummary.mode}`,
+          compactSummary.compactedTurnCount > 0
+            ? `已压缩当前会话较早的 ${compactSummary.compactedTurnCount} 条对话`
+            : '',
+          compactSummary.persistedRunCount > 0
+            ? `并吸收最近 ${compactSummary.persistedRunCount} 轮历史摘要`
+            : '',
+          compactSummary.focusWords.length > 0
+            ? `保留焦点词：${compactSummary.focusWords.slice(0, 5).join('、')}`
+            : ''
+        ].filter(Boolean).join('；')
+      });
+    }
+
+    const graph = createLearningAgentGraph({ res, closedRef, intent, runId });
     const finalState = await graph.invoke({
+      runId,
       message,
-      context,
+      context: {
+        ...context,
+        compactSummary,
+        conversation: compactSummary.recentConversation
+      },
       intent,
       agentQueue,
       subagentContexts: {},
@@ -2248,10 +3280,30 @@ app.post('/api/agent/stream', async (req, res) => {
       finalAnswer: '',
       structuredExamples: [],
       memorySnapshot: null,
-      interactivePractice: null
+      interactivePractice: null,
+      followUpQuestions: [],
+      usageReport: null
     });
 
     emitAgentQueue(res, agentQueue, '', finalState.completed, '本轮 Agent 工作流完成');
+    updateAgentRun(runId, {
+      status: 'completed',
+      summary: String(finalState.finalAnswer || '').slice(0, 500),
+      metadata: {
+        queue: agentQueue,
+        runtime: 'langgraph',
+        completed: finalState.completed || [],
+        usage: finalState.usageReport || null,
+        threadId,
+        compactSummary,
+        compactEntry: buildRunCompactEntry({
+          message,
+          intent,
+          context,
+          finalState
+        })
+      }
+    });
     writeSse(res, 'done', {
       answer: finalState.finalAnswer,
       toolCalls: finalState.toolCalls,
@@ -2259,13 +3311,49 @@ app.post('/api/agent/stream', async (req, res) => {
       examples: finalState.structuredExamples || [],
       memory: finalState.memorySnapshot?.memory || null,
       interactivePractice: finalState.interactivePractice || null,
+      subagentContexts: finalState.subagentContexts || {},
+      usage: finalState.usageReport || null,
       runtime: 'langgraph'
     });
     res.end();
   } catch (error) {
     console.error('Streaming agent failed:', error);
-    writeSse(res, 'error', { message: error.message || 'Streaming agent failed.' });
+    if (/cancelled/i.test(error?.message || '')) {
+      updateAgentRun(req.body?.runId || '', {
+        status: 'cancelled',
+        error: error.message || 'Streaming agent cancelled.',
+        summary: '运行已停止。'
+      });
+      writeSse(res, 'cancelled', { message: error.message || 'Streaming agent cancelled.' });
+    } else {
+      updateAgentRun(req.body?.runId || '', {
+        status: 'failed',
+        error: error.message || 'Streaming agent failed.',
+        summary: '运行失败，请检查日志。'
+      });
+      writeSse(res, 'error', { message: error.message || 'Streaming agent failed.' });
+    }
     res.end();
+  }
+});
+
+app.post('/api/agent/follow-ups', async (req, res) => {
+  try {
+    const { message = '', answer = '', context = {}, intent = null } = req.body || {};
+    if (!message.trim()) {
+      return res.status(400).json({ error: 'Missing source message.' });
+    }
+    const resolvedIntent = intent || detectLearningIntent(message);
+    const suggestions = await generateFollowUpQuestions({
+      message,
+      finalAnswer: answer,
+      intent: resolvedIntent,
+      context,
+      memoryCandidates: Array.isArray(context.memoryCandidates) ? context.memoryCandidates : []
+    });
+    return res.json({ suggestions });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to generate follow-up suggestions.' });
   }
 });
 

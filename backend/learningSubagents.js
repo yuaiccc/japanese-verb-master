@@ -66,7 +66,7 @@ export function detectLearningIntent(message = '') {
   const text = String(message || '').trim();
   const terms = extractJapaneseTerms(text);
   const wantsExamples = /例句|场景|对话|便利店|餐厅|公司|学校|怎么说|怎么表达/.test(text);
-  const wantsPractice = /练习|填空|测验|题目|专项/.test(text);
+  const wantsPractice = /练习|填空|测验|测试|题目|专项|出题|来一题|来一道|考我|测测我|quiz|practice/i.test(text);
   const wantsComparison = /区别|差别|对比|敬语|误用/.test(text);
 
   return {

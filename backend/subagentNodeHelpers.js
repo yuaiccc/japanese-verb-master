@@ -1,38 +1,36 @@
-import { formatSpecialistNote, serializeSpecialistBrief } from './subagentContexts.js';
+import { SubagentExecutor } from './subagentExecutor.js';
 
 export function buildSpecialistNodeExecutor({
   specialistId,
+  runId = '',
   queueNote,
   stateKey,
   title,
   buildBrief,
-  writeSse,
   emitAgentQueue,
-  res
+  writeSse,
+  res,
+  closedRef
 }) {
+  const executor = new SubagentExecutor({
+    subagentId: specialistId,
+    label: title,
+    runId,
+    executeTool: async () => ({ ok: true }),
+    summarizeToolResult: (result) => JSON.stringify(result),
+    writeSse,
+    emitAgentQueue,
+    res,
+    closedRef
+  });
+
   return async (state) => {
-    emitAgentQueue(res, state.agentQueue, specialistId, state.completed, queueNote);
-    const brief = buildBrief(state);
-
-    writeSse(res, 'agent_note', {
-      agent: specialistId,
+    return executor.runSpecialist({
+      state,
+      queueNote,
       title,
-      content: formatSpecialistNote(specialistId, brief)
+      stateKey,
+      buildBrief
     });
-
-    return {
-      messages: [
-        ...state.messages,
-        {
-          role: 'user',
-          content: serializeSpecialistBrief(title, brief)
-        }
-      ],
-      subagentContexts: {
-        ...state.subagentContexts,
-        [stateKey]: brief
-      },
-      completed: [...state.completed, specialistId]
-    };
   };
 }

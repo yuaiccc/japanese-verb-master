@@ -429,16 +429,27 @@
             <span class="knowledge-citations__count">{{ currentAgentKnowledgeSources.length }} 条</span>
           </div>
           <div class="knowledge-citations__list">
-            <article v-for="(src, idx) in currentAgentKnowledgeSources" :key="src.id" class="knowledge-citation-card">
+            <article
+              v-for="(src, idx) in currentAgentKnowledgeSources"
+              :key="src.id"
+              class="knowledge-citation-card"
+              :class="{ 'is-expanded': expandedCitations.has(src.id) }"
+              role="button"
+              tabindex="0"
+              @click="toggleCitation(src.id)"
+              @keydown.enter.prevent="toggleCitation(src.id)"
+            >
               <div class="knowledge-citation-card__top">
                 <span class="knowledge-citation-card__index">{{ idx + 1 }}</span>
                 <strong class="knowledge-citation-card__title">{{ src.title }}</strong>
+                <span class="knowledge-citation-card__caret" aria-hidden="true">▾</span>
               </div>
               <div class="knowledge-citation-card__meta">
                 <span class="knowledge-citation-card__pill">{{ src.category }}</span>
                 <span class="knowledge-citation-card__pill knowledge-citation-card__pill--level">{{ src.level }}</span>
               </div>
               <p class="knowledge-citation-card__excerpt">{{ src.excerpt }}</p>
+              <span class="knowledge-citation-card__hint">{{ expandedCitations.has(src.id) ? '收起' : '展开全文' }}</span>
             </article>
           </div>
         </div>
@@ -1554,6 +1565,12 @@ const currentAgentMemoryCandidates = computed(() => currentAgentRun.value?.memor
 const currentAgentExamples = computed(() => currentAgentRun.value?.examples || []);
 const currentAgentInteractivePractice = computed(() => currentAgentRun.value?.interactivePractice || null);
 const currentAgentKnowledgeSources = computed(() => currentAgentRun.value?.knowledgeSources || []);
+const expandedCitations = ref(new Set());
+const toggleCitation = (id) => {
+  const next = new Set(expandedCitations.value);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  expandedCitations.value = next;
+};
 
 // 回答区右侧模块导航：滚动进度 + 锚点跳转
 const activeAgentSection = ref('');
@@ -7712,6 +7729,7 @@ select:focus-visible,
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 10px;
+  align-items: start;
 }
 .knowledge-citation-card {
   display: flex;
@@ -7778,6 +7796,29 @@ select:focus-visible,
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  white-space: pre-line;
+}
+.knowledge-citation-card { cursor: pointer; }
+.knowledge-citation-card.is-expanded .knowledge-citation-card__excerpt {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+.knowledge-citation-card__caret {
+  margin-left: auto;
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  transition: transform 0.18s ease;
+}
+.knowledge-citation-card.is-expanded .knowledge-citation-card__caret {
+  transform: rotate(180deg);
+}
+.knowledge-citation-card__hint {
+  align-self: flex-end;
+  font-size: 0.7rem;
+  color: var(--primary);
+  opacity: 0.75;
 }
 
 .agent-section-nav {

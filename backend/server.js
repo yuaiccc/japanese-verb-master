@@ -644,7 +644,7 @@ async function executeAgentTool(name, args = {}) {
       hits: results.map(r => ({
         id: r.id, resource: r.resource, title: r.title, level: r.level,
         category: r.category, score: Number(r.score.toFixed(4)),
-        excerpt: r.content.slice(0, 400)
+        excerpt: r.content.slice(0, 600)
       }))
     };
   }

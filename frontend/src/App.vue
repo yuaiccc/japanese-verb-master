@@ -248,6 +248,7 @@
       <transition name="agent-flow">
       <section
         v-if="latestAssistantMessage"
+        id="agent-sec-answer"
         class="agent-answer-core"
         :class="{ 'agent-answer-core--streaming': agentRunning }"
         aria-live="polite"
@@ -320,7 +321,7 @@
           class="agent-markdown markdown-body typewriter-output"
           v-html="renderMarkdown(latestAssistantMessage.content)"
         ></div>
-        <div v-if="currentAgentInteractivePractice" class="agent-practice-card">
+        <div v-if="currentAgentInteractivePractice" id="agent-sec-practice" class="agent-practice-card">
           <div class="agent-practice-card__head">
             <span class="agent-practice-card__eyebrow">即时练习 · 选择题</span>
             <span class="agent-practice-card__tag">{{ currentAgentInteractivePractice.question.formLabel }}</span>
@@ -383,7 +384,7 @@
             </div>
           </transition>
         </div>
-        <div v-if="currentAgentExamples.length > 0" class="agent-examples-panel">
+        <div v-if="currentAgentExamples.length > 0" id="agent-sec-examples" class="agent-examples-panel">
           <div class="examples-grid">
             <div v-for="(ex, idx) in currentAgentExamples" :key="`${ex.japanese}-${idx}`" class="example-box">
               <div class="ex-row">
@@ -422,17 +423,26 @@
             </div>
           </div>
         </div>
-        <div v-if="currentAgentKnowledgeSources.length > 0" class="knowledge-citations">
-          <span class="knowledge-citations__label">知识库引用</span>
+        <div v-if="currentAgentKnowledgeSources.length > 0" id="agent-sec-citations" class="knowledge-citations">
+          <div class="knowledge-citations__head">
+            <span class="knowledge-citations__label">知识库引用</span>
+            <span class="knowledge-citations__count">{{ currentAgentKnowledgeSources.length }} 条</span>
+          </div>
           <div class="knowledge-citations__list">
-            <div v-for="src in currentAgentKnowledgeSources" :key="src.id" class="knowledge-citation-card">
-              <strong>{{ src.title }}</strong>
-              <span class="knowledge-citation-card__meta">{{ src.category }} · {{ src.level }}</span>
-              <p>{{ src.excerpt }}</p>
-            </div>
+            <article v-for="(src, idx) in currentAgentKnowledgeSources" :key="src.id" class="knowledge-citation-card">
+              <div class="knowledge-citation-card__top">
+                <span class="knowledge-citation-card__index">{{ idx + 1 }}</span>
+                <strong class="knowledge-citation-card__title">{{ src.title }}</strong>
+              </div>
+              <div class="knowledge-citation-card__meta">
+                <span class="knowledge-citation-card__pill">{{ src.category }}</span>
+                <span class="knowledge-citation-card__pill knowledge-citation-card__pill--level">{{ src.level }}</span>
+              </div>
+              <p class="knowledge-citation-card__excerpt">{{ src.excerpt }}</p>
+            </article>
           </div>
         </div>
-        <div v-if="currentAgentFollowUpQuestions.length > 0" class="agent-followups">
+        <div v-if="currentAgentFollowUpQuestions.length > 0" id="agent-sec-followups" class="agent-followups">
           <div class="agent-followups-header">继续追问</div>
           <div class="agent-followups-list">
             <button
@@ -450,7 +460,7 @@
       </transition>
 
       <transition name="agent-flow">
-      <div class="agent-chat agent-chat--trace" v-if="currentAgentToolCalls.length > 0 && !activeAgentRunIsRunning">
+      <div id="agent-sec-tools" class="agent-chat agent-chat--trace" v-if="currentAgentToolCalls.length > 0 && !activeAgentRunIsRunning">
         <details v-if="currentAgentToolCalls.length > 0" class="agent-tool-trace">
           <summary class="tool-trace-header">
             <span>工具</span>
@@ -1115,6 +1125,25 @@
         </div>
       </section>
     </section>
+
+    <transition name="agent-flow">
+    <nav v-if="agentSectionNav.length >= 2" class="agent-section-nav" aria-label="回答模块导航">
+      <span class="agent-section-nav__track" aria-hidden="true">
+        <span class="agent-section-nav__progress" :style="{ height: `${agentScrollProgress}%` }"></span>
+      </span>
+      <button
+        v-for="item in agentSectionNav"
+        :key="item.id"
+        type="button"
+        class="agent-section-nav__item"
+        :class="{ 'is-active': activeAgentSection === item.id }"
+        @click="jumpToAgentSection(item.id)"
+      >
+        <span class="agent-section-nav__dot" aria-hidden="true"></span>
+        <span class="agent-section-nav__label">{{ item.label }}</span>
+      </button>
+    </nav>
+    </transition>
   </div>
 
 </template>
@@ -1525,6 +1554,57 @@ const currentAgentMemoryCandidates = computed(() => currentAgentRun.value?.memor
 const currentAgentExamples = computed(() => currentAgentRun.value?.examples || []);
 const currentAgentInteractivePractice = computed(() => currentAgentRun.value?.interactivePractice || null);
 const currentAgentKnowledgeSources = computed(() => currentAgentRun.value?.knowledgeSources || []);
+
+// 回答区右侧模块导航：滚动进度 + 锚点跳转
+const activeAgentSection = ref('');
+const agentScrollProgress = ref(0);
+const agentSectionNav = computed(() => {
+  if (workbenchSection.value !== 'dict' || currentMode.value === 'credits') return [];
+  const sections = [];
+  if (latestAssistantMessage.value) sections.push({ id: 'agent-sec-answer', label: '回答' });
+  if (currentAgentInteractivePractice.value) sections.push({ id: 'agent-sec-practice', label: '练习' });
+  if (currentAgentExamples.value.length > 0) sections.push({ id: 'agent-sec-examples', label: '例句' });
+  if (currentAgentKnowledgeSources.value.length > 0) sections.push({ id: 'agent-sec-citations', label: '引用' });
+  if (currentAgentFollowUpQuestions.value.length > 0) sections.push({ id: 'agent-sec-followups', label: '追问' });
+  if (currentAgentToolCalls.value.length > 0 && !activeAgentRunIsRunning.value) sections.push({ id: 'agent-sec-tools', label: '工具' });
+  return sections;
+});
+
+const jumpToAgentSection = (id) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  activeAgentSection.value = id;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+let agentScrollRaf = 0;
+const updateAgentSectionSpy = () => {
+  agentScrollRaf = 0;
+  const doc = document.documentElement;
+  const maxScroll = doc.scrollHeight - window.innerHeight;
+  agentScrollProgress.value = maxScroll > 0 ? Math.min(100, Math.max(0, (window.scrollY / maxScroll) * 100)) : 0;
+  const probe = window.innerHeight * 0.3;
+  let current = '';
+  for (const item of agentSectionNav.value) {
+    const el = document.getElementById(item.id);
+    if (!el) continue;
+    if (el.getBoundingClientRect().top <= probe) current = item.id;
+  }
+  activeAgentSection.value = current || agentSectionNav.value[0]?.id || '';
+};
+const onAgentSectionScroll = () => {
+  if (agentScrollRaf) return;
+  agentScrollRaf = requestAnimationFrame(updateAgentSectionSpy);
+};
+onMounted(() => {
+  window.addEventListener('scroll', onAgentSectionScroll, { passive: true });
+  window.addEventListener('resize', onAgentSectionScroll, { passive: true });
+});
+onUnmounted(() => {
+  window.removeEventListener('scroll', onAgentSectionScroll);
+  window.removeEventListener('resize', onAgentSectionScroll);
+  if (agentScrollRaf) cancelAnimationFrame(agentScrollRaf);
+});
 const currentAgentFollowUpQuestions = computed(() => currentAgentRun.value?.followUpQuestions || []);
 const currentAgentFollowUpLoading = computed(() => !!currentAgentRun.value?.followUpLoading);
 const currentAgentToolCalls = computed(() => currentAgentRun.value?.toolCalls || []);
@@ -7611,20 +7691,182 @@ select:focus-visible,
   }
 }
 
-.knowledge-citations { margin-top: 14px; }
-.knowledge-citations__label { font-size: 0.78rem; color: var(--text-muted); }
-.knowledge-citations__list { display: grid; gap: 8px; margin-top: 6px; }
+.knowledge-citations { margin-top: 18px; }
+.knowledge-citations__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.knowledge-citations__label {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.knowledge-citations__count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.knowledge-citations__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
 .knowledge-citation-card {
-  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
   border: 1px solid var(--surface-border);
   border-radius: var(--radius-md);
   background: var(--panel-bg);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   box-shadow: var(--glass-highlight);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
-.knowledge-citation-card__meta { margin-left: 8px; font-size: 0.74rem; color: var(--text-muted); }
-.knowledge-citation-card p { margin: 4px 0 0; font-size: 0.85rem; color: var(--text-secondary); }
+.knowledge-citation-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-soft), var(--glass-highlight);
+}
+.knowledge-citation-card__top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.knowledge-citation-card__index {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  border-radius: 50%;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.knowledge-citation-card__title {
+  font-size: 0.92rem;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.knowledge-citation-card__meta {
+  display: flex;
+  gap: 6px;
+}
+.knowledge-citation-card__pill {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  border: 1px solid var(--surface-border);
+  background: transparent;
+}
+.knowledge-citation-card__pill--level {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+.knowledge-citation-card__excerpt {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agent-section-nav {
+  position: fixed;
+  top: 50%;
+  right: 18px;
+  transform: translateY(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 10px;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-soft), var(--glass-highlight);
+}
+.agent-section-nav__track {
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  overflow: hidden;
+}
+.agent-section-nav__progress {
+  display: block;
+  width: 100%;
+  background: var(--primary);
+  border-radius: 2px;
+  transition: height 0.15s ease-out;
+}
+.agent-section-nav__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.agent-section-nav__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+.agent-section-nav__item:hover .agent-section-nav__dot {
+  transform: scale(1.3);
+}
+.agent-section-nav__item.is-active .agent-section-nav__dot {
+  background: var(--primary);
+  transform: scale(1.4);
+}
+.agent-section-nav__label {
+  position: absolute;
+  right: 26px;
+  top: 50%;
+  transform: translateY(-50%) translateX(4px);
+  padding: 3px 10px;
+  font-size: 0.74rem;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.agent-section-nav__item:hover .agent-section-nav__label,
+.agent-section-nav__item.is-active .agent-section-nav__label {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+@media (max-width: 900px) {
+  .agent-section-nav { display: none; }
+}
 
 .nav-llm-panel__embedding {
   display: flex;

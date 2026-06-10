@@ -19,7 +19,14 @@
 
 ## 借鉴 DeerFlow 的设计模式
 
-本项目 thread/run/subagent 运行时本就参考了 DeerFlow，知识库部分继续吸收它经典版（v1 deep-research）的四个模式：
+本项目 thread/run/subagent 运行时本就参考了 DeerFlow 2.0（本地源码 `~/Code/deer-flow`）。知识库部分从两个版本各取所长：
+
+**来自 2.0（本地源码核实）**：
+- **存储 provider 抽象**：2.0 的 `MemoryStorage` ABC + 工厂函数模式（`agents/memory/storage.py`），对应我们 Retriever 接口 + `LocalRetriever` 默认实现。
+- **防抖异步更新队列**：2.0 的 `MemoryUpdateQueue`（timer debounce，不阻塞主流程）。我们的条目 CRUD / 自动沉淀触发的重嵌入走同样的异步队列，embedding 永不阻塞请求路径。
+- **设计对比叙事**：2.0 重写时**砍掉了 v1 的向量 RAG**，改用 LLM 维护的结构化记忆（facts + 分层摘要）。本项目的取舍是两者并存、各管一摊：**动态用户状态**（记忆卡、学习画像、thread 摘要——已有，正是借鉴 2.0 的部分）用结构化记忆；**静态教材语料**（语法知识库）用向量检索。「什么时候该用 RAG、什么时候不该」本身就是面试高频问题，这个对比是现成答案。
+
+**来自 v1 deep-research（RAG 集成模式）**：
 
 1. **Retriever provider 抽象**（对应 DeerFlow `src/rag` 的 `Retriever` 接口）：`retriever.js` 对外暴露统一接口 `listResources()` / `queryRelevantDocuments(query, { resources, topK })`。默认实现 `LocalRetriever`（sqlite-vec + FTS5 + RRF）；接口层预留 `ragflow` 等外部 RAG provider 的接入位（`app_settings.rag_provider`，默认 `local`）。面试叙事：检索后端可插拔，本地实现零部署成本。
 2. **Resources 作用域**：知识条目按源文档组织为 resource（URI 形如 `kb://grammar/verb-conjugation`，由源文件名生成）。检索与 Agent 工具支持 `resources` 参数限定范围，另支持 level/category 过滤。
@@ -77,7 +84,7 @@ backend/knowledge-source/
 - `GET /api/knowledge/search?q=&topK=`：直接检索（调试/演示用）。
 - `POST /api/knowledge/reindex`：触发增量重建。
 - `GET /api/knowledge/stats`：条目数、索引状态、embedding 配置摘要。
-- `POST/PUT/DELETE /api/knowledge/chunks`：条目 CRUD（演示用，写入后自动重嵌）。
+- `POST/PUT/DELETE /api/knowledge/chunks`：条目 CRUD（演示用）。写入后经防抖异步队列重嵌入（参考 DeerFlow 2.0 `MemoryUpdateQueue`），不阻塞请求。
 
 ### 评测（npm run kb:eval）
 
@@ -107,6 +114,7 @@ backend/knowledge-source/
 
 - 混合检索为什么比单路好：向量召回语义近邻、BM25 抓关键词精确命中，RRF 无需调权重。
 - Retriever provider 抽象与 background investigation 借鉴 DeerFlow v1 的 RAG 集成模式，可对照讲两个项目的取舍（外部 RAG 服务 vs 进程内本地检索）。
+- DeerFlow 2.0 砍掉向量 RAG、改用结构化记忆的决策 vs 本项目「动态状态用结构化记忆、静态语料用向量检索」的分工——回答「什么场景该用 RAG」的现成案例。
 - 增量索引：content hash 避免全量重嵌，构建成本 O(变更)。
 - 降级设计：embedding 依赖不可用时系统仍可服务。
 - 评测驱动：golden set + recall/MRR，检索改动有量化依据。

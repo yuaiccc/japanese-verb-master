@@ -216,9 +216,9 @@
       <section v-if="currentAgentThreadSummary" class="agent-thread-summary card">
         <div class="agent-thread-summary__head">
           <strong>线程摘要</strong>
-          <span v-if="currentAgentRun?.compactSummary?.mode">{{ currentAgentRun.compactSummary.mode }}</span>
+          <span v-if="currentAgentRun?.compactSummary?.mode && currentAgentRun.compactSummary.mode !== 'none'">{{ currentAgentRun.compactSummary.mode }}</span>
         </div>
-        <p v-if="currentAgentThreadSummary.digest" class="agent-thread-summary__digest">{{ currentAgentThreadSummary.digest }}</p>
+        <p v-if="currentAgentThreadSummary.digest" class="agent-thread-summary__digest">{{ stripMarkdownInline(currentAgentThreadSummary.digest) }}</p>
         <div v-if="currentAgentThreadSummary.focusWords?.length" class="agent-thread-summary__group">
           <span class="agent-thread-summary__label">焦点词</span>
           <div class="agent-thread-summary__pills">
@@ -481,17 +481,6 @@
       <div class="memory-header">
         <div>
           <h2>记忆复习</h2>
-          <div class="memory-engine-line">
-            <span class="memory-engine-chip">{{ memoryEngineMeta.current }}</span>
-            <a
-              class="memory-engine-link"
-              :href="memoryEngineMeta.referenceUrl"
-              target="_blank"
-              rel="noreferrer"
-            >
-              {{ memoryEngineMeta.reference }}
-            </a>
-          </div>
         </div>
         <div class="memory-traffic" role="img" :aria-label="`待复习 ${memoryStats.due}，学习中 ${memoryStats.learning}，已稳定 ${memoryStats.mastered}`">
           <span class="traffic-dot traffic-dot--red" :class="{ 'is-active': memoryStats.due > 0 }" title="待复习">{{ memoryStats.due }}</span>
@@ -1433,11 +1422,6 @@ const memorySettings = ref({
   autoAddSimilar: false,
   exampleDifficulty: 'auto'
 });
-const memoryEngineMeta = {
-  current: '当前调度: 内置 SM-2 风格间隔复习',
-  reference: '参考开源 repo: ts-fsrs',
-  referenceUrl: 'https://github.com/open-spaced-repetition/ts-fsrs'
-};
 const memoryLibraryFilters = [
   { id: 'all', label: '全部' },
   { id: 'due', label: '待复习' },
@@ -1819,12 +1803,26 @@ const agentUsageSummary = computed(() => {
   };
 });
 
+const stripMarkdownInline = (text) => {
+  if (!text) return '';
+  return String(text)
+    .replace(/\|[-: ]+\|/g, ' ')
+    .replace(/[|#*`~_>]+/g, ' ')
+    .replace(/-{3,}/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
+
 const currentAgentThreadSummary = computed(() => {
   const summary = currentAgentRun.value?.compactSummary?.threadSummary;
   if (summary?.digest || summary?.focusWords?.length || summary?.practiceFocuses?.length) {
     return summary;
   }
-  return agentThreadSummary.value;
+  const fallback = agentThreadSummary.value;
+  if (fallback?.digest || fallback?.focusWords?.length || fallback?.practiceFocuses?.length) {
+    return fallback;
+  }
+  return null;
 });
 
 watch(activeAgentRunId, (runId) => {
@@ -3603,7 +3601,12 @@ const fetchAiExplanation = async () => {
 
 :global(body) {
   margin: 0;
-  background: #f4f1ea;
+  background:
+    radial-gradient(1200px 800px at 12% -10%, rgba(185, 95, 69, 0.09), transparent 60%),
+    radial-gradient(1000px 700px at 88% 8%, rgba(240, 217, 181, 0.45), transparent 55%),
+    radial-gradient(900px 600px at 50% 110%, rgba(185, 95, 69, 0.05), transparent 60%),
+    #f4f1ea;
+  background-attachment: fixed;
   color: #191714;
   font-family: "Songti SC", "STSong", "Source Han Serif SC", "Noto Serif SC", "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", "游明朝", serif;
   font-feature-settings: "palt" 1;
@@ -3612,7 +3615,12 @@ const fetchAiExplanation = async () => {
 }
 
 :global(html[data-theme='dark'] body) {
-  background: #191714;
+  background:
+    radial-gradient(1200px 800px at 12% -10%, rgba(224, 139, 112, 0.08), transparent 60%),
+    radial-gradient(1000px 700px at 88% 5%, rgba(82, 71, 60, 0.4), transparent 55%),
+    radial-gradient(900px 600px at 50% 115%, rgba(224, 139, 112, 0.05), transparent 60%),
+    #141210;
+  background-attachment: fixed;
   color: #f4f1ea;
 }
 
@@ -3622,13 +3630,15 @@ const fetchAiExplanation = async () => {
 }
 
 .container {
-  --surface: rgba(255, 252, 245, 0.82);
-  --surface-soft: rgba(244, 241, 234, 0.92);
-  --surface-muted: rgba(226, 219, 208, 0.78);
-  --surface-border: rgba(56, 52, 46, 0.18);
-  --field-bg: rgba(255, 252, 245, 0.94);
-  --panel-bg: rgba(248, 245, 238, 0.92);
-  --dropdown-bg: rgba(255, 252, 245, 0.98);
+  --surface: rgba(255, 253, 247, 0.58);
+  --surface-soft: rgba(250, 246, 238, 0.55);
+  --surface-muted: rgba(232, 225, 212, 0.5);
+  --surface-border: rgba(110, 100, 88, 0.16);
+  --field-bg: rgba(255, 253, 248, 0.78);
+  --panel-bg: rgba(252, 249, 242, 0.62);
+  --dropdown-bg: rgba(255, 252, 245, 0.92);
+  --glass-blur: blur(22px) saturate(1.6);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.55);
   --text-primary: #191714;
   --text-secondary: #3d3832;
   --text-muted: #756d63;
@@ -3641,8 +3651,8 @@ const fetchAiExplanation = async () => {
   --danger: #a33d2f;
   --error: var(--danger);
   --border: var(--surface-border);
-  --shadow-soft: 0 16px 42px rgba(25, 23, 20, 0.08);
-  --shadow-lift: 0 20px 50px rgba(25, 23, 20, 0.1);
+  --shadow-soft: 0 8px 24px rgba(25, 23, 20, 0.05);
+  --shadow-lift: 0 12px 32px rgba(25, 23, 20, 0.07);
   --focus-ring: 0 0 0 3px rgba(185, 95, 69, 0.24);
   --space-2: 8px;
   --space-3: 12px;
@@ -3664,13 +3674,14 @@ const fetchAiExplanation = async () => {
 }
 
 .container.app-dark {
-  --surface: rgba(35, 32, 28, 0.88);
-  --surface-soft: rgba(43, 39, 34, 0.9);
-  --surface-muted: rgba(70, 64, 56, 0.86);
-  --surface-border: rgba(244, 241, 234, 0.18);
-  --field-bg: rgba(29, 27, 24, 0.94);
-  --panel-bg: rgba(38, 35, 31, 0.94);
-  --dropdown-bg: rgba(29, 27, 24, 0.98);
+  --surface: rgba(42, 38, 34, 0.55);
+  --surface-soft: rgba(48, 44, 38, 0.5);
+  --surface-muted: rgba(72, 66, 58, 0.55);
+  --surface-border: rgba(244, 241, 234, 0.14);
+  --field-bg: rgba(34, 31, 28, 0.7);
+  --panel-bg: rgba(44, 40, 35, 0.55);
+  --dropdown-bg: rgba(32, 29, 26, 0.92);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   --text-primary: #f4f1ea;
   --text-secondary: #ded8cc;
   --text-muted: #a69d91;
@@ -3681,8 +3692,8 @@ const fetchAiExplanation = async () => {
   --accent-soft: rgba(244, 241, 234, 0.1);
   --success: #8fbe8e;
   --danger: #f19a84;
-  --shadow-soft: 0 22px 48px rgba(0, 0, 0, 0.28);
-  --shadow-lift: 0 26px 58px rgba(0, 0, 0, 0.32);
+  --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.26);
+  --shadow-lift: 0 14px 36px rgba(0, 0, 0, 0.3);
   --focus-ring: 0 0 0 3px rgba(224, 139, 112, 0.3);
 }
 
@@ -3717,16 +3728,17 @@ const fetchAiExplanation = async () => {
 
 .nav-llm-toggle {
   max-width: min(280px, 42vw);
-  height: 32px;
-  border: 1px solid var(--surface-border);
+  height: 28px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--surface);
+  background: transparent;
   color: var(--text-muted);
-  padding: 0 12px;
+  padding: 0 10px;
   cursor: pointer;
   font: inherit;
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: 0.74rem;
+  font-weight: 600;
+  opacity: 0.75;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3734,7 +3746,8 @@ const fetchAiExplanation = async () => {
 
 .nav-llm-toggle:hover {
   color: var(--text-primary);
-  border-color: var(--primary);
+  border-color: var(--surface-border);
+  opacity: 1;
 }
 
 .nav-llm-panel {
@@ -3926,8 +3939,10 @@ const fetchAiExplanation = async () => {
   background: var(--surface);
   padding: 4px;
   border-radius: var(--radius-md);
-  box-shadow: 0 12px 26px rgba(24, 35, 31, 0.07);
+  box-shadow: var(--shadow-soft), var(--glass-highlight);
   border: 1px solid var(--surface-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
 }
 
 .mode-switch button {
@@ -3945,7 +3960,7 @@ const fetchAiExplanation = async () => {
 .mode-switch button.active {
   background: var(--field-bg);
   color: var(--text-primary);
-  box-shadow: 0 8px 18px rgba(24, 35, 31, 0.09);
+  box-shadow: 0 4px 12px rgba(24, 35, 31, 0.08);
 }
 
 /* === 致谢页 === */
@@ -4114,11 +4129,12 @@ const fetchAiExplanation = async () => {
   align-items: center;
   background: var(--surface);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lift);
+  box-shadow: var(--shadow-lift), var(--glass-highlight);
   padding: 6px 6px 6px 14px;
   transition: box-shadow 0.25s ease, border-color 0.25s ease, background-color 0.25s ease;
   border: 1px solid var(--surface-border);
-  backdrop-filter: blur(12px);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
 }
 
 .search-bar:focus-within {
@@ -4385,11 +4401,12 @@ const fetchAiExplanation = async () => {
 /* === 卡片 === */
 .card {
   background: var(--surface);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: 20px;
-  box-shadow: var(--shadow-soft);
+  box-shadow: var(--shadow-soft), var(--glass-highlight);
   border: 1px solid var(--surface-border);
-  backdrop-filter: blur(10px);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
 }
 
 .card h3 {
@@ -4446,37 +4463,6 @@ const fetchAiExplanation = async () => {
 
 .memory-eyebrow {
   margin-bottom: 4px;
-}
-
-.memory-engine-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  flex-wrap: wrap;
-}
-
-.memory-engine-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--surface-border);
-  border-radius: 999px;
-  background: var(--panel-bg);
-  color: var(--text-secondary);
-  font-size: 0.73rem;
-  font-weight: 650;
-}
-
-.memory-engine-link {
-  color: var(--text-muted);
-  font-size: 0.74rem;
-  text-decoration: none;
-}
-
-.memory-engine-link:hover {
-  color: var(--primary);
 }
 
 .agent-status {
@@ -6381,30 +6367,18 @@ ruby rt {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 16%, transparent), 0 0 0 2px color-mix(in srgb, var(--panel-bg) 86%, transparent);
 }
 
-.example-highlight.is-topic {
-  background: color-mix(in srgb, #f6d84b 56%, transparent);
-}
-
-.example-highlight.is-subject {
-  background: color-mix(in srgb, #73d0ff 54%, transparent);
-}
-
-.example-highlight.is-object {
-  background: color-mix(in srgb, #9ae6b4 56%, transparent);
-}
-
-.example-highlight.is-predicate {
-  background: color-mix(in srgb, #f8b4d9 58%, transparent);
-}
-
+.example-highlight.is-topic,
+.example-highlight.is-subject,
+.example-highlight.is-object,
+.example-highlight.is-predicate,
 .example-highlight.is-location,
 .example-highlight.is-time,
 .example-highlight.is-direction {
-  background: color-mix(in srgb, #c4b5fd 48%, transparent);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
 }
 
 .example-highlight.is-support {
-  background: color-mix(in srgb, var(--surface-border) 72%, transparent);
+  background: color-mix(in srgb, var(--surface-border) 50%, transparent);
 }
 
 .ex-kana {
@@ -7406,9 +7380,13 @@ select:focus-visible,
   box-shadow: var(--focus-ring);
 }
 
-.app-dark .mode-switch button.active,
 .app-dark .pref-toggle-thumb {
   background: #f8fafc;
+}
+
+.app-dark .mode-switch button.active {
+  background: rgba(244, 241, 234, 0.14);
+  color: var(--text-primary);
 }
 
 .app-dark .brand-mark {

@@ -2,9 +2,9 @@ export const subagentSandboxPolicies = {
   researcher: {
     id: 'researcher',
     label: 'Researcher Sandbox',
-    allowedTools: ['external_search', 'lookup_word', 'recommend_similar', 'memory_status'],
+    allowedTools: ['knowledge_search', 'external_search', 'lookup_word', 'recommend_similar', 'memory_status'],
     exposedContextKeys: ['lookup', 'memoryStats', 'userProfile', 'exampleDifficulty', 'conversation', 'compactSummary'],
-    maxToolCalls: 6,
+    maxToolCalls: 7,
     allowNetwork: true,
     allowMemoryWrite: false,
     maxResultChars: 1400

@@ -12,7 +12,7 @@ export async function ingestKnowledge({ db, embedder, sourceDir }) {
   const incoming = files.flatMap(f => parseSourceFile(fs.readFileSync(path.join(sourceDir, f), 'utf8'), f));
 
   const existing = new Map(
-    db.prepare('SELECT id, doc_id, title, content_hash FROM knowledge_chunks').all()
+    db.prepare('SELECT id, doc_id, title, content_hash, has_embedding FROM knowledge_chunks').all()
       .map(row => [`${row.doc_id} ${row.title}`, row])
   );
 
@@ -37,6 +37,10 @@ export async function ingestKnowledge({ db, embedder, sourceDir }) {
       const prior = existing.get(key);
       if (prior && prior.content_hash === chunk.contentHash) {
         report.unchanged += 1;
+        // 内容未变但此前在降级模式下未嵌入：本轮 embedder 可用时补嵌
+        if (embedder && !prior.has_embedding) {
+          toEmbed.push({ id: prior.id, text: `${chunk.title}\n${chunk.content}` });
+        }
         continue;
       }
       const { id } = upsert.get({ ...chunk, tags: JSON.stringify(chunk.tags) });

@@ -67,3 +67,15 @@ test('without embedder still indexes for BM25 (degraded build)', async () => {
   assert.equal(report.embedded, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS c FROM knowledge_chunks WHERE has_embedding = 1').get().c, 0);
 });
+
+test('later run backfills embeddings for unchanged chunks indexed while degraded', async () => {
+  const { dir, db } = setup();
+  await ingestKnowledge({ db, embedder: null, sourceDir: dir });
+  const { embedder, getCalls } = makeEmbedder();
+  const report = await ingestKnowledge({ db, embedder, sourceDir: dir });
+  assert.equal(report.added, 0);
+  assert.equal(report.unchanged, 2);
+  assert.equal(report.embedded, 2);
+  assert.equal(getCalls(), 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM knowledge_chunks WHERE has_embedding = 1').get().c, 2);
+});

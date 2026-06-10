@@ -16,17 +16,17 @@
 
 ---
 
-Japanese Word Master 正在从传统“日语动词变形工具”升级为一个垂类日语学习 Agent。它保留了词典、动词活用、场景练习和记忆复习能力，同时引入 LangGraph 多阶段 Agent、可切换 LLM Provider、外部搜索、token 级流式输出，以及一套受 DeerFlow 启发的 thread / run / subagent runtime，让查词变成可解释、可追踪、可复习的学习闭环。
+Japanese Word Master 正在从传统“日语动词变形工具”升级为一个垂类日语学习 Agent。它保留了词典、动词活用、场景练习和记忆复习能力，同时引入 LangGraph 多阶段 Agent、可切换 LLM Provider、外部搜索、token 级流式输出，以及一套 thread / run / subagent runtime，让查词变成可解释、可追踪、可复习的学习闭环。
 
 ## 核心能力
 
 - **LangGraph 多 Agent 工作流**：`Planner -> Researcher -> Tutor -> Memory Manager`，每一步都是真实 LangGraph 节点。
-- **DeerFlow 风格运行时**：具备 `thread -> run -> subagent task` 三层结构，支持持久化 run 历史、subagent 任务账本、运行取消、thread 摘要和自动 compact。
+- **线程化运行时**：具备 `thread -> run -> subagent task` 三层结构，支持持久化 run 历史、subagent 任务账本、运行取消、thread 摘要和自动 compact。
 - **流式 Agent 体验**：通过 SSE 实时推送 `queue`、`tool_start`、`tool_end`、`token`、`done` 事件，前端将工具过程压成回答区内的小胶囊，不抢占主视觉。
 - **Thread 级上下文压缩**：根据 token 压力、对话长度和近期 run 数量动态选择 `none / light / standard / aggressive` compact 模式，自动保留主题、焦点词和练习焦点。
 - **外部搜索与工具调用**：Agent 可调用外部搜索、Jisho/Wiktionary/Wikipedia 资料、本地词典、相似词推荐和记忆状态工具。
 - **练习驱动的记忆闭环 ⭐**：Agent 生成的练习题是可交互的，作答结果会直接回流到长期记忆系统——答对延长复习间隔、答错缩短并尽快重现，练过但未入库的词会自动建卡。这是把「学」与「记」打通的核心创新点。
-- **LLM Switch**：借鉴 `cc-switch` 的 provider 快速切换思路，支持 DeepSeek、OpenAI、OpenRouter、SiliconFlow、Custom 和 Ollama。
+- **LLM Switch**：支持 DeepSeek、OpenAI、OpenRouter、SiliconFlow、Custom 和 Ollama 多 provider 快速切换。
 - **日语词典与动词活用**：支持五段、一段、サ变、カ变动词，生成常用活用形式。
 - **记忆卡片系统**：内置 SQLite 记忆卡、复习队列、到期提醒和可调复习参数。
 - **场景练习**：按日常生活、点餐、学校、旅行、职场等场景练习高频动词。
@@ -54,9 +54,9 @@ flowchart LR
 
 更详细的维护说明、Agent 边界、SSE 协议和重构建议见 [维护手册](./docs/MAINTENANCE.md)。
 
-## DeerFlow 风格运行时
+## 线程化运行时
 
-当前后端已经不只是“一个会调 LLM 的 API”，而是开始具备 DeerFlow 风格的运行时分层：
+当前后端已经不只是“一个会调 LLM 的 API”，而是开始具备清晰的运行时分层：
 
 - **Thread**：前端持久化一个稳定的 `threadId`，同一条学习线程下的历史 run、compact 摘要和学习主题会被聚合在一起。
 - **Run**：每次提问都会创建一个持久化 `agent_run`，保存问题、状态、最终摘要、usage、compact 结果和 thread 元数据。
@@ -71,7 +71,7 @@ flowchart LR
 - `standard`：压缩较早对话，并吸收最近几轮摘要
 - `aggressive`：优先保留 thread digest、焦点词和练习焦点，减少旧原文
 
-这套机制参考了 DeerFlow、Claude Code 和 Hermes 的上下文压缩思路，但目前仍是本地实现，不是完整照搬上游运行时。
+这套机制当前已经支持本地 thread 级摘要、上下文压缩和运行时持久化，后续会继续补强 thread resume、checkpoint 和更细粒度的 compact 策略。
 
 ## 练习驱动的记忆闭环
 
@@ -276,7 +276,7 @@ node --check server.js
 ## 路线图
 
 - [x] 练习结果回流长期记忆系统（间隔复习闭环）
-- [x] DeerFlow 风格的 run / subagent task ledger
+- [x] run / subagent task ledger
 - [x] Thread 级 compact 与摘要注入
 - [ ] 更完整的 thread resume / thread 切换
 - [ ] LangGraph checkpoint / 更细粒度 thread 持久化

@@ -32,6 +32,15 @@ import {
   listAgentRuns,
   listAgentRunsByThread
 } from './db.js';
+import db from './db.js';
+import { ensureKnowledgeSchema } from './knowledge/schema.js';
+import { createEmbedder } from './knowledge/embeddings.js';
+import { createRetriever } from './knowledge/retriever.js';
+import { createReindexQueue } from './knowledge/queue.js';
+import { ingestKnowledge } from './knowledge/ingest.js';
+import { registerKnowledgeRoutes } from './knowledge/routes.js';
+import { getKnowledgeEmbeddingSettings, saveKnowledgeEmbeddingSettings } from './knowledge/settings.js';
+import { setTokenizer as setKnowledgeTokenizer } from './knowledge/tokenize.js';
 import { getSceneById, getSceneCatalog, getSceneIdsForVerb, getVerbsForScene } from './sceneData.js';
 import {
   extractJapaneseTerms,
@@ -533,6 +542,23 @@ const agentTools = [
   {
     type: 'function',
     function: {
+      name: 'knowledge_search',
+      description: 'Search the LOCAL Japanese grammar knowledge base first for grammar rules, conjugation, particles, sentence patterns, keigo. Prefer this over external_search for grammar/usage questions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Grammar/usage question in Japanese/Chinese/English.' },
+          topK: { type: 'number' },
+          level: { type: 'string', description: 'Optional JLPT level filter like N5.' },
+          category: { type: 'string', description: 'Optional: 活用/助词/句型/敬语.' }
+        },
+        required: ['query']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'external_search',
       description: 'Search external web and Jisho for Japanese word, grammar, usage, examples, or cultural notes.',
       parameters: {
@@ -609,6 +635,19 @@ const agentTools = [
 ];
 
 async function executeAgentTool(name, args = {}) {
+  if (name === 'knowledge_search') {
+    const { results, degraded } = await knowledgeRetriever.queryRelevantDocuments(args.query || '', {
+      topK: args.topK || 5, level: args.level || '', category: args.category || ''
+    });
+    return {
+      degraded,
+      hits: results.map(r => ({
+        id: r.id, resource: r.resource, title: r.title, level: r.level,
+        category: r.category, score: Number(r.score.toFixed(4)),
+        excerpt: r.content.slice(0, 400)
+      }))
+    };
+  }
   if (name === 'external_search') {
     return externalJapaneseSearch(args.query || '');
   }
@@ -1559,13 +1598,22 @@ const LearningAgentState = Annotation.Root({
   usageReport: Annotation({ reducer: (x, y) => y ?? x, default: () => null })
 });
 
-function createLearningAgentGraph({ res, closedRef, intent, runId }) {
+function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits = [] }) {
   const specialistId = selectSpecialistSubagent(intent);
+  // 工具结果在 toolCalls 里会被摘要截断为字符串，无法回取结构化命中；
+  // 这里包一层，把 knowledge_search 的原始命中收集到请求级数组，供 done 事件引用。
+  const executeToolWithKnowledge = async (name, args) => {
+    const result = await executeAgentTool(name, args);
+    if (name === 'knowledge_search' && Array.isArray(result?.hits)) {
+      knowledgeHits.push(...result.hits);
+    }
+    return result;
+  };
   const researcherExecutor = new SubagentExecutor({
     subagentId: 'researcher',
     label: 'Researcher',
     runId,
-    executeTool: executeAgentTool,
+    executeTool: executeToolWithKnowledge,
     summarizeToolResult,
     writeSse,
     emitAgentQueue,
@@ -1600,11 +1648,25 @@ function createLearningAgentGraph({ res, closedRef, intent, runId }) {
       emitAgentQueue(res, state.agentQueue, 'planner', state.completed, '正在拆解任务和选择工具路线');
       const nextIntent = detectLearningIntent(state.message);
       const plannerNote = learningSubagentRegistry.planner.buildBrief({ intent: nextIntent });
+      // Background investigation：规划前先做一次轻量本地检索，让 Planner 知道本地有哪些资料
+      let backgroundKnowledge = '';
+      try {
+        const { results } = await knowledgeRetriever.queryRelevantDocuments(state.message || nextIntent?.query || '', { topK: 3 });
+        if (results.length > 0) {
+          backgroundKnowledge = results
+            .map(r => `- [${r.category}/${r.level}] ${r.title}: ${r.content.slice(0, 80)}`)
+            .join('\n');
+        }
+      } catch {
+        // 本地检索失败不阻塞规划
+      }
       if (closedRef.closed) return {};
       writeSse(res, 'agent_note', {
         agent: 'planner',
         title: 'Planner 计划',
-        content: formatPlannerNote(plannerNote)
+        content: formatPlannerNote(plannerNote) + (backgroundKnowledge
+          ? `\n\n本地知识库预查（规划参考）：\n${backgroundKnowledge}`
+          : '\n\n本地知识库预查：无相关条目')
       });
 
       return {
@@ -2065,10 +2127,37 @@ const PORT = process.env.PORT || 3456;
 // 中间件
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type']
 }));
 app.use(express.json());
+
+// 初始化本地语法知识库（RAG）
+ensureKnowledgeSchema(db);
+const knowledgeSettings = getKnowledgeEmbeddingSettings(db);
+const knowledgeEmbedder = createEmbedder(knowledgeSettings);
+const knowledgeRetriever = createRetriever({ db, embedder: knowledgeEmbedder, ragProvider: knowledgeSettings.ragProvider });
+const knowledgeSourceDir = path.join(__dirname, 'knowledge-source');
+const knowledgeReindexQueue = createReindexQueue({
+  run: () => ingestKnowledge({ db, embedder: knowledgeEmbedder, sourceDir: knowledgeSourceDir }),
+  delayMs: 2000
+});
+registerKnowledgeRoutes(app, {
+  db,
+  retriever: knowledgeRetriever,
+  reindexQueue: knowledgeReindexQueue,
+  getEmbeddingSettings: () => getKnowledgeEmbeddingSettings(db)
+});
+app.get('/api/knowledge/embedding-settings', (req, res) => {
+  const { apiKey, ...rest } = getKnowledgeEmbeddingSettings(db);
+  res.json({ ...rest, apiKeySet: !!apiKey });
+});
+app.post('/api/knowledge/embedding-settings', (req, res) => {
+  const saved = saveKnowledgeEmbeddingSettings(db, req.body || {});
+  knowledgeReindexQueue.schedule();
+  const { apiKey, ...rest } = saved;
+  res.json({ ...rest, apiKeySet: !!apiKey });
+});
 
 let tokenizer = null;
 
@@ -2079,6 +2168,7 @@ kuromoji.builder({ dicPath }).build((err, _tokenizer) => {
     console.error('Failed to build Kuromoji tokenizer:', err);
   } else {
     tokenizer = _tokenizer;
+    setKnowledgeTokenizer(_tokenizer);
     console.log('Kuromoji tokenizer ready');
   }
 });
@@ -3285,7 +3375,8 @@ app.post('/api/agent/stream', async (req, res) => {
       });
     }
 
-    const graph = createLearningAgentGraph({ res, closedRef, intent, runId });
+    const knowledgeHits = [];
+    const graph = createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits });
     const finalState = await graph.invoke({
       runId,
       message,
@@ -3331,6 +3422,9 @@ app.post('/api/agent/stream', async (req, res) => {
         })
       }
     });
+    const knowledgeSources = knowledgeHits
+      .filter((hit, index, arr) => arr.findIndex(h => h.id === hit.id) === index)
+      .slice(0, 5);
     writeSse(res, 'done', {
       answer: finalState.finalAnswer,
       toolCalls: finalState.toolCalls,
@@ -3339,6 +3433,7 @@ app.post('/api/agent/stream', async (req, res) => {
       memory: finalState.memorySnapshot?.memory || null,
       interactivePractice: finalState.interactivePractice || null,
       subagentContexts: finalState.subagentContexts || {},
+      knowledgeSources,
       usage: finalState.usageReport || null,
       runtime: 'langgraph'
     });

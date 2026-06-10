@@ -15,7 +15,7 @@ export function rrfFuse(rankedLists, k = 60) {
 
 const RECALL_PER_LEG = 20;
 
-export function createLocalRetriever({ db, embedder }) {
+export function createLocalRetriever({ db, embedder, mode = 'hybrid' }) {
   loadVecExtension(db);
 
   const hasVecTable = () => !!db.prepare(
@@ -65,16 +65,20 @@ export function createLocalRetriever({ db, embedder }) {
     async queryRelevantDocuments(query, { topK = 5, resources = [], level = '', category = '' } = {}) {
       const filters = { resources, level, category };
       let degraded = false;
-      let vecRows = null;
-      try {
-        vecRows = await vectorLeg(query);
-      } catch {
-        degraded = true;
-      }
       const legs = [];
-      if (Array.isArray(vecRows)) legs.push(vecRows);
-      else degraded = true;
-      legs.push(bm25Leg(query));
+      if (mode !== 'bm25') {
+        let vecRows = null;
+        try {
+          vecRows = await vectorLeg(query);
+        } catch {
+          degraded = true;
+        }
+        if (Array.isArray(vecRows)) legs.push(vecRows);
+        else degraded = true;
+      }
+      if (mode !== 'vector') {
+        legs.push(bm25Leg(query));
+      }
       const fused = rrfFuse(legs);
       return { results: hydrate(fused, filters).slice(0, topK), degraded };
     }

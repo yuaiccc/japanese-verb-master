@@ -1,0 +1,24 @@
+{
+  "cases": [
+    { "query": "て形怎么变", "expected": "verb-conjugation::て形的变化规则" },
+    { "query": "日语动词连接形规则", "expected": "verb-conjugation::て形的变化规则" },
+    { "query": "动词过去式怎么说", "expected": "verb-conjugation::た形（过去形）" },
+    { "query": "表示能力的动词形式", "expected": "verb-conjugation::可能形" },
+    { "query": "怎么让别人做某事 使役", "expected": "verb-conjugation::使役形" },
+    { "query": "动词否定怎么变", "expected": "verb-conjugation::ない形（否定形）" },
+    { "query": "怎么判断五段动词还是一段动词", "expected": "verb-conjugation::五段动词的判别" },
+    { "query": "ている是什么意思", "expected": "verb-conjugation::〜ている的两种含义" },
+    { "query": "あげる くれる もらう 区别", "expected": "verb-conjugation::授受动词（あげる・くれる・もらう）" },
+    { "query": "は和が有什么区别", "expected": "particles::は和が的区别" },
+    { "query": "助词に都有什么用法", "expected": "particles::に的用法总览" },
+    { "query": "只有 仅仅 用什么助词", "expected": "particles::だけ与しか" },
+    { "query": "一边做一边做怎么表达", "expected": "particles::ながら" },
+    { "query": "ので和のに的区别", "expected": "particles::のに与ので" },
+    { "query": "想做某事怎么说", "expected": "sentence-patterns::〜たいです（愿望）" },
+    { "query": "曾经做过某事的句型", "expected": "sentence-patterns::〜たことがある（经历）" },
+    { "query": "必须做某事 义务表达", "expected": "sentence-patterns::〜なければならない（义务）" },
+    { "query": "听说 好像 そうです", "expected": "sentence-patterns::〜そうです（样态与传闻）" },
+    { "query": "尊敬语和谦让语的区别", "expected": "keigo::敬语体系总览（尊敬语・谦让语・丁宁语）" },
+    { "query": "召し上がる是什么的敬语", "expected": "keigo::尊敬语特殊动词（いらっしゃる・召し上がる等）" }
+  ]
+}

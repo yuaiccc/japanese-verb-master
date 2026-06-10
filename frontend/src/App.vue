@@ -115,6 +115,17 @@
         >
           Supported by CC Switch
         </a>
+        <div class="nav-llm-panel__embedding">
+          <span class="nav-llm-panel__embedding-label">知识库检索 Embedding</span>
+          <select v-model="embeddingSettings.provider">
+            <option value="ollama">Ollama (本地)</option>
+            <option value="openai-compatible">OpenAI 兼容</option>
+          </select>
+          <input v-model="embeddingSettings.model" type="text" placeholder="embedding model">
+          <input v-model="embeddingSettings.baseUrl" type="text" placeholder="Base URL">
+          <input v-if="embeddingSettings.provider !== 'ollama'" v-model="embeddingSettings.apiKey" type="password" :placeholder="embeddingSettings.apiKeySet ? 'API Key 已保存' : 'API Key'">
+          <button class="agent-chip" @click="saveEmbeddingSettings">保存检索设置</button>
+        </div>
       </div>
       </transition>
     </header>
@@ -408,6 +419,16 @@
                   {{ explainExampleComponent(getActiveExampleComponent(ex, idx), ex) }}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="currentAgentKnowledgeSources.length > 0" class="knowledge-citations">
+          <span class="knowledge-citations__label">知识库引用</span>
+          <div class="knowledge-citations__list">
+            <div v-for="src in currentAgentKnowledgeSources" :key="src.id" class="knowledge-citation-card">
+              <strong>{{ src.title }}</strong>
+              <span class="knowledge-citation-card__meta">{{ src.category }} · {{ src.level }}</span>
+              <p>{{ src.excerpt }}</p>
             </div>
           </div>
         </div>
@@ -1503,6 +1524,7 @@ const activeAgentRunIsRunning = computed(() => currentAgentRun.value?.status ===
 const currentAgentMemoryCandidates = computed(() => currentAgentRun.value?.memoryCandidates || []);
 const currentAgentExamples = computed(() => currentAgentRun.value?.examples || []);
 const currentAgentInteractivePractice = computed(() => currentAgentRun.value?.interactivePractice || null);
+const currentAgentKnowledgeSources = computed(() => currentAgentRun.value?.knowledgeSources || []);
 const currentAgentFollowUpQuestions = computed(() => currentAgentRun.value?.followUpQuestions || []);
 const currentAgentFollowUpLoading = computed(() => !!currentAgentRun.value?.followUpLoading);
 const currentAgentToolCalls = computed(() => currentAgentRun.value?.toolCalls || []);
@@ -2132,6 +2154,15 @@ const loadLlmSettings = async () => {
   }
 };
 
+const embeddingSettings = ref({ provider: 'ollama', model: 'bge-m3', baseUrl: 'http://localhost:11434', apiKey: '', apiKeySet: false });
+const loadEmbeddingSettings = async () => {
+  try { embeddingSettings.value = { ...embeddingSettings.value, ...(await axios.get('/api/knowledge/embedding-settings')).data }; } catch (e) { console.error('加载检索设置失败', e); }
+};
+const saveEmbeddingSettings = async () => {
+  const { apiKeySet, ...payload } = embeddingSettings.value;
+  try { embeddingSettings.value = { ...embeddingSettings.value, ...(await axios.post('/api/knowledge/embedding-settings', payload)).data, apiKey: '' }; } catch (e) { console.error('保存检索设置失败', e); }
+};
+
 const saveLlmSettingsToServer = async () => {
   try {
     const payload = { ...llmSettings.value };
@@ -2752,6 +2783,7 @@ const runAgent = async () => {
           memoryCandidates: [...agentMemoryCandidates.value],
           examples: [...agentExamples.value],
           interactivePractice: agentInteractivePractice.value,
+          knowledgeSources: Array.isArray(payload.knowledgeSources) ? payload.knowledgeSources : [],
           usage: agentUsage.value || null,
           compactSummary: agentRuns.value.find(run => run.id === runId)?.compactSummary || null,
           subagentTasks: [...(agentRuns.value.find(run => run.id === runId)?.subagentTasks || [])]
@@ -3083,6 +3115,7 @@ onMounted(async () => {
   await loadMemoryCards();
   await loadMemorySettings();
   await loadLlmSettings();
+  loadEmbeddingSettings();
 });
 
 // 提取日文文本中的假名部分（去掉汉字），用于模糊比较
@@ -7577,4 +7610,29 @@ select:focus-visible,
     display: none;
   }
 }
+
+.knowledge-citations { margin-top: 14px; }
+.knowledge-citations__label { font-size: 0.78rem; color: var(--text-muted); }
+.knowledge-citations__list { display: grid; gap: 8px; margin-top: 6px; }
+.knowledge-citation-card {
+  padding: 10px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-highlight);
+}
+.knowledge-citation-card__meta { margin-left: 8px; font-size: 0.74rem; color: var(--text-muted); }
+.knowledge-citation-card p { margin: 4px 0 0; font-size: 0.85rem; color: var(--text-secondary); }
+
+.nav-llm-panel__embedding {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--surface-border);
+}
+.nav-llm-panel__embedding-label { font-size: 0.74rem; color: var(--text-muted); }
 </style>

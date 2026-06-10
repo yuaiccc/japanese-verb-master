@@ -2556,6 +2556,34 @@ function normalizeDojoAnswer(text = '') {
     .replace(/[・ー]/g, '');
 }
 
+// 标准答案由读音假名生成，但用户可能用汉字作答（如「歌え」对「うたえ」）。
+// 根据 verb（汉字形）与 reading（假名形）的公共词尾推导出答案的汉字写法变体。
+function buildDojoAnswerVariants(question = {}) {
+  const variants = new Set();
+  const answer = String(question.answer || '');
+  if (!answer) return variants;
+  variants.add(normalizeDojoAnswer(answer));
+
+  const verb = String(question.verb || '');
+  const reading = String(question.reading || question.kana || '');
+  if (verb && reading && verb !== reading) {
+    let tail = 0;
+    while (
+      tail < verb.length &&
+      tail < reading.length &&
+      verb[verb.length - 1 - tail] === reading[reading.length - 1 - tail]
+    ) {
+      tail += 1;
+    }
+    const kanjiStem = verb.slice(0, verb.length - tail);
+    const readingStem = reading.slice(0, reading.length - tail);
+    if (kanjiStem && readingStem && answer.startsWith(readingStem)) {
+      variants.add(normalizeDojoAnswer(kanjiStem + answer.slice(readingStem.length)));
+    }
+  }
+  return variants;
+}
+
 function buildDojoHint(question = {}) {
   const answer = String(question.answer || '');
   const difficultyLevel = question.difficultyLevel || 'N3';
@@ -2885,8 +2913,7 @@ app.post('/api/dojo-agent-turn', async (req, res) => {
     }
 
     const normalizedUser = normalizeDojoAnswer(userAnswer);
-    const normalizedAnswer = normalizeDojoAnswer(question.answer);
-    const isCorrect = normalizedUser === normalizedAnswer;
+    const isCorrect = buildDojoAnswerVariants(question).has(normalizedUser);
     const explanation = await generateDojoAgentCopy({
       mode: 'check',
       question,

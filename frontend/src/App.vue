@@ -115,6 +115,17 @@
         >
           Supported by CC Switch
         </a>
+        <div class="nav-llm-panel__embedding">
+          <span class="nav-llm-panel__embedding-label">知识库检索 Embedding</span>
+          <select v-model="embeddingSettings.provider">
+            <option value="ollama">Ollama (本地)</option>
+            <option value="openai-compatible">OpenAI 兼容</option>
+          </select>
+          <input v-model="embeddingSettings.model" type="text" placeholder="embedding model">
+          <input v-model="embeddingSettings.baseUrl" type="text" placeholder="Base URL">
+          <input v-if="embeddingSettings.provider !== 'ollama'" v-model="embeddingSettings.apiKey" type="password" :placeholder="embeddingSettings.apiKeySet ? 'API Key 已保存' : 'API Key'">
+          <button class="agent-chip" @click="saveEmbeddingSettings">保存检索设置</button>
+        </div>
       </div>
       </transition>
     </header>
@@ -237,6 +248,7 @@
       <transition name="agent-flow">
       <section
         v-if="latestAssistantMessage"
+        id="agent-sec-answer"
         class="agent-answer-core"
         :class="{ 'agent-answer-core--streaming': agentRunning }"
         aria-live="polite"
@@ -309,7 +321,7 @@
           class="agent-markdown markdown-body typewriter-output"
           v-html="renderMarkdown(latestAssistantMessage.content)"
         ></div>
-        <div v-if="currentAgentInteractivePractice" class="agent-practice-card">
+        <div v-if="currentAgentInteractivePractice" id="agent-sec-practice" class="agent-practice-card">
           <div class="agent-practice-card__head">
             <span class="agent-practice-card__eyebrow">即时练习 · 选择题</span>
             <span class="agent-practice-card__tag">{{ currentAgentInteractivePractice.question.formLabel }}</span>
@@ -372,7 +384,7 @@
             </div>
           </transition>
         </div>
-        <div v-if="currentAgentExamples.length > 0" class="agent-examples-panel">
+        <div v-if="currentAgentExamples.length > 0" id="agent-sec-examples" class="agent-examples-panel">
           <div class="examples-grid">
             <div v-for="(ex, idx) in currentAgentExamples" :key="`${ex.japanese}-${idx}`" class="example-box">
               <div class="ex-row">
@@ -411,7 +423,37 @@
             </div>
           </div>
         </div>
-        <div v-if="currentAgentFollowUpQuestions.length > 0" class="agent-followups">
+        <div v-if="currentAgentKnowledgeSources.length > 0" id="agent-sec-citations" class="knowledge-citations">
+          <div class="knowledge-citations__head">
+            <span class="knowledge-citations__label">知识库引用</span>
+            <span class="knowledge-citations__count">{{ currentAgentKnowledgeSources.length }} 条</span>
+          </div>
+          <div class="knowledge-citations__list">
+            <article
+              v-for="(src, idx) in currentAgentKnowledgeSources"
+              :key="src.id"
+              class="knowledge-citation-card"
+              :class="{ 'is-expanded': expandedCitations.has(src.id) }"
+              role="button"
+              tabindex="0"
+              @click="toggleCitation(src.id)"
+              @keydown.enter.prevent="toggleCitation(src.id)"
+            >
+              <div class="knowledge-citation-card__top">
+                <span class="knowledge-citation-card__index">{{ idx + 1 }}</span>
+                <strong class="knowledge-citation-card__title">{{ src.title }}</strong>
+                <span class="knowledge-citation-card__caret" aria-hidden="true">▾</span>
+              </div>
+              <div class="knowledge-citation-card__meta">
+                <span class="knowledge-citation-card__pill">{{ src.category }}</span>
+                <span class="knowledge-citation-card__pill knowledge-citation-card__pill--level">{{ src.level }}</span>
+              </div>
+              <p class="knowledge-citation-card__excerpt">{{ src.excerpt }}</p>
+              <span class="knowledge-citation-card__hint">{{ expandedCitations.has(src.id) ? '收起' : '展开全文' }}</span>
+            </article>
+          </div>
+        </div>
+        <div v-if="currentAgentFollowUpQuestions.length > 0" id="agent-sec-followups" class="agent-followups">
           <div class="agent-followups-header">继续追问</div>
           <div class="agent-followups-list">
             <button
@@ -429,7 +471,7 @@
       </transition>
 
       <transition name="agent-flow">
-      <div class="agent-chat agent-chat--trace" v-if="currentAgentToolCalls.length > 0 && !activeAgentRunIsRunning">
+      <div id="agent-sec-tools" class="agent-chat agent-chat--trace" v-if="currentAgentToolCalls.length > 0 && !activeAgentRunIsRunning">
         <details v-if="currentAgentToolCalls.length > 0" class="agent-tool-trace">
           <summary class="tool-trace-header">
             <span>工具</span>
@@ -448,6 +490,32 @@
         </details>
       </div>
       </transition>
+
+      <div id="agent-sec-trace" class="agent-chat agent-chat--trace" v-if="currentAgentTrace.length > 0 && !activeAgentRunIsRunning">
+        <details class="agent-tool-trace agent-exec-trace">
+          <summary class="tool-trace-header">
+            <span>执行过程</span>
+            <small>{{ currentAgentTrace.length }} 步</small>
+          </summary>
+          <ol class="exec-trace-list">
+            <li
+              v-for="step in currentAgentTrace"
+              :key="step.id"
+              class="exec-trace-step"
+              :class="`exec-trace-step--${step.status || 'done'}`"
+            >
+              <span class="exec-trace-dot" aria-hidden="true"></span>
+              <div class="exec-trace-body">
+                <div class="exec-trace-head">
+                  <strong>{{ step.title }}</strong>
+                  <time>{{ step.time }}</time>
+                </div>
+                <p v-if="step.body">{{ step.body }}</p>
+              </div>
+            </li>
+          </ol>
+        </details>
+      </div>
 
       <div v-if="similarWords.length > 0" class="agent-section">
         <h3>相似词推荐</h3>
@@ -1094,6 +1162,25 @@
         </div>
       </section>
     </section>
+
+    <transition name="agent-flow">
+    <nav v-if="agentSectionNav.length >= 2" class="agent-section-nav" aria-label="回答模块导航">
+      <span class="agent-section-nav__track" aria-hidden="true">
+        <span class="agent-section-nav__progress" :style="{ height: `${agentScrollProgress}%` }"></span>
+      </span>
+      <button
+        v-for="item in agentSectionNav"
+        :key="item.id"
+        type="button"
+        class="agent-section-nav__item"
+        :class="{ 'is-active': activeAgentSection === item.id }"
+        @click="jumpToAgentSection(item.id)"
+      >
+        <span class="agent-section-nav__dot" aria-hidden="true"></span>
+        <span class="agent-section-nav__label">{{ item.label }}</span>
+      </button>
+    </nav>
+    </transition>
   </div>
 
 </template>
@@ -1370,6 +1457,7 @@ const agentRuns = ref([]);
 const activeAgentRunId = ref(null);
 const agentToolCalls = ref([]);
 const agentEvents = ref([]);
+const agentTrace = ref([]); // 完整执行轨迹（不截断），随 run 持久化，前端折叠展示
 const agentMemoryCandidates = ref([]);
 const agentExamples = ref([]);
 const agentInteractivePractice = ref(null);
@@ -1503,9 +1591,69 @@ const activeAgentRunIsRunning = computed(() => currentAgentRun.value?.status ===
 const currentAgentMemoryCandidates = computed(() => currentAgentRun.value?.memoryCandidates || []);
 const currentAgentExamples = computed(() => currentAgentRun.value?.examples || []);
 const currentAgentInteractivePractice = computed(() => currentAgentRun.value?.interactivePractice || null);
+const currentAgentKnowledgeSources = computed(() => currentAgentRun.value?.knowledgeSources || []);
+const expandedCitations = ref(new Set());
+const toggleCitation = (id) => {
+  const next = new Set(expandedCitations.value);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  expandedCitations.value = next;
+};
+
+// 回答区右侧模块导航：滚动进度 + 锚点跳转
+const activeAgentSection = ref('');
+const agentScrollProgress = ref(0);
+const agentSectionNav = computed(() => {
+  if (workbenchSection.value !== 'dict' || currentMode.value === 'credits') return [];
+  const sections = [];
+  if (latestAssistantMessage.value) sections.push({ id: 'agent-sec-answer', label: '回答' });
+  if (currentAgentInteractivePractice.value) sections.push({ id: 'agent-sec-practice', label: '练习' });
+  if (currentAgentExamples.value.length > 0) sections.push({ id: 'agent-sec-examples', label: '例句' });
+  if (currentAgentKnowledgeSources.value.length > 0) sections.push({ id: 'agent-sec-citations', label: '引用' });
+  if (currentAgentFollowUpQuestions.value.length > 0) sections.push({ id: 'agent-sec-followups', label: '追问' });
+  if (currentAgentToolCalls.value.length > 0 && !activeAgentRunIsRunning.value) sections.push({ id: 'agent-sec-tools', label: '工具' });
+  if (currentAgentTrace.value.length > 0 && !activeAgentRunIsRunning.value) sections.push({ id: 'agent-sec-trace', label: '过程' });
+  return sections;
+});
+
+const jumpToAgentSection = (id) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  activeAgentSection.value = id;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+let agentScrollRaf = 0;
+const updateAgentSectionSpy = () => {
+  agentScrollRaf = 0;
+  const doc = document.documentElement;
+  const maxScroll = doc.scrollHeight - window.innerHeight;
+  agentScrollProgress.value = maxScroll > 0 ? Math.min(100, Math.max(0, (window.scrollY / maxScroll) * 100)) : 0;
+  const probe = window.innerHeight * 0.3;
+  let current = '';
+  for (const item of agentSectionNav.value) {
+    const el = document.getElementById(item.id);
+    if (!el) continue;
+    if (el.getBoundingClientRect().top <= probe) current = item.id;
+  }
+  activeAgentSection.value = current || agentSectionNav.value[0]?.id || '';
+};
+const onAgentSectionScroll = () => {
+  if (agentScrollRaf) return;
+  agentScrollRaf = requestAnimationFrame(updateAgentSectionSpy);
+};
+onMounted(() => {
+  window.addEventListener('scroll', onAgentSectionScroll, { passive: true });
+  window.addEventListener('resize', onAgentSectionScroll, { passive: true });
+});
+onUnmounted(() => {
+  window.removeEventListener('scroll', onAgentSectionScroll);
+  window.removeEventListener('resize', onAgentSectionScroll);
+  if (agentScrollRaf) cancelAnimationFrame(agentScrollRaf);
+});
 const currentAgentFollowUpQuestions = computed(() => currentAgentRun.value?.followUpQuestions || []);
 const currentAgentFollowUpLoading = computed(() => !!currentAgentRun.value?.followUpLoading);
 const currentAgentToolCalls = computed(() => currentAgentRun.value?.toolCalls || []);
+const currentAgentTrace = computed(() => currentAgentRun.value?.trace || []);
 const currentSubagentTasks = computed(() => currentAgentRun.value?.subagentTasks || []);
 const activeSubagentTaskId = ref('');
 const activeSubagentTaskDetails = computed(() => currentSubagentTasks.value.find(task => task.taskId === activeSubagentTaskId.value) || null);
@@ -1713,9 +1861,7 @@ const upsertSubagentTask = (runId, payload = {}) => {
   } else {
     target.subagentTasks.push(record);
   }
-  if (!activeSubagentTaskId.value) {
-    activeSubagentTaskId.value = payload.taskId;
-  }
+  // 详情卡默认收起（事件明细已在「执行过程」面板里），点击 pill 才展开，避免重复信息占满中段
 };
 
 const cancelAgentRunTasks = async (runId = '') => {
@@ -2132,6 +2278,15 @@ const loadLlmSettings = async () => {
   }
 };
 
+const embeddingSettings = ref({ provider: 'ollama', model: 'bge-m3', baseUrl: 'http://localhost:11434', apiKey: '', apiKeySet: false });
+const loadEmbeddingSettings = async () => {
+  try { embeddingSettings.value = { ...embeddingSettings.value, ...(await axios.get('/api/knowledge/embedding-settings')).data }; } catch (e) { console.error('加载检索设置失败', e); }
+};
+const saveEmbeddingSettings = async () => {
+  const { apiKeySet, ...payload } = embeddingSettings.value;
+  try { embeddingSettings.value = { ...embeddingSettings.value, ...(await axios.post('/api/knowledge/embedding-settings', payload)).data, apiKey: '' }; } catch (e) { console.error('保存检索设置失败', e); }
+};
+
 const saveLlmSettingsToServer = async () => {
   try {
     const payload = { ...llmSettings.value };
@@ -2231,6 +2386,16 @@ const formatToolResult = (call = {}) => {
   const data = parseToolPayload(call.result);
   if (!data) return '';
 
+  if (call.name === 'knowledge_search') {
+    const hits = Array.isArray(data.hits) ? data.hits : [];
+    const parts = [`命中 ${data.hitCount ?? hits.length} 条`];
+    if (data.rewritten) parts.push(`改写「${compactText(data.rewritten, 24)}」`);
+    if (data.reranked) parts.push('已精排');
+    if (data.degraded) parts.push('降级 BM25');
+    if (hits[0]) parts.push(`首条：${hits[0].title}`);
+    return parts.join(' · ');
+  }
+
   if (call.name === 'lookup_word') {
     const item = data.source === 'local' ? data : data.result;
     if (!item) return '词典里没有找到明确条目';
@@ -2270,6 +2435,7 @@ const formatToolResult = (call = {}) => {
 };
 
 const toolNameLabel = (name) => ({
+  knowledge_search: '知识库检索',
   external_search: '外部搜索',
   lookup_word: '词典查询',
   recommend_similar: '相似词推荐',
@@ -2320,7 +2486,25 @@ const pushAgentEvent = ({ title, body, status = 'running' }) => {
   if (agentEvents.value.length > 8) {
     agentEvents.value = agentEvents.value.slice(-8);
   }
+  // 完整轨迹：保留全过程（上限 80 步防失控），供折叠面板展示
+  agentTrace.value.push({
+    id: `trace-${agentTrace.value.length}-${Math.random().toString(36).slice(2, 6)}`,
+    seq: agentTrace.value.length + 1,
+    title,
+    body,
+    status,
+    time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  });
+  if (agentTrace.value.length > 80) {
+    agentTrace.value = agentTrace.value.slice(-80);
+  }
 };
+
+// run 结束后持久化轨迹：running 步骤已成历史，翻成 done，避免折叠面板里残留永久闪烁的进行中状态
+const snapshotAgentTrace = () => agentTrace.value.map(step => ({
+  ...step,
+  status: step.status === 'running' ? 'done' : step.status
+}));
 
 const parseSseFrames = (chunk, onEvent) => {
   const frames = chunk.split('\n\n');
@@ -2556,6 +2740,7 @@ const runAgent = async () => {
   agentRunning.value = true;
   agentToolCalls.value = [];
   agentEvents.value = [];
+  agentTrace.value = [];
   agentMemoryCandidates.value = [];
   agentExamples.value = [];
   agentFollowUpQuestions.value = [];
@@ -2752,9 +2937,11 @@ const runAgent = async () => {
           memoryCandidates: [...agentMemoryCandidates.value],
           examples: [...agentExamples.value],
           interactivePractice: agentInteractivePractice.value,
+          knowledgeSources: Array.isArray(payload.knowledgeSources) ? payload.knowledgeSources : [],
           usage: agentUsage.value || null,
           compactSummary: agentRuns.value.find(run => run.id === runId)?.compactSummary || null,
-          subagentTasks: [...(agentRuns.value.find(run => run.id === runId)?.subagentTasks || [])]
+          subagentTasks: [...(agentRuns.value.find(run => run.id === runId)?.subagentTasks || [])],
+          trace: snapshotAgentTrace()
         });
         loadAgentThreadSummary(runId);
         fetchFollowUpSuggestions({
@@ -2777,6 +2964,7 @@ const runAgent = async () => {
           memoryCandidates: [...agentMemoryCandidates.value],
           examples: [...agentExamples.value],
           interactivePractice: agentInteractivePractice.value,
+          trace: snapshotAgentTrace(),
           usage: agentUsage.value || null
         });
       } else if (event === 'error') {
@@ -2814,6 +3002,7 @@ const runAgent = async () => {
       examples: [...agentExamples.value],
       interactivePractice: agentInteractivePractice.value,
       followUpQuestions: [...agentFollowUpQuestions.value],
+      trace: snapshotAgentTrace(),
       usage: agentUsage.value || null
     });
     await refreshRunTaskHistory(runId);
@@ -2840,6 +3029,7 @@ const runAgent = async () => {
       examples: [...agentExamples.value],
       interactivePractice: agentInteractivePractice.value,
       followUpQuestions: [...agentFollowUpQuestions.value],
+      trace: snapshotAgentTrace(),
       usage: agentUsage.value || null
     });
     await refreshRunTaskHistory(runId);
@@ -3083,6 +3273,7 @@ onMounted(async () => {
   await loadMemoryCards();
   await loadMemorySettings();
   await loadLlmSettings();
+  loadEmbeddingSettings();
 });
 
 // 提取日文文本中的假名部分（去掉汉字），用于模糊比较
@@ -5046,10 +5237,11 @@ const fetchAiExplanation = async () => {
 }
 
 .agent-chat--trace {
-  margin-top: 6px;
-  padding: 0 4px;
-  border: 0;
-  background: transparent;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
 }
 
 .agent-answer-core {
@@ -5553,6 +5745,89 @@ const fetchAiExplanation = async () => {
 .agent-tool-card small {
   display: block;
   margin-top: 6px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+/* 执行过程：竖向时间线 */
+.agent-exec-trace .exec-trace-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 2px;
+}
+
+.exec-trace-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.exec-trace-step::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 16px;
+  bottom: -6px;
+  width: 1px;
+  background: var(--surface-border);
+}
+
+.exec-trace-step:last-child::before {
+  display: none;
+}
+
+.exec-trace-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--primary);
+  justify-self: center;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.exec-trace-step--running .exec-trace-dot {
+  animation: exec-pulse 1.2s ease-in-out infinite;
+}
+
+.exec-trace-step--error .exec-trace-dot {
+  background: #e5484d;
+  box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.18);
+}
+
+@keyframes exec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.exec-trace-body {
+  min-width: 0;
+}
+
+.exec-trace-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.exec-trace-head strong {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+}
+
+.exec-trace-head time {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.exec-trace-body p {
+  margin: 2px 0 0;
   color: var(--text-muted);
   line-height: 1.45;
   word-break: break-word;
@@ -7472,19 +7747,18 @@ select:focus-visible,
     padding: 20px;
   }
 
-  .header-top,
+  /* 窄屏下 logo 与偏好按钮保持同行（共 ~200px 宽放得下），只有功能 tabs 换行占满 */
+  .header-top {
+    align-items: center;
+  }
+
   .header-bottom {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .preference-bar {
-    justify-content: flex-start;
-    width: 100%;
-  }
-
   .brand-block {
-    align-items: flex-start;
+    align-items: center;
   }
 
   .brand-mark {
@@ -7577,4 +7851,215 @@ select:focus-visible,
     display: none;
   }
 }
+
+.knowledge-citations { margin-top: 18px; }
+.knowledge-citations__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.knowledge-citations__label {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.knowledge-citations__count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.knowledge-citations__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.knowledge-citation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-highlight);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.knowledge-citation-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-soft), var(--glass-highlight);
+}
+.knowledge-citation-card__top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.knowledge-citation-card__index {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  border-radius: 50%;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.knowledge-citation-card__title {
+  font-size: 0.92rem;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.knowledge-citation-card__meta {
+  display: flex;
+  gap: 6px;
+}
+.knowledge-citation-card__pill {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  border: 1px solid var(--surface-border);
+  background: transparent;
+}
+.knowledge-citation-card__pill--level {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+.knowledge-citation-card__excerpt {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-line;
+}
+.knowledge-citation-card { cursor: pointer; }
+.knowledge-citation-card.is-expanded .knowledge-citation-card__excerpt {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+.knowledge-citation-card__caret {
+  margin-left: auto;
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  transition: transform 0.18s ease;
+}
+.knowledge-citation-card.is-expanded .knowledge-citation-card__caret {
+  transform: rotate(180deg);
+}
+.knowledge-citation-card__hint {
+  align-self: flex-end;
+  font-size: 0.7rem;
+  color: var(--primary);
+  opacity: 0.75;
+}
+
+.agent-section-nav {
+  position: fixed;
+  top: 50%;
+  right: 18px;
+  transform: translateY(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 10px;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-soft), var(--glass-highlight);
+}
+.agent-section-nav__track {
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  overflow: hidden;
+}
+.agent-section-nav__progress {
+  display: block;
+  width: 100%;
+  background: var(--primary);
+  border-radius: 2px;
+  transition: height 0.15s ease-out;
+}
+.agent-section-nav__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.agent-section-nav__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+.agent-section-nav__item:hover .agent-section-nav__dot {
+  transform: scale(1.3);
+}
+.agent-section-nav__item.is-active .agent-section-nav__dot {
+  background: var(--primary);
+  transform: scale(1.4);
+}
+.agent-section-nav__label {
+  position: absolute;
+  right: 26px;
+  top: 50%;
+  transform: translateY(-50%) translateX(4px);
+  padding: 3px 10px;
+  font-size: 0.74rem;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.agent-section-nav__item:hover .agent-section-nav__label,
+.agent-section-nav__item:focus-visible .agent-section-nav__label {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+@media (max-width: 900px) {
+  .agent-section-nav { display: none; }
+}
+
+.nav-llm-panel__embedding {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--surface-border);
+}
+.nav-llm-panel__embedding-label { font-size: 0.74rem; color: var(--text-muted); }
 </style>

@@ -93,11 +93,12 @@ export const learningSubagentRegistry = {
   },
   researcher: {
     label: 'Researcher',
-    allowedTools: ['external_search', 'lookup_word', 'recommend_similar', 'memory_status'],
+    allowedTools: ['knowledge_search', 'external_search', 'lookup_word', 'recommend_similar', 'memory_status'],
     buildBrief: ({ intent, plannerNote, userContent }) => ({
       system: [
         '你是 Researcher。只负责收集事实，不负责给最终长答案。',
         '你只能使用分配给你的工具范围。',
+        '语法、活用、助词、句型、敬语类问题，必须先调用 knowledge_search 查本地知识库；本地命中即引用，未命中或不充分再用 external_search。',
         intent.wantsExamples
           ? '这是场景例句任务。不要把中文功能词误当成查词目标，优先收集场景、语气、角色关系信息。'
           : intent.wantsPractice
@@ -112,6 +113,7 @@ export const learningSubagentRegistry = {
       const terms = lookupTargets.length > 0 ? lookupTargets : (intent?.terms || extractJapaneseTerms(message));
       const shouldLookupWords = !intent?.wantsExamples || terms.some(term => /[\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(term));
       return [
+        { name: 'knowledge_search', arguments: { query: message } },
         ...(shouldLookupWords ? terms.slice(0, 3).map(word => ({ name: 'lookup_word', arguments: { word } })) : []),
         { name: 'external_search', arguments: { query: message } },
         ...(shouldLookupWords && terms[0] ? [{ name: 'recommend_similar', arguments: { word: terms[0] } }] : []),

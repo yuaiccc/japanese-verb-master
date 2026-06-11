@@ -1861,9 +1861,7 @@ const upsertSubagentTask = (runId, payload = {}) => {
   } else {
     target.subagentTasks.push(record);
   }
-  if (!activeSubagentTaskId.value) {
-    activeSubagentTaskId.value = payload.taskId;
-  }
+  // 详情卡默认收起（事件明细已在「执行过程」面板里），点击 pill 才展开，避免重复信息占满中段
 };
 
 const cancelAgentRunTasks = async (runId = '') => {
@@ -5239,10 +5237,11 @@ const fetchAiExplanation = async () => {
 }
 
 .agent-chat--trace {
-  margin-top: 6px;
-  padding: 0 4px;
-  border: 0;
-  background: transparent;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
 }
 
 .agent-answer-core {
@@ -7748,19 +7747,18 @@ select:focus-visible,
     padding: 20px;
   }
 
-  .header-top,
+  /* 窄屏下 logo 与偏好按钮保持同行（共 ~200px 宽放得下），只有功能 tabs 换行占满 */
+  .header-top {
+    align-items: center;
+  }
+
   .header-bottom {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .preference-bar {
-    justify-content: flex-start;
-    width: 100%;
-  }
-
   .brand-block {
-    align-items: flex-start;
+    align-items: center;
   }
 
   .brand-mark {
@@ -8047,7 +8045,7 @@ select:focus-visible,
   transition: opacity 0.16s ease, transform 0.16s ease;
 }
 .agent-section-nav__item:hover .agent-section-nav__label,
-.agent-section-nav__item.is-active .agent-section-nav__label {
+.agent-section-nav__item:focus-visible .agent-section-nav__label {
   opacity: 1;
   transform: translateY(-50%) translateX(0);
 }

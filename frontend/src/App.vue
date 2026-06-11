@@ -491,6 +491,32 @@
       </div>
       </transition>
 
+      <div id="agent-sec-trace" class="agent-chat agent-chat--trace" v-if="currentAgentTrace.length > 0 && !activeAgentRunIsRunning">
+        <details class="agent-tool-trace agent-exec-trace">
+          <summary class="tool-trace-header">
+            <span>执行过程</span>
+            <small>{{ currentAgentTrace.length }} 步</small>
+          </summary>
+          <ol class="exec-trace-list">
+            <li
+              v-for="step in currentAgentTrace"
+              :key="step.id"
+              class="exec-trace-step"
+              :class="`exec-trace-step--${step.status || 'done'}`"
+            >
+              <span class="exec-trace-dot" aria-hidden="true"></span>
+              <div class="exec-trace-body">
+                <div class="exec-trace-head">
+                  <strong>{{ step.title }}</strong>
+                  <time>{{ step.time }}</time>
+                </div>
+                <p v-if="step.body">{{ step.body }}</p>
+              </div>
+            </li>
+          </ol>
+        </details>
+      </div>
+
       <div v-if="similarWords.length > 0" class="agent-section">
         <h3>相似词推荐</h3>
         <div class="similar-grid">
@@ -1431,6 +1457,7 @@ const agentRuns = ref([]);
 const activeAgentRunId = ref(null);
 const agentToolCalls = ref([]);
 const agentEvents = ref([]);
+const agentTrace = ref([]); // 完整执行轨迹（不截断），随 run 持久化，前端折叠展示
 const agentMemoryCandidates = ref([]);
 const agentExamples = ref([]);
 const agentInteractivePractice = ref(null);
@@ -1584,6 +1611,7 @@ const agentSectionNav = computed(() => {
   if (currentAgentKnowledgeSources.value.length > 0) sections.push({ id: 'agent-sec-citations', label: '引用' });
   if (currentAgentFollowUpQuestions.value.length > 0) sections.push({ id: 'agent-sec-followups', label: '追问' });
   if (currentAgentToolCalls.value.length > 0 && !activeAgentRunIsRunning.value) sections.push({ id: 'agent-sec-tools', label: '工具' });
+  if (currentAgentTrace.value.length > 0 && !activeAgentRunIsRunning.value) sections.push({ id: 'agent-sec-trace', label: '过程' });
   return sections;
 });
 
@@ -1625,6 +1653,7 @@ onUnmounted(() => {
 const currentAgentFollowUpQuestions = computed(() => currentAgentRun.value?.followUpQuestions || []);
 const currentAgentFollowUpLoading = computed(() => !!currentAgentRun.value?.followUpLoading);
 const currentAgentToolCalls = computed(() => currentAgentRun.value?.toolCalls || []);
+const currentAgentTrace = computed(() => currentAgentRun.value?.trace || []);
 const currentSubagentTasks = computed(() => currentAgentRun.value?.subagentTasks || []);
 const activeSubagentTaskId = ref('');
 const activeSubagentTaskDetails = computed(() => currentSubagentTasks.value.find(task => task.taskId === activeSubagentTaskId.value) || null);
@@ -2359,6 +2388,16 @@ const formatToolResult = (call = {}) => {
   const data = parseToolPayload(call.result);
   if (!data) return '';
 
+  if (call.name === 'knowledge_search') {
+    const hits = Array.isArray(data.hits) ? data.hits : [];
+    const parts = [`命中 ${data.hitCount ?? hits.length} 条`];
+    if (data.rewritten) parts.push(`改写「${compactText(data.rewritten, 24)}」`);
+    if (data.reranked) parts.push('已精排');
+    if (data.degraded) parts.push('降级 BM25');
+    if (hits[0]) parts.push(`首条：${hits[0].title}`);
+    return parts.join(' · ');
+  }
+
   if (call.name === 'lookup_word') {
     const item = data.source === 'local' ? data : data.result;
     if (!item) return '词典里没有找到明确条目';
@@ -2398,6 +2437,7 @@ const formatToolResult = (call = {}) => {
 };
 
 const toolNameLabel = (name) => ({
+  knowledge_search: '知识库检索',
   external_search: '外部搜索',
   lookup_word: '词典查询',
   recommend_similar: '相似词推荐',
@@ -2448,7 +2488,25 @@ const pushAgentEvent = ({ title, body, status = 'running' }) => {
   if (agentEvents.value.length > 8) {
     agentEvents.value = agentEvents.value.slice(-8);
   }
+  // 完整轨迹：保留全过程（上限 80 步防失控），供折叠面板展示
+  agentTrace.value.push({
+    id: `trace-${agentTrace.value.length}-${Math.random().toString(36).slice(2, 6)}`,
+    seq: agentTrace.value.length + 1,
+    title,
+    body,
+    status,
+    time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  });
+  if (agentTrace.value.length > 80) {
+    agentTrace.value = agentTrace.value.slice(-80);
+  }
 };
+
+// run 结束后持久化轨迹：running 步骤已成历史，翻成 done，避免折叠面板里残留永久闪烁的进行中状态
+const snapshotAgentTrace = () => agentTrace.value.map(step => ({
+  ...step,
+  status: step.status === 'running' ? 'done' : step.status
+}));
 
 const parseSseFrames = (chunk, onEvent) => {
   const frames = chunk.split('\n\n');
@@ -2684,6 +2742,7 @@ const runAgent = async () => {
   agentRunning.value = true;
   agentToolCalls.value = [];
   agentEvents.value = [];
+  agentTrace.value = [];
   agentMemoryCandidates.value = [];
   agentExamples.value = [];
   agentFollowUpQuestions.value = [];
@@ -2883,7 +2942,8 @@ const runAgent = async () => {
           knowledgeSources: Array.isArray(payload.knowledgeSources) ? payload.knowledgeSources : [],
           usage: agentUsage.value || null,
           compactSummary: agentRuns.value.find(run => run.id === runId)?.compactSummary || null,
-          subagentTasks: [...(agentRuns.value.find(run => run.id === runId)?.subagentTasks || [])]
+          subagentTasks: [...(agentRuns.value.find(run => run.id === runId)?.subagentTasks || [])],
+          trace: snapshotAgentTrace()
         });
         loadAgentThreadSummary(runId);
         fetchFollowUpSuggestions({
@@ -2906,6 +2966,7 @@ const runAgent = async () => {
           memoryCandidates: [...agentMemoryCandidates.value],
           examples: [...agentExamples.value],
           interactivePractice: agentInteractivePractice.value,
+          trace: snapshotAgentTrace(),
           usage: agentUsage.value || null
         });
       } else if (event === 'error') {
@@ -2943,6 +3004,7 @@ const runAgent = async () => {
       examples: [...agentExamples.value],
       interactivePractice: agentInteractivePractice.value,
       followUpQuestions: [...agentFollowUpQuestions.value],
+      trace: snapshotAgentTrace(),
       usage: agentUsage.value || null
     });
     await refreshRunTaskHistory(runId);
@@ -2969,6 +3031,7 @@ const runAgent = async () => {
       examples: [...agentExamples.value],
       interactivePractice: agentInteractivePractice.value,
       followUpQuestions: [...agentFollowUpQuestions.value],
+      trace: snapshotAgentTrace(),
       usage: agentUsage.value || null
     });
     await refreshRunTaskHistory(runId);
@@ -5683,6 +5746,89 @@ const fetchAiExplanation = async () => {
 .agent-tool-card small {
   display: block;
   margin-top: 6px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+/* 执行过程：竖向时间线 */
+.agent-exec-trace .exec-trace-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 2px;
+}
+
+.exec-trace-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.exec-trace-step::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 16px;
+  bottom: -6px;
+  width: 1px;
+  background: var(--surface-border);
+}
+
+.exec-trace-step:last-child::before {
+  display: none;
+}
+
+.exec-trace-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--primary);
+  justify-self: center;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.exec-trace-step--running .exec-trace-dot {
+  animation: exec-pulse 1.2s ease-in-out infinite;
+}
+
+.exec-trace-step--error .exec-trace-dot {
+  background: #e5484d;
+  box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.18);
+}
+
+@keyframes exec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.exec-trace-body {
+  min-width: 0;
+}
+
+.exec-trace-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.exec-trace-head strong {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+}
+
+.exec-trace-head time {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.exec-trace-body p {
+  margin: 2px 0 0;
   color: var(--text-muted);
   line-height: 1.45;
   word-break: break-word;

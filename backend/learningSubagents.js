@@ -32,7 +32,11 @@ export function extractJapaneseTerms(text = '') {
 }
 
 function extractLookupTargets(text = '') {
-  const kanaAnchored = text.match(/[\p{Script=Han}]{0,4}[\p{Script=Hiragana}\p{Script=Katakana}ー]+[\p{Script=Han}]{0,2}/gu) || [];
+  // 允许汉字-假名交替（召し上がる、取り消す），否则交替词会被截成「召し」「がる」；
+  // 中文语境里「和/与/或」常把两个日语词连成一串，提取后先按连接字切开。
+  const kanaAnchored = (text.match(
+    /[\p{Script=Han}]{0,4}[\p{Script=Hiragana}\p{Script=Katakana}ー]+(?:[\p{Script=Han}]+[\p{Script=Hiragana}\p{Script=Katakana}ー]+)*[\p{Script=Han}]{0,2}/gu
+  ) || []).flatMap(item => item.split(/[和与或跟及]/));
   const quoted = [...text.matchAll(/[「『"'“”]([^「『」』"'“”]+)[」』"'“”]/g)].map(match => match[1]);
   const stopWords = new Set([
     '给我', '一个', '一些', '例句', '场景', '填空', '练习', '题目', '测验', '专项',
@@ -60,6 +64,21 @@ function extractLookupTargets(text = '') {
     })
     .filter(item => item && !stopWords.has(item))
     .slice(0, 4);
+}
+
+// 判断一个候选词是否值得喂给 lookup_word。
+// 背景 bug：中文汉字同属 \p{Script=Han}，纯中文问句（"动词的被动形怎么变"）会整句
+// 被当成"日文词"；单字假名助词（は/が）查词典必撞同音名词（歯/蛾）。
+export function isLookupWorthy(term = '') {
+  const t = String(term).trim();
+  if (!t || [...t].length > 8) return false; // 过长基本是句子片段
+  const hasKana = /[\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(t);
+  if (hasKana) {
+    return [...t].length >= 2; // 单假名是助词/语气词，交给 knowledge_search
+  }
+  // 纯汉字串：2-4 字且不含中文功能字才可能是日语词（敬語/動詞/先生）
+  if (!/^[\p{Script=Han}]{2,4}$/u.test(t)) return false;
+  return !/[的吗呢么什怎这那哪谁啥咋为没用说写读叫些着了过吧呀啊与跟或]/.test(t);
 }
 
 export function detectLearningIntent(message = '') {
@@ -110,8 +129,11 @@ export const learningSubagentRegistry = {
     }),
     planTools: ({ intent, message }) => {
       const lookupTargets = extractLookupTargets(message);
-      const terms = lookupTargets.length > 0 ? lookupTargets : (intent?.terms || extractJapaneseTerms(message));
-      const shouldLookupWords = !intent?.wantsExamples || terms.some(term => /[\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(term));
+      const rawTerms = lookupTargets.length > 0 ? lookupTargets : (intent?.terms || extractJapaneseTerms(message));
+      // 只保留像"词"的候选：剔除整句中文与单字假名助词（那些靠 knowledge_search 回答）
+      const terms = rawTerms.filter(isLookupWorthy);
+      const shouldLookupWords = terms.length > 0
+        && (!intent?.wantsExamples || terms.some(term => /[\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(term)));
       return [
         { name: 'knowledge_search', arguments: { query: message } },
         ...(shouldLookupWords ? terms.slice(0, 3).map(word => ({ name: 'lookup_word', arguments: { word } })) : []),

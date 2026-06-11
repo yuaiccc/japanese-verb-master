@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import db from '../db.js';
 import { ensureKnowledgeSchema } from '../knowledge/schema.js';
@@ -18,6 +19,17 @@ const { cases } = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'knowled
 const results = await runEval({
   retrieverFactory: (mode) => createLocalRetriever({ db, embedder, mode, reranker }),
   cases,
-  withRerank: true
+  withRerank: process.env.KB_EVAL_RERANK !== '0' // CI 等无 LLM 环境可关掉精排档
 });
 console.table(results);
+
+// 评测历史存档：追加到 eval-history.jsonl（timestamp + git sha + 语料规模 + 指标），
+// 让"语料扩容/调参后指标怎么变"可追溯，而不是跑完即丢。
+const sha = (() => {
+  try { return execSync('git rev-parse --short HEAD', { cwd: __dirname }).toString().trim(); } catch { return 'unknown'; }
+})();
+const { chunks } = db.prepare('SELECT COUNT(*) AS chunks FROM knowledge_chunks').get();
+const record = { ts: new Date().toISOString(), gitSha: sha, chunks, cases: cases.length, results };
+const historyPath = path.join(__dirname, '..', 'eval-history.jsonl');
+fs.appendFileSync(historyPath, JSON.stringify(record) + '\n');
+console.log(`\n[kb:eval] 已存档 → ${path.relative(process.cwd(), historyPath)}（${sha} · ${chunks} chunks · ${cases.length} cases）`);

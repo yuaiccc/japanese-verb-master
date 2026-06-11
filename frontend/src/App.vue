@@ -3792,10 +3792,12 @@ const fetchAiExplanation = async () => {
 
 :global(body) {
   margin: 0;
+  /* 磨砂玻璃的底层：色斑要够明显且覆盖中部，卡片 backdrop-filter 才有内容可磨 */
   background:
-    radial-gradient(1200px 800px at 12% -10%, rgba(185, 95, 69, 0.09), transparent 60%),
-    radial-gradient(1000px 700px at 88% 8%, rgba(240, 217, 181, 0.45), transparent 55%),
-    radial-gradient(900px 600px at 50% 110%, rgba(185, 95, 69, 0.05), transparent 60%),
+    radial-gradient(1100px 760px at 12% -8%, rgba(185, 95, 69, 0.16), transparent 60%),
+    radial-gradient(950px 660px at 86% 10%, rgba(240, 217, 181, 0.6), transparent 58%),
+    radial-gradient(800px 580px at 30% 55%, rgba(143, 190, 142, 0.12), transparent 62%),
+    radial-gradient(900px 620px at 72% 108%, rgba(185, 95, 69, 0.12), transparent 60%),
     #f4f1ea;
   background-attachment: fixed;
   color: #191714;
@@ -3807,12 +3809,67 @@ const fetchAiExplanation = async () => {
 
 :global(html[data-theme='dark'] body) {
   background:
-    radial-gradient(1200px 800px at 12% -10%, rgba(224, 139, 112, 0.08), transparent 60%),
-    radial-gradient(1000px 700px at 88% 5%, rgba(82, 71, 60, 0.4), transparent 55%),
-    radial-gradient(900px 600px at 50% 115%, rgba(224, 139, 112, 0.05), transparent 60%),
+    radial-gradient(1100px 760px at 12% -8%, rgba(224, 139, 112, 0.15), transparent 60%),
+    radial-gradient(950px 660px at 88% 6%, rgba(82, 71, 60, 0.55), transparent 56%),
+    radial-gradient(800px 580px at 30% 58%, rgba(118, 148, 128, 0.09), transparent 62%),
+    radial-gradient(900px 620px at 68% 112%, rgba(224, 139, 112, 0.1), transparent 60%),
     #141210;
   background-attachment: fixed;
   color: #f4f1ea;
+}
+
+/* liquid glass 的"液"：两团缓慢漂移的光斑，被卡片的 backdrop-filter 取样后产生流动的磨砂色彩 */
+:global(body::before),
+:global(body::after) {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  border-radius: 50%;
+  filter: blur(90px);
+  pointer-events: none;
+}
+
+:global(body::before) {
+  width: 54vw;
+  height: 54vw;
+  left: -10vw;
+  top: -16vh;
+  background: radial-gradient(circle at 32% 32%, rgba(224, 156, 124, 0.22), transparent 70%);
+  animation: aurora-drift-a 48s ease-in-out infinite alternate;
+}
+
+:global(body::after) {
+  width: 46vw;
+  height: 46vw;
+  right: -12vw;
+  bottom: -18vh;
+  background: radial-gradient(circle at 62% 62%, rgba(240, 217, 181, 0.3), transparent 70%);
+  animation: aurora-drift-b 62s ease-in-out infinite alternate;
+}
+
+:global(html[data-theme='dark'] body::before) {
+  background: radial-gradient(circle at 32% 32%, rgba(224, 139, 112, 0.13), transparent 70%);
+}
+
+:global(html[data-theme='dark'] body::after) {
+  background: radial-gradient(circle at 62% 62%, rgba(150, 132, 110, 0.16), transparent 70%);
+}
+
+@keyframes aurora-drift-a {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(14vw, 12vh) scale(1.18); }
+}
+
+@keyframes aurora-drift-b {
+  from { transform: translate(0, 0) scale(1.1); }
+  to { transform: translate(-12vw, -14vh) scale(0.94); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :global(body::before),
+  :global(body::after) {
+    animation: none;
+  }
 }
 
 :global(html[data-accessibility='on']) {
@@ -3829,7 +3886,10 @@ const fetchAiExplanation = async () => {
   --panel-bg: rgba(252, 249, 242, 0.62);
   --dropdown-bg: rgba(255, 252, 245, 0.92);
   --glass-blur: blur(22px) saturate(1.6);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  /* 顶部亮沿 + 底部暗沿：模拟玻璃片厚度 */
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.55), inset 0 -1px 0 rgba(25, 23, 20, 0.05);
+  /* 极淡灰度噪点（feTurbulence + 灰度矩阵），叠在玻璃面上形成"磨砂"颗粒 */
+  --glass-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0.045 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   --text-primary: #191714;
   --text-secondary: #3d3832;
   --text-muted: #756d63;
@@ -3872,7 +3932,7 @@ const fetchAiExplanation = async () => {
   --field-bg: rgba(34, 31, 28, 0.7);
   --panel-bg: rgba(44, 40, 35, 0.55);
   --dropdown-bg: rgba(32, 29, 26, 0.92);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 rgba(0, 0, 0, 0.28);
   --text-primary: #f4f1ea;
   --text-secondary: #ded8cc;
   --text-muted: #a69d91;
@@ -4591,7 +4651,7 @@ const fetchAiExplanation = async () => {
 
 /* === 卡片 === */
 .card {
-  background: var(--surface);
+  background: var(--glass-noise), var(--surface);
   border-radius: var(--radius-lg);
   padding: 20px;
   box-shadow: var(--shadow-soft), var(--glass-highlight);

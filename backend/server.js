@@ -36,6 +36,9 @@ import db from './db.js';
 import { ensureKnowledgeSchema } from './knowledge/schema.js';
 import { createEmbedder } from './knowledge/embeddings.js';
 import { createRetriever } from './knowledge/retriever.js';
+import { createReranker } from './knowledge/rerank.js';
+import { createQueryRewriter } from './knowledge/rewrite.js';
+import { createMetrics } from './knowledge/metrics.js';
 import { createReindexQueue } from './knowledge/queue.js';
 import { ingestKnowledge } from './knowledge/ingest.js';
 import { registerKnowledgeRoutes } from './knowledge/routes.js';
@@ -636,11 +639,19 @@ const agentTools = [
 
 async function executeAgentTool(name, args = {}) {
   if (name === 'knowledge_search') {
-    const { results, degraded } = await knowledgeRetriever.queryRelevantDocuments(args.query || '', {
-      topK: args.topK || 5, level: args.level || '', category: args.category || ''
+    const rawQuery = args.query || '';
+    // 查询改写（默认开）：口语提问→检索友好查询 + 关键术语，与原查询拼接做多路召回；失败降级为原查询。
+    const rewrite = args.rewrite === false
+      ? { query: rawQuery, rewritten: rawQuery, changed: false }
+      : await knowledgeRewriter.rewrite(rawQuery);
+    const { results, degraded, reranked } = await knowledgeRetriever.queryRelevantDocuments(rewrite.query, {
+      topK: args.topK || 5, level: args.level || '', category: args.category || '',
+      rerank: args.rerank !== false // 默认走三段式精排，Researcher 可显式传 false 关闭
     });
     return {
       degraded,
+      reranked,
+      rewritten: rewrite.changed ? rewrite.rewritten : undefined,
       hits: results.map(r => ({
         id: r.id, resource: r.resource, title: r.title, level: r.level,
         category: r.category, score: Number(r.score.toFixed(4)),
@@ -704,6 +715,25 @@ async function executeAgentTool(name, args = {}) {
 }
 
 function summarizeToolResult(result) {
+  // knowledge_search 命中含大体积 excerpt，整体 JSON 会超 900 字被截成无法解析的串；
+  // 这里先压成「标题 + 短摘要 + 管线标记」的紧凑结构，保证摘要可被前端解析展示。
+  if (result && Array.isArray(result.hits)) {
+    const compact = {
+      degraded: result.degraded,
+      reranked: result.reranked,
+      rewritten: result.rewritten,
+      hitCount: result.hits.length,
+      hits: result.hits.slice(0, 5).map(h => ({
+        title: h.title,
+        level: h.level,
+        category: h.category,
+        score: h.score,
+        excerpt: typeof h.excerpt === 'string' ? h.excerpt.slice(0, 50) : undefined
+      }))
+    };
+    const text = JSON.stringify(compact);
+    return text.length > 900 ? `${text.slice(0, 900)}...` : text;
+  }
   const text = JSON.stringify(result);
   return text.length > 900 ? `${text.slice(0, 900)}...` : text;
 }
@@ -2136,7 +2166,11 @@ app.use(express.json());
 ensureKnowledgeSchema(db);
 const knowledgeSettings = getKnowledgeEmbeddingSettings(db);
 const knowledgeEmbedder = createEmbedder(knowledgeSettings);
-const knowledgeRetriever = createRetriever({ db, embedder: knowledgeEmbedder, ragProvider: knowledgeSettings.ragProvider });
+// 精排器复用线上 LLM provider（callLlmText 为函数声明，已 hoist）；失败自动降级为融合顺序。
+const knowledgeReranker = createReranker({ chatFn: callLlmText });
+const knowledgeRewriter = createQueryRewriter({ chatFn: callLlmText });
+const knowledgeMetrics = createMetrics();
+const knowledgeRetriever = createRetriever({ db, embedder: knowledgeEmbedder, ragProvider: knowledgeSettings.ragProvider, reranker: knowledgeReranker, metrics: knowledgeMetrics });
 const knowledgeSourceDir = path.join(__dirname, 'knowledge-source');
 const knowledgeReindexQueue = createReindexQueue({
   run: () => ingestKnowledge({ db, embedder: knowledgeEmbedder, sourceDir: knowledgeSourceDir }),
@@ -2147,6 +2181,9 @@ registerKnowledgeRoutes(app, {
   retriever: knowledgeRetriever,
   reindexQueue: knowledgeReindexQueue,
   getEmbeddingSettings: () => getKnowledgeEmbeddingSettings(db)
+});
+app.get('/api/knowledge/metrics', (req, res) => {
+  res.json(knowledgeMetrics.snapshot());
 });
 app.get('/api/knowledge/embedding-settings', (req, res) => {
   const { apiKey, ...rest } = getKnowledgeEmbeddingSettings(db);

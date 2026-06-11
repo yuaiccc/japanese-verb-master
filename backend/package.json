@@ -11,6 +11,8 @@
     "db:fetch": "node fetch-words.js",
     "kb:build": "node scripts/kb-build.js",
     "kb:eval": "node scripts/kb-eval.js",
+    "kb:eval:answer": "node scripts/kb-eval-answer.js",
+    "kb:tune": "node scripts/kb-tune.js",
     "test": "node --test 'tests/*.test.js'"
   },
   "dependencies": {

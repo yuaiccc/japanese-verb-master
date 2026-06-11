@@ -15,7 +15,7 @@ export function rrfFuse(rankedLists, k = 60) {
 
 const RECALL_PER_LEG = 20;
 
-export function createLocalRetriever({ db, embedder, mode = 'hybrid' }) {
+export function createLocalRetriever({ db, embedder, mode = 'hybrid', reranker = null, rrfK = 60, metrics = null }) {
   loadVecExtension(db);
 
   const hasVecTable = () => !!db.prepare(
@@ -62,33 +62,59 @@ export function createLocalRetriever({ db, embedder, mode = 'hybrid' }) {
         FROM knowledge_chunks GROUP BY resource ORDER BY resource
       `).all();
     },
-    async queryRelevantDocuments(query, { topK = 5, resources = [], level = '', category = '' } = {}) {
+    async queryRelevantDocuments(query, { topK = 5, resources = [], level = '', category = '', rerank = false } = {}) {
       const filters = { resources, level, category };
+      const startedAt = Date.now();
       let degraded = false;
+      let vectorHits = 0;
+      let bm25Hits = 0;
       const legs = [];
-      if (mode !== 'bm25') {
-        let vecRows = null;
-        try {
-          vecRows = await vectorLeg(query);
-        } catch {
+
+      // 并发召回：向量腿（embedding 为网络调用）先发起返回 pending promise，
+      // BM25（同步 SQL）在其网络往返期间"免费"执行，缩短两腿串行的总延迟。
+      const vecPromise = mode !== 'bm25' ? vectorLeg(query).catch(() => null) : null;
+      if (mode !== 'vector') {
+        const bm25Rows = bm25Leg(query);
+        bm25Hits = bm25Rows.length;
+        legs.push(bm25Rows);
+      }
+      let topVectorDistance = null;
+      if (vecPromise) {
+        const vecRows = await vecPromise;
+        if (Array.isArray(vecRows)) {
+          vectorHits = vecRows.length;
+          if (vecRows[0]) topVectorDistance = vecRows[0].distance; // 最近邻距离：abstain 的置信信号
+          legs.push(vecRows);
+        } else {
           degraded = true;
         }
-        if (Array.isArray(vecRows)) legs.push(vecRows);
-        else degraded = true;
       }
-      if (mode !== 'vector') {
-        legs.push(bm25Leg(query));
+
+      const fused = rrfFuse(legs, rrfK);
+      const hydrated = hydrate(fused, filters);
+
+      // 第三段：LLM 精排（可选，默认关）。reranker 内部对任何失败都降级为融合顺序，
+      // applied 如实反映精排是否真正生效。
+      let reranked = false;
+      let results;
+      if (rerank && reranker?.enabled) {
+        const { items, applied } = await reranker.rerank(query, hydrated, { topK });
+        results = items;
+        reranked = applied;
+      } else {
+        results = hydrated.slice(0, topK);
       }
-      const fused = rrfFuse(legs);
-      return { results: hydrate(fused, filters).slice(0, topK), degraded };
+
+      metrics?.record({ latencyMs: Date.now() - startedAt, mode, vectorHits, bm25Hits, degraded, reranked });
+      return { results, degraded, reranked, topVectorDistance };
     }
   };
 }
 
-export function createRetriever({ db, embedder, ragProvider = 'local' }) {
+export function createRetriever({ db, embedder, ragProvider = 'local', reranker = null, metrics = null }) {
   // provider 抽象：目前仅 local；ragflow 等外部 provider 预留在此接入
   if (ragProvider !== 'local') {
     console.warn(`[knowledge] unknown rag provider "${ragProvider}", falling back to local`);
   }
-  return createLocalRetriever({ db, embedder });
+  return createLocalRetriever({ db, embedder, reranker, metrics });
 }

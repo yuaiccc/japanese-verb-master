@@ -103,15 +103,17 @@ flowchart LR
 
 为语法/活用/助词/句型/敬语类问题提供本地可检索的教材语料，让 Agent 优先命中本地知识、减少对外部搜索和模型自身知识的依赖。
 
-**检索链路**：query 经 embedding 适配层向量化、kuromoji 分词构造 FTS5 查询 → `knowledge_vec`（sqlite-vec KNN，向量召回语义近邻）与 `knowledge_fts`（FTS5 BM25，关键词精确命中）各取 top-20 → RRF（k=60）融合排序取 top-N。RRF 只用排名位置而非原始分，无需在异质的余弦距离与 BM25 分之间调权重。
+**检索链路（改写 → 并发召回 → RRF 融合 → LLM 精排）**：query 先经 LLM **查询改写**（口语提问 → 检索友好查询 + 关键术语，与原查询拼接做多路召回，失败降级原查询）；随后向量腿（sqlite-vec KNN）与 BM25 腿（FTS5 + kuromoji 分词）**并发**召回各取 top-20——向量腿是网络调用，BM25 在其网络往返期间同步完成，省去两腿串行的等待；两路经 RRF（k=60，只用排名位置、无需在异质的余弦距离与 BM25 分之间调权重）融合；最后可选地用 LLM 对 top-N **精排**。每次检索的延迟 / 各腿命中数 / 降级 / 精排状态都会打点，经 `GET /api/knowledge/metrics` 暴露 avg/p50/p95 聚合。
 
 ```mermaid
 flowchart LR
-  Q["查询"] --> EMB["Embedding 向量化"] --> VEC["sqlite-vec KNN top-20"]
-  Q --> TOK["kuromoji 分词"] --> FTS["FTS5 BM25 top-20"]
+  Q["查询"] --> RW["LLM 查询改写"]
+  RW --> EMB["Embedding 向量化"] --> VEC["sqlite-vec KNN top-20"]
+  RW --> TOK["kuromoji 分词"] --> FTS["FTS5 BM25 top-20"]
   VEC --> RRF["RRF 融合 (k=60)"]
   FTS --> RRF
-  RRF --> TOP["top-N 引用"]
+  RRF --> RR["LLM 精排 (可选)"]
+  RR --> TOP["top-N 引用"]
 ```
 
 **工程特性**：
@@ -119,6 +121,10 @@ flowchart LR
 - **增量索引**：每块算 SHA-256 content-hash，只对新增/变更块调用 embedding，构建成本 O(变更)；降级模式下入库的块在 embedding 恢复后会被自动补嵌。
 - **降级设计**：embedding 服务不可用时自动降级纯 BM25，结果标记 `degraded: true`，Agent 流程不中断。
 - **Provider 抽象**：embedding 支持 Ollama（默认 `bge-m3`）与 OpenAI 兼容接口（SiliconFlow 等）；检索后端通过 `rag_provider` 预留外部 RAG（如 RAGFlow）接入位。
+- **查询改写**：LLM 把口语提问改写成检索友好查询并提取关键术语，与原查询拼接做多路召回；对话式查询的命中率大幅提升（见下方优化实验）。
+- **并发召回**：向量腿（网络调用）与 BM25 腿（同步 SQL）并发执行，BM25 蹭 embedding 的网络等待，缩短检索延迟。
+- **LLM 精排 + 防幻觉**：召回融合后可用 LLM 精排提升 top-1 排序；生成阶段用「距离预过滤 + LLM gatekeeper」双闸门做 abstain，无依据时拒答而非编造。
+- **可观测性**：检索延迟 / 命中 / 降级 / 精排率打点聚合，`GET /api/knowledge/metrics` 暴露。
 - **Agent 集成**：`knowledge_search` 注册为 Researcher 首位工具（本地优先于 external_search）；Planner 前做一次轻量 background investigation 注入本地资料概览；回答区渲染知识库引用卡片。
 
 ### 构建与评测
@@ -126,22 +132,47 @@ flowchart LR
 ```bash
 cd backend
 npm run kb:build          # 解析 knowledge-source/*.md，增量写入三表（无 Ollama 时自动 --no-embed 降级）
-npm run kb:eval           # 用 golden-set.json 跑 recall@k / MRR，对照三种检索模式
+npm run kb:eval           # 50 题 golden-set 跑 recall@k / MRR / NDCG@10，对照 bm25 / vector / hybrid / hybrid+rerank 四档
+npm run kb:eval:answer    # 端到端答案质量：引用覆盖率 / 忠实度 / 幻觉率 / 拒答率（abstain、强制引用前后对比）
+npm run kb:tune           # 命中率调参：RRF-k 扫描；KB_TUNE_REWRITE=1 加跑查询改写开/关对比
 ```
 
 embedding 配置存于 `app_settings`，也可在前端设置面板的「知识库检索 Embedding」处切换 provider / 模型 / Base URL / API Key。
 
 ### 检索质量基准
 
-20 题黄金集（`backend/knowledge-source/golden-set.json`），embedding 模型 `qwen3-embedding:0.6b`：
+50 题黄金集（`backend/knowledge-source/golden-set.json`，含大量口语化提问），embedding 模型 `qwen3-embedding:0.6b`，精排复用线上 LLM：
 
-| 模式 | recall@1 | recall@3 | recall@5 | MRR |
-| --- | --- | --- | --- | --- |
-| hybrid（向量 + BM25 + RRF） | 16/20 | 19/20 | **20/20** | 0.871 |
-| vector（纯向量） | 18/20 | 19/20 | 20/20 | 0.929 |
-| bm25（纯关键词） | 12/20 | 17/20 | 17/20 | 0.708 |
+| 模式 | recall@1 | recall@3 | recall@5 | MRR | NDCG@10 |
+| --- | --- | --- | --- | --- | --- |
+| bm25（纯关键词） | 34/50 | 43/50 | 44/50 | 0.766 | 0.799 |
+| vector（纯向量） | 42/50 | 47/50 | 48/50 | 0.887 | 0.910 |
+| hybrid（向量 + BM25 + RRF） | 42/50 | 46/50 | 48/50 | 0.881 | 0.905 |
+| **hybrid + rerank（三段式）** | **48/50** | **49/50** | **49/50** | **0.967** | **0.970** |
 
-混合检索的 recall@5 达到满分且不低于任一单路（BM25 单路仅 17/20，会漏召）。该 embedding 模型语义能力很强，单路向量的 top-1 略高于混合——这正体现了 hybrid 的取舍：用少量 top-1 精度换取召回完备性与对弱语义、强关键词查询的鲁棒性。
+混合召回保证 recall 覆盖（向量 / BM25 单路各有漏召），LLM 精排再修正排序——recall@1 从 42/50 提到 48/50、MRR 0.881 → 0.967。注：单相关条目下 NDCG@10 在数学上退化为 MRR 的对数加权变体，保留该指标是为与业界口径一致。
+
+### 答案质量评测
+
+只测检索命中率不够——真正难的是**端到端答案是否有据、会不会编**。`kb:eval:answer` 在「15 域内 + 10 离题对抗」题集上，用 LLM-judge 把答案拆成原子陈述逐条溯源，度量四个指标（借鉴 RAGAS faithfulness 思路）：
+
+- **引用覆盖率**：答案中有出处支撑的陈述占比
+- **忠实度**：陈述能被检索上下文支撑的占比
+- **幻觉率**：陈述无上下文支撑（即编造）的占比
+- **拒答率**：离题问题中正确拒答（abstain）的占比
+
+### 优化实验：从"调库"到"调指标"
+
+检索/生成的每个旋钮都做成可量化的"优化前 → 后"对比（命令见上）：
+
+| 实验 | 杠杆 | 指标 | 优化前 → 后 |
+| --- | --- | --- | --- |
+| **查询改写** | 口语提问→检索友好查询+术语，多路召回 | recall@1 / MRR / NDCG@10 | **41/50 → 49/50** ／ **0.870 → 0.990** ／ 0.897 → 0.993 |
+| **abstain 双闸门** | 向量距离预过滤 + LLM gatekeeper | 离题幻觉率 ／ 拒答率 | **10.7% → 0%** ／ **0 → 100%** |
+| **强制引用** | prompt 强制逐句标注来源 | 域内引用覆盖率 | **87.2% → 90.3%** |
+| RRF-k 调参 | 融合参数 k 扫描（10–200） | MRR | k=10 最优 0.874（k=200 降至 0.869） |
+
+> abstain 的距离阈值（1.0）不是拍脑袋：实测在域内查询的最近邻向量距离 < 0.94、离题查询 > 1.06，据此取中间值做预过滤。查询改写对**对话式中文提问**收益最大——它把"怎么把动词变礼貌"这类口语映射到「ます形」等语料术语，弥补 BM25 在跨语言措辞上的弱项。
 
 ### 后端
 

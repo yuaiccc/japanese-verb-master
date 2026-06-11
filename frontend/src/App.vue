@@ -1456,8 +1456,7 @@ const agentMessages = ref([]);
 const agentRuns = ref([]);
 const activeAgentRunId = ref(null);
 const agentToolCalls = ref([]);
-const agentEvents = ref([]);
-const agentTrace = ref([]); // 完整执行轨迹（不截断），随 run 持久化，前端折叠展示
+const agentTrace = ref([]); // 完整执行轨迹（上限 80 步），随 run 持久化，前端折叠展示
 const agentMemoryCandidates = ref([]);
 const agentExamples = ref([]);
 const agentInteractivePractice = ref(null);
@@ -2475,18 +2474,8 @@ const upsertStreamingToolCall = (payload = {}, status = 'done') => {
   }
 };
 
+// 完整执行轨迹：保留全过程（上限 80 步防失控），供「执行过程」折叠面板展示
 const pushAgentEvent = ({ title, body, status = 'running' }) => {
-  agentEvents.value.push({
-    id: `${Date.now()}-${agentEvents.value.length}-${Math.random().toString(36).slice(2, 7)}`,
-    title,
-    body,
-    status,
-    time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  });
-  if (agentEvents.value.length > 8) {
-    agentEvents.value = agentEvents.value.slice(-8);
-  }
-  // 完整轨迹：保留全过程（上限 80 步防失控），供折叠面板展示
   agentTrace.value.push({
     id: `trace-${agentTrace.value.length}-${Math.random().toString(36).slice(2, 6)}`,
     seq: agentTrace.value.length + 1,
@@ -2739,7 +2728,6 @@ const runAgent = async () => {
   const runSeq = ++agentRunSeq;
   agentRunning.value = true;
   agentToolCalls.value = [];
-  agentEvents.value = [];
   agentTrace.value = [];
   agentMemoryCandidates.value = [];
   agentExamples.value = [];

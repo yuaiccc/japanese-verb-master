@@ -1,5 +1,8 @@
+// expected 支持字符串或数组：语料扩容后一道题可能存在多个同等合理的条目
+// （如「つもり」既匹配句型条目也匹配辨析条目），取排名最靠前的可接受答案计分。
 export function scoreCase(hits, expected) {
-  const index = hits.findIndex(h => `${h.docId}::${h.title}` === expected);
+  const accepted = new Set(Array.isArray(expected) ? expected : [expected]);
+  const index = hits.findIndex(h => accepted.has(`${h.docId}::${h.title}`));
   if (index === -1) return { rank: null, rr: 0 };
   return { rank: index + 1, rr: 1 / (index + 1) };
 }

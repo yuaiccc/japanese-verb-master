@@ -1,55 +1,291 @@
 {
   "cases": [
-    { "query": "て形怎么变", "expected": "verb-conjugation::て形的变化规则" },
-    { "query": "日语动词连接形规则", "expected": "verb-conjugation::て形的变化规则" },
-    { "query": "动词过去式怎么说", "expected": "verb-conjugation::た形（过去形）" },
-    { "query": "表示能力的动词形式", "expected": "verb-conjugation::可能形" },
-    { "query": "怎么让别人做某事 使役", "expected": "verb-conjugation::使役形" },
-    { "query": "动词否定怎么变", "expected": "verb-conjugation::ない形（否定形）" },
-    { "query": "怎么判断五段动词还是一段动词", "expected": "verb-conjugation::五段动词的判别" },
-    { "query": "ている是什么意思", "expected": "verb-conjugation::〜ている的两种含义" },
-    { "query": "あげる くれる もらう 区别", "expected": "verb-conjugation::授受动词（あげる・くれる・もらう）" },
-    { "query": "は和が有什么区别", "expected": "particles::は和が的区别" },
-    { "query": "助词に都有什么用法", "expected": "particles::に的用法总览" },
-    { "query": "只有 仅仅 用什么助词", "expected": "particles::だけ与しか" },
-    { "query": "一边做一边做怎么表达", "expected": "particles::ながら" },
-    { "query": "ので和のに的区别", "expected": "particles::のに与ので" },
-    { "query": "想做某事怎么说", "expected": "sentence-patterns::〜たいです（愿望）" },
-    { "query": "曾经做过某事的句型", "expected": "sentence-patterns::〜たことがある（经历）" },
-    { "query": "必须做某事 义务表达", "expected": "sentence-patterns::〜なければならない（义务）" },
-    { "query": "听说 好像 そうです", "expected": "sentence-patterns::〜そうです（样态与传闻）" },
-    { "query": "尊敬语和谦让语的区别", "expected": "keigo::敬语体系总览（尊敬语・谦让语・丁宁语）" },
-    { "query": "召し上がる是什么的敬语", "expected": "keigo::尊敬语特殊动词（いらっしゃる・召し上がる等）" },
-
-    { "query": "怎么把动词变成礼貌一点的说法", "expected": "verb-conjugation::ます形（礼貌形）" },
-    { "query": "提议一起做某事用什么动词形式", "expected": "verb-conjugation::意向形" },
-    { "query": "命令别人做事的强硬说法", "expected": "verb-conjugation::命令形" },
-    { "query": "动词后面加な表示不要做", "expected": "verb-conjugation::禁止形" },
-    { "query": "被别人做了某事怎么表达", "expected": "verb-conjugation::被动形" },
-    { "query": "自动词和他动词怎么区分", "expected": "verb-conjugation::自动词与他动词" },
-    { "query": "サ变动词和カ变动词是什么", "expected": "verb-conjugation::サ变动词与カ变动词" },
-    { "query": "怎么判断是不是一段动词", "expected": "verb-conjugation::一段动词的判别" },
-    { "query": "如果的话动词怎么变 たら", "expected": "verb-conjugation::条件形たら" },
-    { "query": "ば形条件句怎么用", "expected": "verb-conjugation::条件形ば" },
-    { "query": "不小心做了某事很后悔怎么说", "expected": "verb-conjugation::〜てしまう" },
-    { "query": "提前做好准备怎么表达 ておく", "expected": "verb-conjugation::〜てある与〜ておく" },
-    { "query": "又被迫又无奈的使役被动", "expected": "verb-conjugation::使役被动形" },
-    { "query": "把动词变成名词 の こと", "expected": "verb-conjugation::动词的名词化（の・こと）" },
-    { "query": "开始做 持续做的复合动词", "expected": "verb-conjugation::复合动词（〜始める・〜终わる・〜続ける）" },
-    { "query": "从几点到几点用什么助词", "expected": "particles::から与まで" },
-    { "query": "坐什么交通工具去 用で", "expected": "particles::で的用法总览" },
-    { "query": "表示也的助词怎么用", "expected": "particles::も的用法" },
-    { "query": "强调正是 用什么助词", "expected": "particles::こそ" },
-    { "query": "大概多少 左右 怎么说", "expected": "particles::くらい・ぐらい" },
-    { "query": "比较两个东西哪个更怎么样", "expected": "particles::より与ほど（比较）" },
-    { "query": "去某个地方的方向助词", "expected": "particles::へ与に的方向表达" },
-    { "query": "终助词ね和よ的语气区别", "expected": "particles::ね与よ（终助词）" },
-    { "query": "老是做某事 净是 用ばかり", "expected": "particles::ばかり" },
-    { "query": "也许可能会怎么说", "expected": "sentence-patterns::〜かもしれない（可能性）" },
-    { "query": "应该是这样吧 はず", "expected": "sentence-patterns::〜はずです（应该）" },
-    { "query": "最好做某事的建议说法", "expected": "sentence-patterns::〜たほうがいい（建议）" },
-    { "query": "容易做和难做怎么表达", "expected": "sentence-patterns::〜やすい・〜にくい" },
-    { "query": "打算要做某事 つもり", "expected": "sentence-patterns::〜つもり（打算）" },
-    { "query": "伺う 申す 是什么谦让语", "expected": "keigo::谦让语特殊动词（伺う・申す・いただく等）" }
+    {
+      "query": "て形怎么变",
+      "expected": "verb-conjugation::て形的变化规则"
+    },
+    {
+      "query": "日语动词连接形规则",
+      "expected": "verb-conjugation::て形的变化规则"
+    },
+    {
+      "query": "动词过去式怎么说",
+      "expected": "verb-conjugation::た形（过去形）"
+    },
+    {
+      "query": "表示能力的动词形式",
+      "expected": "verb-conjugation::可能形"
+    },
+    {
+      "query": "怎么让别人做某事 使役",
+      "expected": "verb-conjugation::使役形"
+    },
+    {
+      "query": "动词否定怎么变",
+      "expected": "verb-conjugation::ない形（否定形）"
+    },
+    {
+      "query": "怎么判断五段动词还是一段动词",
+      "expected": "verb-conjugation::五段动词的判别"
+    },
+    {
+      "query": "ている是什么意思",
+      "expected": [
+        "verb-conjugation::〜ている的两种含义",
+        "confusables::〜ている与〜てある（结果状态辨析）"
+      ]
+    },
+    {
+      "query": "あげる くれる もらう 区别",
+      "expected": "verb-conjugation::授受动词（あげる・くれる・もらう）"
+    },
+    {
+      "query": "は和が有什么区别",
+      "expected": "particles::は和が的区别"
+    },
+    {
+      "query": "助词に都有什么用法",
+      "expected": "particles::に的用法总览"
+    },
+    {
+      "query": "只有 仅仅 用什么助词",
+      "expected": "particles::だけ与しか"
+    },
+    {
+      "query": "一边做一边做怎么表达",
+      "expected": "particles::ながら"
+    },
+    {
+      "query": "ので和のに的区别",
+      "expected": "particles::のに与ので"
+    },
+    {
+      "query": "想做某事怎么说",
+      "expected": "sentence-patterns::〜たいです（愿望）"
+    },
+    {
+      "query": "曾经做过某事的句型",
+      "expected": "sentence-patterns::〜たことがある（经历）"
+    },
+    {
+      "query": "必须做某事 义务表达",
+      "expected": "sentence-patterns::〜なければならない（义务）"
+    },
+    {
+      "query": "听说 好像 そうです",
+      "expected": [
+        "sentence-patterns::〜そうです（样态与传闻）",
+        "confusables::そうだ：样态与传闻的区分"
+      ]
+    },
+    {
+      "query": "尊敬语和谦让语的区别",
+      "expected": "keigo::敬语体系总览（尊敬语・谦让语・丁宁语）"
+    },
+    {
+      "query": "召し上がる是什么的敬语",
+      "expected": "keigo::尊敬语特殊动词（いらっしゃる・召し上がる等）"
+    },
+    {
+      "query": "怎么把动词变成礼貌一点的说法",
+      "expected": "verb-conjugation::ます形（礼貌形）"
+    },
+    {
+      "query": "提议一起做某事用什么动词形式",
+      "expected": "verb-conjugation::意向形"
+    },
+    {
+      "query": "命令别人做事的强硬说法",
+      "expected": "verb-conjugation::命令形"
+    },
+    {
+      "query": "动词后面加な表示不要做",
+      "expected": "verb-conjugation::禁止形"
+    },
+    {
+      "query": "被别人做了某事怎么表达",
+      "expected": "verb-conjugation::被动形"
+    },
+    {
+      "query": "自动词和他动词怎么区分",
+      "expected": [
+        "verb-conjugation::自动词与他动词",
+        "confusables::自动词与他动词配对辨析（開く/開ける 型）"
+      ]
+    },
+    {
+      "query": "サ变动词和カ变动词是什么",
+      "expected": "verb-conjugation::サ变动词与カ变动词"
+    },
+    {
+      "query": "怎么判断是不是一段动词",
+      "expected": "verb-conjugation::一段动词的判别"
+    },
+    {
+      "query": "如果的话动词怎么变 たら",
+      "expected": [
+        "verb-conjugation::条件形たら",
+        "confusables::たら・ば・と・なら（条件四形态辨析）"
+      ]
+    },
+    {
+      "query": "ば形条件句怎么用",
+      "expected": [
+        "verb-conjugation::条件形ば",
+        "confusables::たら・ば・と・なら（条件四形态辨析）"
+      ]
+    },
+    {
+      "query": "不小心做了某事很后悔怎么说",
+      "expected": "verb-conjugation::〜てしまう"
+    },
+    {
+      "query": "提前做好准备怎么表达 ておく",
+      "expected": "verb-conjugation::〜てある与〜ておく"
+    },
+    {
+      "query": "又被迫又无奈的使役被动",
+      "expected": "verb-conjugation::使役被动形"
+    },
+    {
+      "query": "把动词变成名词 の こと",
+      "expected": "verb-conjugation::动词的名词化（の・こと）"
+    },
+    {
+      "query": "开始做 持续做的复合动词",
+      "expected": "verb-conjugation::复合动词（〜始める・〜终わる・〜続ける）"
+    },
+    {
+      "query": "从几点到几点用什么助词",
+      "expected": "particles::から与まで"
+    },
+    {
+      "query": "坐什么交通工具去 用で",
+      "expected": "particles::で的用法总览"
+    },
+    {
+      "query": "表示也的助词怎么用",
+      "expected": "particles::も的用法"
+    },
+    {
+      "query": "强调正是 用什么助词",
+      "expected": "particles::こそ"
+    },
+    {
+      "query": "大概多少 左右 怎么说",
+      "expected": "particles::くらい・ぐらい"
+    },
+    {
+      "query": "比较两个东西哪个更怎么样",
+      "expected": "particles::より与ほど（比较）"
+    },
+    {
+      "query": "去某个地方的方向助词",
+      "expected": "particles::へ与に的方向表达"
+    },
+    {
+      "query": "终助词ね和よ的语气区别",
+      "expected": "particles::ね与よ（终助词）"
+    },
+    {
+      "query": "老是做某事 净是 用ばかり",
+      "expected": "particles::ばかり"
+    },
+    {
+      "query": "也许可能会怎么说",
+      "expected": "sentence-patterns::〜かもしれない（可能性）"
+    },
+    {
+      "query": "应该是这样吧 はず",
+      "expected": [
+        "sentence-patterns::〜はずです（应该）",
+        "confusables::はず与べき"
+      ]
+    },
+    {
+      "query": "最好做某事的建议说法",
+      "expected": "sentence-patterns::〜たほうがいい（建议）"
+    },
+    {
+      "query": "容易做和难做怎么表达",
+      "expected": [
+        "sentence-patterns::〜やすい・〜にくい",
+        "adjectives::〜やすい・〜にくい接形容词语感"
+      ]
+    },
+    {
+      "query": "打算要做某事 つもり",
+      "expected": [
+        "sentence-patterns::〜つもり（打算）",
+        "confusables::つもり与予定"
+      ]
+    },
+    {
+      "query": "伺う 申す 是什么谦让语",
+      "expected": "keigo::谦让语特殊动词（伺う・申す・いただく等）"
+    },
+    {
+      "query": "い形容词怎么变否定和过去",
+      "expected": "adjectives::い形容词的活用"
+    },
+    {
+      "query": "变得越来越冷怎么表达 くなる",
+      "expected": "adjectives::〜くなる与〜になる（变化）"
+    },
+    {
+      "query": "形容词怎么比较哪个更好",
+      "expected": [
+        "adjectives::形容词的比较（〜より・〜のほうが）",
+        "particles::より与ほど（比较）"
+      ]
+    },
+    {
+      "query": "たら和ば有什么区别",
+      "expected": "confusables::たら・ば・と・なら（条件四形态辨析）"
+    },
+    {
+      "query": "借りる和貸す哪个是借入哪个是借出",
+      "expected": "confusables::借りる・貸す・返す"
+    },
+    {
+      "query": "まで和までに的区别",
+      "expected": "confusables::まで与までに"
+    },
+    {
+      "query": "知る和分かる怎么区分",
+      "expected": "confusables::知る与分かる"
+    },
+    {
+      "query": "不得不做某事 ざるをえない",
+      "expected": "advanced-grammar::〜ざるを得ない（不得不）"
+    },
+    {
+      "query": "虽然但是的书面转折 ものの",
+      "expected": "advanced-grammar::〜ものの（虽然……但是）"
+    },
+    {
+      "query": "不仅而且 更进一步的书面表达",
+      "expected": "advanced-grammar::〜ばかりか（不仅……而且）"
+    },
+    {
+      "query": "果然 还是 やっぱり的用法",
+      "expected": "adverbs-conjunctions::やはり・やっぱり（果然/还是）"
+    },
+    {
+      "query": "必ず きっと ぜひ 一定的区别",
+      "expected": "adverbs-conjunctions::必ず・きっと・ぜひ（\"一定\"三分法）"
+    },
+    {
+      "query": "瓶子雨伞细长的东西用什么量词",
+      "expected": "counters::本（细长物）与音变规则"
+    },
+    {
+      "query": "日语一号到十号日期怎么读",
+      "expected": "counters::日期读法（ついたち〜とおか）"
+    },
+    {
+      "query": "睡得很香熟睡怎么说",
+      "expected": "onomatopoeia::ぐっすり（熟睡）"
+    }
   ]
 }

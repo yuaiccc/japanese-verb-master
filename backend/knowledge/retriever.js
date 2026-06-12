@@ -40,8 +40,10 @@ export function createLocalRetriever({ db, embedder, mode = 'hybrid', reranker =
   function bm25Leg(query) {
     const ftsQuery = tokenizeForFts(query).split(' ').filter(Boolean).map(t => `"${t}"`).join(' OR ');
     if (!ftsQuery) return [];
+    // 标题列权重 2.0：条目标题即语法点名称，命中标题的相关性高于命中正文
+    //（65 题扫描：w=2~5 MRR +0.002，w=8 开始回落，取保守值）
     return db.prepare(`
-      SELECT chunk_id AS id, bm25(knowledge_fts) AS rank
+      SELECT chunk_id AS id, bm25(knowledge_fts, 2.0, 1.0) AS rank
       FROM knowledge_fts WHERE knowledge_fts MATCH ? ORDER BY rank LIMIT ?
     `).all(ftsQuery, RECALL_PER_LEG);
   }

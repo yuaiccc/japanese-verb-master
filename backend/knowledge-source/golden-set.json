@@ -53,7 +53,10 @@
     },
     {
       "query": "一边做一边做怎么表达",
-      "expected": "particles::ながら"
+      "expected": [
+        "particles::ながら",
+        "advanced-grammar::〜つつ（一边……／尽管……）"
+      ]
     },
     {
       "query": "ので和のに的区别",
@@ -61,7 +64,10 @@
     },
     {
       "query": "想做某事怎么说",
-      "expected": "sentence-patterns::〜たいです（愿望）"
+      "expected": [
+        "sentence-patterns::〜たいです（愿望）",
+        "adjectives::ほしい与〜たい"
+      ]
     },
     {
       "query": "曾经做过某事的句型",
@@ -149,7 +155,10 @@
     },
     {
       "query": "把动词变成名词 の こと",
-      "expected": "verb-conjugation::动词的名词化（の・こと）"
+      "expected": [
+        "verb-conjugation::动词的名词化（の・こと）",
+        "confusables::こと与の（名词化辨析）"
+      ]
     },
     {
       "query": "开始做 持续做的复合动词",
@@ -177,7 +186,10 @@
     },
     {
       "query": "比较两个东西哪个更怎么样",
-      "expected": "particles::より与ほど（比较）"
+      "expected": [
+        "particles::より与ほど（比较）",
+        "adjectives::形容词的比较（〜より・〜のほうが）"
+      ]
     },
     {
       "query": "去某个地方的方向助词",

@@ -44,6 +44,7 @@ import { ingestKnowledge } from './knowledge/ingest.js';
 import { registerKnowledgeRoutes } from './knowledge/routes.js';
 import { getKnowledgeEmbeddingSettings, saveKnowledgeEmbeddingSettings } from './knowledge/settings.js';
 import { setTokenizer as setKnowledgeTokenizer } from './knowledge/tokenize.js';
+import { createPaymentProvider, hasEntitlement, SKUS } from './payments/provider.js';
 import { getSceneById, getSceneCatalog, getSceneIdsForVerb, getVerbsForScene } from './sceneData.js';
 import {
   extractJapaneseTerms,
@@ -2185,6 +2186,47 @@ registerKnowledgeRoutes(app, {
 app.get('/api/knowledge/metrics', (req, res) => {
   res.json(knowledgeMetrics.snapshot());
 });
+
+// === 支付（A2A demo：应用发起订单，资金确认权在用户）===
+const paymentProvider = createPaymentProvider({ db });
+
+app.get('/api/entitlements', (req, res) => {
+  const entitlements = {};
+  for (const def of Object.values(SKUS)) {
+    entitlements[def.entitlement] = hasEntitlement(db, def.entitlement);
+  }
+  res.json({ provider: paymentProvider.name, entitlements });
+});
+
+app.post('/api/payments/orders', async (req, res) => {
+  const skuDef = SKUS[req.body?.sku];
+  if (!skuDef) return res.status(400).json({ error: 'Unknown sku' });
+  if (hasEntitlement(db, skuDef.entitlement)) {
+    return res.status(409).json({ error: 'Already unlocked' });
+  }
+  try {
+    const order = await paymentProvider.createOrder(skuDef);
+    res.status(201).json({ provider: paymentProvider.name, ...order });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.get('/api/payments/orders/:outTradeNo', async (req, res) => {
+  const order = await paymentProvider.queryOrder(req.params.outTradeNo);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  res.json(order);
+});
+
+// 仅 mock provider：模拟用户在支付宝 App 完成扫码 + 密码确认
+app.post('/api/payments/orders/:outTradeNo/simulate-confirm', async (req, res) => {
+  if (typeof paymentProvider.simulateBuyerConfirm !== 'function') {
+    return res.status(404).json({ error: 'Not available for this provider' });
+  }
+  const result = await paymentProvider.simulateBuyerConfirm(req.params.outTradeNo);
+  if (!result.ok) return res.status(404).json({ error: result.error });
+  res.json(result);
+});
 app.get('/api/knowledge/embedding-settings', (req, res) => {
   const { apiKey, ...rest } = getKnowledgeEmbeddingSettings(db);
   res.json({ ...rest, apiKeySet: !!apiKey });
@@ -3858,25 +3900,39 @@ app.get('/api/dojo-quiz', (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     const sceneId = typeof req.query.scene === 'string' ? req.query.scene.trim() : '';
-    const selectedScene = sceneId ? getSceneById(sceneId) : null;
+    // N1 专项：付费解锁的高阶变形包，不属于普通场景词表
+    const isN1Pack = sceneId === 'n1';
+    const selectedScene = sceneId && !isN1Pack ? getSceneById(sceneId) : null;
     if (!tokenizer) {
       return res.status(503).json({ error: 'Dictionary is initializing, please try again later.' });
     }
-    if (sceneId && !selectedScene) {
+    if (sceneId && !isN1Pack && !selectedScene) {
       return res.status(400).json({ error: 'Invalid scene id.' });
     }
+    if (isN1Pack && !hasEntitlement(db, 'n1-pack')) {
+      // 与支付宝「AI 收」同款语义：资源对未付费访问回 402
+      return res.status(402).json({ error: 'Payment required', sku: 'n1-pack' });
+    }
 
-    const forms = [
-      { key: 'negative', label: '否定式 (ない形)' },
-      { key: 'polite', label: '礼貌式 (ます形)' },
-      { key: 'teForm', label: 'て形' },
-      { key: 'taForm', label: '过去式 (た形)' },
-      { key: 'potential', label: '可能形' },
-      { key: 'passive', label: '被动形' },
-      { key: 'causative', label: '使役形' },
-      { key: 'imperative', label: '命令形' },
-      { key: 'volitional', label: '意向形' }
-    ];
+    const forms = isN1Pack
+      ? [
+          { key: 'causativePassive', label: '使役被动形' },
+          { key: 'causative', label: '使役形' },
+          { key: 'passive', label: '被动形' },
+          { key: 'volitional', label: '意向形' },
+          { key: 'imperative', label: '命令形' }
+        ]
+      : [
+          { key: 'negative', label: '否定式 (ない形)' },
+          { key: 'polite', label: '礼貌式 (ます形)' },
+          { key: 'teForm', label: 'て形' },
+          { key: 'taForm', label: '过去式 (た形)' },
+          { key: 'potential', label: '可能形' },
+          { key: 'passive', label: '被动形' },
+          { key: 'causative', label: '使役形' },
+          { key: 'imperative', label: '命令形' },
+          { key: 'volitional', label: '意向形' }
+        ];
 
     const sourceVerbs = selectedScene ? getVerbsForScene(commonVerbs, selectedScene.id) : commonVerbs;
     if (sourceVerbs.length === 0) {
@@ -3943,8 +3999,8 @@ app.get('/api/dojo-quiz', (req, res) => {
           kana: verbObj.kana,
           romaji: verbObj.romaji,
           meaning: verbObj.meaning,
-          sceneId: selectedScene?.id || getSceneIdsForVerb(verbObj.kanji)[0] || '',
-          sceneName: selectedScene?.name || getSceneById(getSceneIdsForVerb(verbObj.kanji)[0])?.name || '',
+          sceneId: isN1Pack ? 'n1' : (selectedScene?.id || getSceneIdsForVerb(verbObj.kanji)[0] || ''),
+          sceneName: isN1Pack ? 'N1 专项' : (selectedScene?.name || getSceneById(getSceneIdsForVerb(verbObj.kanji)[0])?.name || ''),
           formKey: formObj.key,
           formLabel: formObj.label,
           answer: answerKana,

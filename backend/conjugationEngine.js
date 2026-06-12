@@ -10,6 +10,7 @@ class Verb {
   getCausative() { throw new Error('Not implemented'); }
   getImperative() { throw new Error('Not implemented'); }
   getVolitional() { throw new Error('Not implemented'); }
+  getCausativePassive() { throw new Error('Not implemented'); }
 }
 
 // 五段动词 (Godan)
@@ -44,6 +45,11 @@ class GodanVerb extends Verb {
     return this.stem + this.mapLastChar('e');
   }
   getVolitional() { return this.stem + this.mapLastChar('o') + 'う'; }
+  getCausativePassive() {
+    // す结尾五段无短缩形（話す→話させられる）；其余常用短缩形 〜される（飲む→飲まされる）
+    if (this.lastChar === 'す') return this.stem + this.mapLastChar('a') + 'せられる';
+    return this.stem + this.mapLastChar('a') + 'される';
+  }
 
   mapLastChar(row) {
     const map = {
@@ -108,6 +114,7 @@ class IchidanVerb extends Verb {
     return this.stem + 'ろ';
   }
   getVolitional() { return this.stem + 'よう'; }
+  getCausativePassive() { return this.stem + 'させられる'; }
 }
 
 // サ变动词 (Suru)
@@ -128,6 +135,7 @@ class SuruVerb extends Verb {
   getCausative() { return this.prefix + 'させる'; }
   getImperative() { return this.prefix + 'しろ'; }
   getVolitional() { return this.prefix + 'しよう'; }
+  getCausativePassive() { return this.prefix + 'させられる'; }
 }
 
 // カ变动词 (Kuru)
@@ -153,6 +161,7 @@ class KuruVerb extends Verb {
   getCausative() { return this.hasKanji ? this.prefix + 'させる' : this.prefix + 'こさせる'; }
   getImperative() { return this.hasKanji ? this.prefix + 'い' : this.prefix + 'こい'; }
   getVolitional() { return this.hasKanji ? this.prefix + 'よう' : this.prefix + 'こよう'; }
+  getCausativePassive() { return this.hasKanji ? this.prefix + 'させられる' : this.prefix + 'こさせられる'; }
 }
 
 // 工厂函数
@@ -185,7 +194,8 @@ function conjugate(dictionaryForm, verbType) {
     passive: verb.getPassive(),
     causative: verb.getCausative(),
     imperative: verb.getImperative(),
-    volitional: verb.getVolitional()
+    volitional: verb.getVolitional(),
+    causativePassive: verb.getCausativePassive()
   };
 }
 

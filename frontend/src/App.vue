@@ -920,7 +920,9 @@
     </template>
 
     <div v-if="workbenchSection === 'dojo'" class="dojo-wrapper">
-      <transition name="card-fade" mode="out-in">
+      <!-- 显式 duration：页签在后台时 CSS 动画被浏览器暂停，animationend 永不触发，
+           out-in 模式会卡死在 leave 态；定时器兜底保证状态切换始终完成 -->
+      <transition name="card-fade" mode="out-in" :duration="260">
         <!-- 准备界面 -->
         <div v-if="dojoState === 'start'" class="card dojo-card dojo-start" key="start">
           <Icon name="brain" class="icon-brain-large" />
@@ -931,14 +933,43 @@
               v-for="scene in sceneOptions"
               :key="scene.id"
               class="scene-card"
-              :class="{ active: selectedSceneId === scene.id }"
+              :class="{ active: selectedSceneId === scene.id, 'is-locked': scene.locked }"
               @click="selectDojoScene(scene.id)"
             >
-              <span class="scene-card-title">{{ scene.name }}</span>
+              <span class="scene-card-title">{{ scene.locked ? '🔒 ' : '' }}{{ scene.name }}</span>
               <span class="scene-card-desc">{{ scene.description }}</span>
               <span class="scene-card-meta">{{ scene.meta }}</span>
               <span v-if="scene.preview" class="scene-card-preview">{{ scene.preview }}</span>
             </button>
+          </div>
+
+          <div v-if="paywall.visible" class="paywall-card" role="dialog" aria-label="解锁 N1 专项练习">
+            <div class="paywall-head">
+              <strong>解锁 N1 专项练习</strong>
+              <button type="button" class="paywall-close" aria-label="关闭" @click="closePaywall">×</button>
+            </div>
+            <template v-if="paywall.order">
+              <div class="paywall-body">
+                <p class="paywall-subject">{{ paywall.order.subject }}</p>
+                <p class="paywall-amount">¥{{ paywall.order.amount }}</p>
+                <p class="paywall-meta">订单号 {{ paywall.order.outTradeNo }}</p>
+                <div class="paywall-qr" aria-hidden="true">
+                  <span class="paywall-qr-mark">支</span>
+                  <code>{{ paywall.order.qrContent }}</code>
+                </div>
+                <p class="paywall-hint">{{ paywall.order.cashierHint }}</p>
+              </div>
+              <button
+                type="button"
+                class="search-btn paywall-pay-btn"
+                :disabled="paywall.paying"
+                @click="simulatePaywallPay"
+              >
+                {{ paywall.paying ? '确认中…' : '模拟扫码支付' }}
+              </button>
+            </template>
+            <p v-else-if="!paywall.error" class="paywall-hint">正在创建订单…</p>
+            <p v-if="paywall.error" class="paywall-error">{{ paywall.error }}</p>
           </div>
           <div class="dojo-profile-panel" v-if="practiceProfile.totalAttempts > 0">
             <div class="dojo-profile-header">
@@ -1292,6 +1323,63 @@ const currentQuestion = computed(() => {
   return dojoQuestions.value[dojoCurrentIndex.value] || {};
 });
 
+// === 付费解锁（A2A 支付 demo：应用开单，确认权在用户）===
+const entitlements = ref({});
+const paywall = ref({ visible: false, order: null, paying: false, error: '' });
+
+const loadEntitlements = async () => {
+  try {
+    const res = await axios.get('/api/entitlements');
+    entitlements.value = res.data.entitlements || {};
+  } catch (e) {
+    console.error('加载解锁状态失败', e);
+  }
+};
+
+const openPaywall = async () => {
+  paywall.value = { visible: true, order: null, paying: false, error: '' };
+  try {
+    const res = await axios.post('/api/payments/orders', { sku: 'n1-pack' });
+    paywall.value.order = res.data;
+  } catch (e) {
+    if (e.response?.status === 409) {
+      // 已解锁（多标签页等场景），直接刷新状态
+      await loadEntitlements();
+      paywall.value.visible = false;
+      return;
+    }
+    paywall.value.error = e.response?.data?.error || '创建订单失败，请稍后再试。';
+  }
+};
+
+const closePaywall = () => {
+  paywall.value = { visible: false, order: null, paying: false, error: '' };
+};
+
+const simulatePaywallPay = async () => {
+  const order = paywall.value.order;
+  if (!order || paywall.value.paying) return;
+  paywall.value.paying = true;
+  paywall.value.error = '';
+  try {
+    // 模拟「用户在支付宝 App 扫码 + 密码确认」；真实接入时此处仅轮询订单状态
+    await axios.post(`/api/payments/orders/${order.outTradeNo}/simulate-confirm`);
+    const poll = await axios.get(`/api/payments/orders/${order.outTradeNo}`);
+    if (poll.data.status === 'TRADE_SUCCESS') {
+      await loadEntitlements();
+      closePaywall();
+      selectedSceneId.value = 'n1';
+      await startDojo();
+    } else {
+      paywall.value.error = '支付未完成，请重试。';
+    }
+  } catch (e) {
+    paywall.value.error = e.response?.data?.error || '支付确认失败。';
+  } finally {
+    paywall.value.paying = false;
+  }
+};
+
 const sceneOptions = computed(() => {
   const sceneCards = scenes.value.map(scene => ({
     ...scene,
@@ -1307,7 +1395,15 @@ const sceneOptions = computed(() => {
       meta: `${sceneCards.length} 个场景`,
       preview: '综合抽题'
     },
-    ...sceneCards
+    ...sceneCards,
+    {
+      id: 'n1',
+      name: 'N1 专项',
+      description: '使役被动・使役・被动等高阶变形集训。',
+      meta: entitlements.value['n1-pack'] ? '已解锁' : '¥0.01 解锁',
+      preview: '飲まされる / 食べさせられる',
+      locked: !entitlements.value['n1-pack']
+    }
   ];
 });
 
@@ -1359,7 +1455,7 @@ const startDojo = async () => {
     const res = await axios.get('/api/dojo-quiz', { params });
     dojoQuestions.value = res.data;
     if (dojoQuestions.value.length === 0) throw new Error('题库为空');
-    
+
     dojoCurrentIndex.value = 0;
     dojoScore.value = 0;
     dojoState.value = 'playing';
@@ -1369,8 +1465,13 @@ const startDojo = async () => {
     dojoFeedback.value = null;
     dojoQuestionStartedAt.value = Date.now();
   } catch (err) {
-    alert('加载题库失败，请稍后再试。');
-    console.error(err);
+    if (err.response?.status === 402) {
+      // 付费内容未解锁 → 打开支付卡片（服务端是最终守门人，前端锁只是引导）
+      await openPaywall();
+    } else {
+      alert('加载题库失败，请稍后再试。');
+      console.error(err);
+    }
   } finally {
     dojoLoading.value = false;
   }
@@ -1378,6 +1479,11 @@ const startDojo = async () => {
 
 const selectDojoScene = async (sceneId) => {
   if (dojoLoading.value) return;
+  const scene = sceneOptions.value.find(item => item.id === sceneId);
+  if (scene?.locked) {
+    await openPaywall();
+    return;
+  }
   selectedSceneId.value = sceneId;
   await startDojo();
 };
@@ -3262,6 +3368,7 @@ onMounted(async () => {
   await loadMemorySettings();
   await loadLlmSettings();
   loadEmbeddingSettings();
+  loadEntitlements();
 });
 
 // 提取日文文本中的假名部分（去掉汉字），用于模糊比较
@@ -7038,6 +7145,102 @@ ruby rt {
   box-shadow: 0 14px 26px rgba(24, 35, 31, 0.1);
   border-color: var(--primary);
 }
+
+.scene-card.is-locked {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+/* === 付费解锁卡片（A2A 支付 demo）=== */
+.paywall-card {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-noise), var(--panel-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-soft), var(--glass-highlight);
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+
+.paywall-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.paywall-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.paywall-body { display: grid; gap: 4px; }
+.paywall-subject { margin: 0; color: var(--text-secondary); }
+
+.paywall-amount {
+  margin: 0;
+  font-size: 1.7rem;
+  font-weight: 800;
+  color: var(--primary);
+}
+
+.paywall-meta {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.paywall-qr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px dashed var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--field-bg);
+}
+
+.paywall-qr-mark {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #1677ff;
+  color: #fff;
+  font-weight: 800;
+}
+
+.paywall-qr code {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.paywall-hint {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.paywall-error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--danger);
+}
+
+.paywall-pay-btn { justify-self: start; }
 
 .scene-card.active {
   border-color: var(--primary);

@@ -133,6 +133,11 @@ async function createAlipayProvider({ db }) {
     throw new Error('Alipay provider 需要额外依赖，请在 backend 下执行：npm i alipay-sdk qrcode');
   }
 
+  // SDK 有两个基址：endpoint 给 v3 curl()（precreate/query）；gateway 给 v1 表单类
+  // pageExecute（电脑网站支付）。沙箱两者都要指向沙箱，否则 payUrl 会落到生产网关。
+  const endpoint = process.env.ALIPAY_ENDPOINT || '';
+  const gateway = process.env.ALIPAY_GATEWAY
+    || (endpoint ? `${endpoint.replace(/\/+$/, '')}/gateway.do` : '');
   const sdk = new AlipaySdk({
     appId: process.env.ALIPAY_APP_ID,
     privateKey: process.env.ALIPAY_PRIVATE_KEY,
@@ -141,10 +146,14 @@ async function createAlipayProvider({ db }) {
     // 私钥格式：密钥工具生成的多为 PKCS8（-----BEGIN PRIVATE KEY-----）；
     // 老格式 PKCS1（-----BEGIN RSA PRIVATE KEY-----）。验签失败先改这个。
     keyType: process.env.ALIPAY_KEY_TYPE || 'PKCS8',
-    // 重要：curl() 走 v3 REST API，沙箱要设 endpoint（不是老 exec 的 gateway）。
-    // 沙箱 v3：https://openapi-sandbox.dl.alipaydev.com  生产留空走默认 openapi.alipay.com
-    ...(process.env.ALIPAY_ENDPOINT ? { endpoint: process.env.ALIPAY_ENDPOINT } : {})
+    // 沙箱 v3 endpoint：https://openapi-sandbox.dl.alipaydev.com ；生产留空走默认
+    ...(endpoint ? { endpoint } : {}),
+    ...(gateway ? { gateway } : {})
   });
+
+  // 支付方式：page = 电脑网站支付（浏览器收银台，无需 App，默认）；qr = 当面付扫码（需 App 扫）
+  const payMode = (process.env.ALIPAY_PAY_MODE || 'page').toLowerCase();
+  const returnUrl = process.env.ALIPAY_RETURN_URL || '';
 
   // 到账后落库 + 授予权益（幂等）
   const settleIfPaid = (outTradeNo, tradeStatus) => {
@@ -166,6 +175,28 @@ async function createAlipayProvider({ db }) {
         VALUES (?, ?, ?, ?, ?, 'WAIT_BUYER_PAY', 'alipay', datetime('now'))
       `).run(outTradeNo, Number(userId) || 1, skuDef.sku, skuDef.subject, skuDef.amount);
 
+      // 电脑网站支付：pageExecute 本地签名生成收银台 URL（不发网络请求）。
+      // 浏览器打开 → 用沙箱买家账号登录付款，无需 App。到账靠 queryOrder 轮询。
+      if (payMode === 'page') {
+        const payUrl = sdk.pageExecute('alipay.trade.page.pay', 'GET', {
+          ...(returnUrl ? { returnUrl } : {}),
+          bizContent: {
+            out_trade_no: outTradeNo,
+            total_amount: skuDef.amount,
+            subject: skuDef.subject,
+            product_code: 'FAST_INSTANT_TRADE_PAY'
+          }
+        });
+        return {
+          outTradeNo,
+          subject: skuDef.subject,
+          amount: skuDef.amount,
+          payUrl,
+          cashierHint: '点击前往支付宝收银台，用沙箱买家账号登录付款，到账后本页自动解锁'
+        };
+      }
+
+      // 当面付：扫码（需支付宝 App 扫）
       const res = await sdk.curl('POST', '/v3/alipay/trade/precreate', {
         body: { out_trade_no: outTradeNo, subject: skuDef.subject, total_amount: skuDef.amount }
       });

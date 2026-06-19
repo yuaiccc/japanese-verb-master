@@ -1001,20 +1001,40 @@
                 <p class="paywall-subject">{{ paywall.order.subject }}</p>
                 <p class="paywall-amount">¥{{ paywall.order.amount }}</p>
                 <p class="paywall-meta">订单号 {{ paywall.order.outTradeNo }}</p>
-                <div class="paywall-qr" aria-hidden="true">
-                  <span class="paywall-qr-mark">支</span>
-                  <code>{{ paywall.order.qrContent }}</code>
-                </div>
-                <p class="paywall-hint">{{ paywall.order.cashierHint }}</p>
+
+                <!-- 电脑网站支付：跳收银台，无需 App -->
+                <template v-if="paywall.order.payUrl">
+                  <button type="button" class="search-btn paywall-pay-btn" @click="goToAlipayCashier">
+                    前往支付宝收银台付款
+                  </button>
+                  <p class="paywall-hint">{{ paywall.order.cashierHint }}</p>
+                  <p v-if="paywall.polling" class="paywall-hint paywall-polling">⏳ 正在等待支付结果，付款完成后自动解锁…</p>
+                </template>
+
+                <!-- 当面付：扫码 -->
+                <template v-else-if="paywall.order.qrDataUrl">
+                  <img class="paywall-qr-img" :src="paywall.order.qrDataUrl" alt="支付宝收款二维码" width="200" height="200" />
+                  <p class="paywall-hint">{{ paywall.order.cashierHint }}</p>
+                  <p v-if="paywall.polling" class="paywall-hint paywall-polling">⏳ 正在等待支付结果，付款完成后自动解锁…</p>
+                </template>
+
+                <!-- mock 演示 -->
+                <template v-else>
+                  <div class="paywall-qr" aria-hidden="true">
+                    <span class="paywall-qr-mark">支</span>
+                    <code>{{ paywall.order.qrContent }}</code>
+                  </div>
+                  <p class="paywall-hint">{{ paywall.order.cashierHint }}</p>
+                  <button
+                    type="button"
+                    class="search-btn paywall-pay-btn"
+                    :disabled="paywall.paying"
+                    @click="simulatePaywallPay"
+                  >
+                    {{ paywall.paying ? '确认中…' : '模拟扫码支付' }}
+                  </button>
+                </template>
               </div>
-              <button
-                type="button"
-                class="search-btn paywall-pay-btn"
-                :disabled="paywall.paying"
-                @click="simulatePaywallPay"
-              >
-                {{ paywall.paying ? '确认中…' : '模拟扫码支付' }}
-              </button>
             </template>
             <p v-else-if="!paywall.error" class="paywall-hint">正在创建订单…</p>
             <p v-if="paywall.error" class="paywall-error">{{ paywall.error }}</p>
@@ -1437,7 +1457,8 @@ const currentQuestion = computed(() => {
 
 // === 付费解锁（A2A 支付 demo：应用开单，确认权在用户）===
 const entitlements = ref({});
-const paywall = ref({ visible: false, order: null, paying: false, error: '' });
+const paywall = ref({ visible: false, order: null, paying: false, error: '', polling: false });
+let paywallPollTimer = null;
 
 const loadEntitlements = async () => {
   try {
@@ -1448,11 +1469,53 @@ const loadEntitlements = async () => {
   }
 };
 
+const stopPaywallPolling = () => {
+  if (paywallPollTimer) {
+    clearInterval(paywallPollTimer);
+    paywallPollTimer = null;
+  }
+  if (paywall.value) paywall.value.polling = false;
+};
+
+const closePaywall = () => {
+  stopPaywallPolling();
+  paywall.value = { visible: false, order: null, paying: false, error: '', polling: false };
+};
+
+const finishUnlock = async () => {
+  stopPaywallPolling();
+  await loadEntitlements();
+  closePaywall();
+  selectedSceneId.value = 'n1';
+  await startDojo();
+};
+
+// 真实支付宝（page/qr）：付款在支付宝侧完成，前端每 3s 轮询订单状态，到账即解锁
+const startPaywallPolling = (outTradeNo) => {
+  stopPaywallPolling();
+  paywall.value.polling = true;
+  paywallPollTimer = setInterval(async () => {
+    try {
+      const poll = await axios.get(`/api/payments/orders/${outTradeNo}`);
+      if (poll.data.status === 'TRADE_SUCCESS') {
+        await finishUnlock();
+      }
+    } catch (e) {
+      // 轮询期间的瞬时错误忽略，继续下次
+    }
+  }, 3000);
+};
+
 const openPaywall = async () => {
-  paywall.value = { visible: true, order: null, paying: false, error: '' };
+  stopPaywallPolling();
+  paywall.value = { visible: true, order: null, paying: false, error: '', polling: false };
   try {
     const res = await axios.post('/api/payments/orders', { sku: 'n1-pack' });
     paywall.value.order = res.data;
+    // 真实支付宝：开始轮询到账；mock 等用户点「模拟支付」
+    if (res.data.provider === 'alipay') {
+      startPaywallPolling(res.data.outTradeNo);
+    }
   } catch (e) {
     if (e.response?.status === 409) {
       // 已解锁（多标签页等场景），直接刷新状态
@@ -1464,24 +1527,22 @@ const openPaywall = async () => {
   }
 };
 
-const closePaywall = () => {
-  paywall.value = { visible: false, order: null, paying: false, error: '' };
+const goToAlipayCashier = () => {
+  const url = paywall.value.order?.payUrl;
+  if (url) window.open(url, '_blank', 'noopener');
 };
 
+// mock：模拟「用户在支付宝 App 扫码 + 密码确认」
 const simulatePaywallPay = async () => {
   const order = paywall.value.order;
   if (!order || paywall.value.paying) return;
   paywall.value.paying = true;
   paywall.value.error = '';
   try {
-    // 模拟「用户在支付宝 App 扫码 + 密码确认」；真实接入时此处仅轮询订单状态
     await axios.post(`/api/payments/orders/${order.outTradeNo}/simulate-confirm`);
     const poll = await axios.get(`/api/payments/orders/${order.outTradeNo}`);
     if (poll.data.status === 'TRADE_SUCCESS') {
-      await loadEntitlements();
-      closePaywall();
-      selectedSceneId.value = 'n1';
-      await startDojo();
+      await finishUnlock();
     } else {
       paywall.value.error = '支付未完成，请重试。';
     }
@@ -7403,6 +7464,20 @@ ruby rt {
 
 .paywall-body { display: grid; gap: 4px; }
 .paywall-subject { margin: 0; color: var(--text-secondary); }
+
+.paywall-qr-img {
+  display: block;
+  width: 200px;
+  height: 200px;
+  margin: 8px auto;
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px;
+}
+
+.paywall-polling {
+  color: var(--primary);
+}
 
 .paywall-amount {
   margin: 0;

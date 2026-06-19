@@ -30,6 +30,7 @@ db.exec(`
 db.exec(`
   CREATE TABLE IF NOT EXISTS practice_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL DEFAULT 1,
     verb TEXT NOT NULL,
     form_key TEXT NOT NULL,
     scene_id TEXT NOT NULL DEFAULT 'all',
@@ -45,7 +46,8 @@ db.exec(`
 db.exec(`
   CREATE TABLE IF NOT EXISTS memory_cards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    word TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL DEFAULT 1,
+    word TEXT NOT NULL,
     reading TEXT NOT NULL DEFAULT '',
     meaning TEXT NOT NULL DEFAULT '',
     word_type TEXT NOT NULL DEFAULT 'other',
@@ -58,7 +60,8 @@ db.exec(`
     lapses INTEGER NOT NULL DEFAULT 0,
     due_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, word)
   )
 `);
 
@@ -126,6 +129,55 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_subagent_tasks_status ON subagent_tasks(status);
 `);
 
+// 多用户隔离迁移：给存量库的 practice_records / memory_cards 补 user_id。
+// 在 node 进程内同步执行（不经 shell），幂等——已迁移则跳过。历史数据归默认用户 1。
+function columnExists(table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some(col => col.name === column);
+}
+
+(function migrateUserIsolation() {
+  // practice_records：无内容唯一约束，直接加列
+  if (!columnExists('practice_records', 'user_id')) {
+    db.exec(`ALTER TABLE practice_records ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1`);
+  }
+  // memory_cards：原 UNIQUE(word) 需改为 UNIQUE(user_id, word)，SQLite 不能改约束 → 重建表
+  if (!columnExists('memory_cards', 'user_id')) {
+    db.exec(`
+      CREATE TABLE memory_cards_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 1,
+        word TEXT NOT NULL,
+        reading TEXT NOT NULL DEFAULT '',
+        meaning TEXT NOT NULL DEFAULT '',
+        word_type TEXT NOT NULL DEFAULT 'other',
+        verb_type TEXT NOT NULL DEFAULT '',
+        sample TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT 'lookup',
+        ease REAL NOT NULL DEFAULT 2.2,
+        interval_days INTEGER NOT NULL DEFAULT 0,
+        review_count INTEGER NOT NULL DEFAULT 0,
+        lapses INTEGER NOT NULL DEFAULT 0,
+        due_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(user_id, word)
+      );
+      INSERT INTO memory_cards_new
+        (id, user_id, word, reading, meaning, word_type, verb_type, sample, source, ease, interval_days, review_count, lapses, due_at, created_at, updated_at)
+        SELECT id, 1, word, reading, meaning, word_type, verb_type, sample, source, ease, interval_days, review_count, lapses, due_at, created_at, updated_at
+        FROM memory_cards;
+      DROP TABLE memory_cards;
+      ALTER TABLE memory_cards_new RENAME TO memory_cards;
+    `);
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_practice_user ON practice_records(user_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_user ON memory_cards(user_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_due_at ON memory_cards(due_at);
+    CREATE INDEX IF NOT EXISTS idx_memory_word_type ON memory_cards(word_type);
+  `);
+})();
+
 // 查询函数：多字段 LIKE 模糊匹配
 const searchStmt = db.prepare(`
   SELECT kanji, kana, romaji, meaning, word_type AS wordType, jlpt, is_common AS isCommon
@@ -187,6 +239,7 @@ export function getWordCount() {
 
 const insertPracticeStmt = db.prepare(`
   INSERT INTO practice_records (
+    user_id,
     verb,
     form_key,
     scene_id,
@@ -196,11 +249,12 @@ const insertPracticeStmt = db.prepare(`
     is_correct,
     duration_ms,
     answered_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
-export function insertPracticeRecord(record) {
+export function insertPracticeRecord(record, userId = 1) {
   return insertPracticeStmt.run(
+    Number(userId) || 1,
     record.verb,
     record.formKey,
     record.sceneId || 'all',
@@ -225,12 +279,13 @@ const recentPracticeStmt = db.prepare(`
     duration_ms AS durationMs,
     answered_at AS answeredAt
   FROM practice_records
+  WHERE user_id = ?
   ORDER BY datetime(answered_at) DESC, id DESC
   LIMIT ?
 `);
 
-export function listRecentPracticeRecords(limit = 1000) {
-  return recentPracticeStmt.all(limit);
+export function listRecentPracticeRecords(limit = 1000, userId = 1) {
+  return recentPracticeStmt.all(Number(userId) || 1, limit);
 }
 
 const listMemoryStmt = db.prepare(`
@@ -251,12 +306,13 @@ const listMemoryStmt = db.prepare(`
     created_at AS createdAt,
     updated_at AS updatedAt
   FROM memory_cards
+  WHERE user_id = ?
   ORDER BY datetime(due_at) ASC, datetime(updated_at) DESC
   LIMIT ?
 `);
 
-export function listMemoryCards(limit = 500) {
-  return listMemoryStmt.all(limit);
+export function listMemoryCards(limit = 500, userId = 1) {
+  return listMemoryStmt.all(Number(userId) || 1, limit);
 }
 
 const findMemoryByWordStmt = db.prepare(`
@@ -277,13 +333,13 @@ const findMemoryByWordStmt = db.prepare(`
     created_at AS createdAt,
     updated_at AS updatedAt
   FROM memory_cards
-  WHERE word = ?
+  WHERE user_id = ? AND word = ?
   LIMIT 1
 `);
 
-export function getMemoryCardByWord(word) {
+export function getMemoryCardByWord(word, userId = 1) {
   if (!word) return null;
-  return findMemoryByWordStmt.get(word) || null;
+  return findMemoryByWordStmt.get(Number(userId) || 1, word) || null;
 }
 
 const defaultMemorySettings = {
@@ -394,6 +450,7 @@ export function saveLlmSettings(settings = {}) {
 
 const upsertMemoryStmt = db.prepare(`
   INSERT INTO memory_cards (
+    user_id,
     word,
     reading,
     meaning,
@@ -408,8 +465,8 @@ const upsertMemoryStmt = db.prepare(`
     due_at,
     created_at,
     updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(word) DO UPDATE SET
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(user_id, word) DO UPDATE SET
     reading = excluded.reading,
     meaning = excluded.meaning,
     word_type = excluded.word_type,
@@ -419,9 +476,10 @@ const upsertMemoryStmt = db.prepare(`
     updated_at = excluded.updated_at
 `);
 
-export function upsertMemoryCard(card) {
+export function upsertMemoryCard(card, userId = 1) {
   const now = new Date().toISOString();
   return upsertMemoryStmt.run(
+    Number(userId) || 1,
     card.word,
     card.reading || '',
     card.meaning || '',
@@ -453,15 +511,22 @@ const reviewMemoryStmt = db.prepare(`
 
 const deleteMemoryStmt = db.prepare(`
   DELETE FROM memory_cards
-  WHERE id = ?
+  WHERE id = ? AND user_id = ?
 `);
 
-export function deleteMemoryCard(id) {
-  return deleteMemoryStmt.run(Number(id));
+export function deleteMemoryCard(id, userId = 1) {
+  return deleteMemoryStmt.run(Number(id), Number(userId) || 1);
 }
 
-export function reviewMemoryCard(id, grade, settings = getMemorySettings()) {
-  const card = listMemoryStmt.all(10000).find(item => item.id === Number(id));
+const getMemoryByIdStmt = db.prepare(`
+  SELECT id, ease, interval_days AS intervalDays
+  FROM memory_cards
+  WHERE id = ? AND user_id = ?
+  LIMIT 1
+`);
+
+export function reviewMemoryCard(id, grade, settings = getMemorySettings(), userId = 1) {
+  const card = getMemoryByIdStmt.get(Number(id), Number(userId) || 1);
   if (!card) return null;
 
   const now = new Date();
@@ -490,7 +555,7 @@ export function reviewMemoryCard(id, grade, settings = getMemorySettings()) {
   }
 
   reviewMemoryStmt.run(ease, intervalDays, lapseDelta, dueAt.toISOString(), now.toISOString(), id);
-  return listMemoryCards(500).find(item => item.id === Number(id));
+  return listMemoryCards(500, Number(userId) || 1).find(item => item.id === Number(id));
 }
 
 export function findSimilarWords({ word, kana = '', wordType = '', meaning = '', limit = 8 }) {

@@ -18,10 +18,15 @@ export const SKUS = {
   }
 };
 
+function columnExists(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some(col => col.name === column);
+}
+
 export function ensurePaymentSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS payment_orders (
       out_trade_no TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL DEFAULT 1,
       sku TEXT NOT NULL,
       subject TEXT NOT NULL,
       amount TEXT NOT NULL,
@@ -31,33 +36,55 @@ export function ensurePaymentSchema(db) {
       paid_at TEXT
     );
     CREATE TABLE IF NOT EXISTS entitlements (
-      key TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL DEFAULT 1,
+      key TEXT NOT NULL,
       out_trade_no TEXT NOT NULL,
-      unlocked_at TEXT NOT NULL
+      unlocked_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, key)
     );
   `);
+  // 多用户隔离迁移（幂等，node 进程内执行）：给存量库补 user_id
+  if (!columnExists(db, 'payment_orders', 'user_id')) {
+    db.exec(`ALTER TABLE payment_orders ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1`);
+  }
+  if (!columnExists(db, 'entitlements', 'user_id')) {
+    // 原 PRIMARY KEY(key) 需改为 (user_id, key) → 重建表，历史权益归默认用户 1
+    db.exec(`
+      CREATE TABLE entitlements_new (
+        user_id INTEGER NOT NULL DEFAULT 1,
+        key TEXT NOT NULL,
+        out_trade_no TEXT NOT NULL,
+        unlocked_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, key)
+      );
+      INSERT INTO entitlements_new (user_id, key, out_trade_no, unlocked_at)
+        SELECT 1, key, out_trade_no, unlocked_at FROM entitlements;
+      DROP TABLE entitlements;
+      ALTER TABLE entitlements_new RENAME TO entitlements;
+    `);
+  }
 }
 
-export function hasEntitlement(db, key) {
-  return !!db.prepare('SELECT key FROM entitlements WHERE key = ?').get(key);
+export function hasEntitlement(db, key, userId = 1) {
+  return !!db.prepare('SELECT key FROM entitlements WHERE user_id = ? AND key = ?').get(Number(userId) || 1, key);
 }
 
-function grantEntitlement(db, key, outTradeNo) {
+function grantEntitlement(db, key, outTradeNo, userId = 1) {
   db.prepare(`
-    INSERT INTO entitlements (key, out_trade_no, unlocked_at) VALUES (?, ?, datetime('now'))
-    ON CONFLICT(key) DO NOTHING
-  `).run(key, outTradeNo);
+    INSERT INTO entitlements (user_id, key, out_trade_no, unlocked_at) VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(user_id, key) DO NOTHING
+  `).run(Number(userId) || 1, key, outTradeNo);
 }
 
 function createMockProvider({ db }) {
   return {
     name: 'mock',
-    async createOrder(skuDef) {
+    async createOrder(skuDef, userId = 1) {
       const outTradeNo = `JVM${Date.now()}${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
       db.prepare(`
-        INSERT INTO payment_orders (out_trade_no, sku, subject, amount, status, provider, created_at)
-        VALUES (?, ?, ?, ?, 'WAIT_BUYER_PAY', 'mock', datetime('now'))
-      `).run(outTradeNo, skuDef.sku, skuDef.subject, skuDef.amount);
+        INSERT INTO payment_orders (out_trade_no, user_id, sku, subject, amount, status, provider, created_at)
+        VALUES (?, ?, ?, ?, ?, 'WAIT_BUYER_PAY', 'mock', datetime('now'))
+      `).run(outTradeNo, Number(userId) || 1, skuDef.sku, skuDef.subject, skuDef.amount);
       return {
         outTradeNo,
         subject: skuDef.subject,
@@ -81,24 +108,96 @@ function createMockProvider({ db }) {
         db.prepare("UPDATE payment_orders SET status = 'TRADE_SUCCESS', paid_at = datetime('now') WHERE out_trade_no = ?")
           .run(outTradeNo);
         const skuDef = SKUS[row.sku];
-        if (skuDef) grantEntitlement(db, skuDef.entitlement, outTradeNo);
+        if (skuDef) grantEntitlement(db, skuDef.entitlement, outTradeNo, row.user_id);
       }
       return { ok: true, status: 'TRADE_SUCCESS' };
     }
   };
 }
 
-function createAlipayProvider() {
-  // 接入位：需要支付宝开放平台入驻后的密钥三件套。
-  // 实现要点（当面付）：
-  //   createOrder → POST alipay.trade.precreate（out_trade_no/subject/total_amount）→ 返回 qr_code
-  //   queryOrder  → alipay.trade.query → trade_status（WAIT_BUYER_PAY/TRADE_SUCCESS）
-  //   支付确认始终发生在用户的支付宝 App（扫码+密码/生物识别），服务端只读状态。
-  // 也可不自实现而挂官方 MCP：npx @alipay/mcp-server-alipay，把两个工具暴露给 Agent。
-  throw new Error('Alipay provider 未配置：请设置 ALIPAY_APP_ID/ALIPAY_PRIVATE_KEY/ALIPAY_PUBLIC_KEY 并实现 alipay-sdk 调用，或挂接 @alipay/mcp-server-alipay');
+function newOutTradeNo() {
+  return `JVM${Date.now()}${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
 
-export function createPaymentProvider({ db }) {
+// 支付宝「当面付」接入（alipay-sdk v4）。资金确认权始终在用户手机端：
+//   createOrder → alipay.trade.precreate 生成二维码码串（qr_code）
+//   queryOrder  → 用户扫码付款后，商户轮询 alipay.trade.query 同步 trade_status
+// alipay-sdk / qrcode 用动态 import：未配置支付宝时根本不加载，CI 与 mock 不受影响。
+async function createAlipayProvider({ db }) {
+  let AlipaySdk;
+  let QRCode;
+  try {
+    ({ AlipaySdk } = await import('alipay-sdk'));
+    QRCode = (await import('qrcode')).default;
+  } catch {
+    throw new Error('Alipay provider 需要额外依赖，请在 backend 下执行：npm i alipay-sdk qrcode');
+  }
+
+  const sdk = new AlipaySdk({
+    appId: process.env.ALIPAY_APP_ID,
+    privateKey: process.env.ALIPAY_PRIVATE_KEY,
+    alipayPublicKey: process.env.ALIPAY_PUBLIC_KEY,
+    // 沙箱网关 https://openapi.alipaydev.com/gateway.do；生产留空走默认
+    ...(process.env.ALIPAY_GATEWAY ? { gateway: process.env.ALIPAY_GATEWAY } : {})
+  });
+
+  // 到账后落库 + 授予权益（幂等）
+  const settleIfPaid = (outTradeNo, tradeStatus) => {
+    if (tradeStatus !== 'TRADE_SUCCESS' && tradeStatus !== 'TRADE_FINISHED') return;
+    const row = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
+    if (!row || row.status === 'TRADE_SUCCESS') return;
+    db.prepare("UPDATE payment_orders SET status = 'TRADE_SUCCESS', paid_at = datetime('now') WHERE out_trade_no = ?")
+      .run(outTradeNo);
+    const skuDef = SKUS[row.sku];
+    if (skuDef) grantEntitlement(db, skuDef.entitlement, outTradeNo, row.user_id);
+  };
+
+  return {
+    name: 'alipay',
+    async createOrder(skuDef, userId = 1) {
+      const outTradeNo = newOutTradeNo();
+      db.prepare(`
+        INSERT INTO payment_orders (out_trade_no, user_id, sku, subject, amount, status, provider, created_at)
+        VALUES (?, ?, ?, ?, ?, 'WAIT_BUYER_PAY', 'alipay', datetime('now'))
+      `).run(outTradeNo, Number(userId) || 1, skuDef.sku, skuDef.subject, skuDef.amount);
+
+      const res = await sdk.curl('POST', '/v3/alipay/trade/precreate', {
+        body: { out_trade_no: outTradeNo, subject: skuDef.subject, total_amount: skuDef.amount }
+      });
+      const qrCode = res?.data?.qrCode || res?.data?.qr_code;
+      if (!qrCode) {
+        throw new Error(`precreate 未返回二维码：${JSON.stringify(res?.data || res).slice(0, 200)}`);
+      }
+      const qrDataUrl = await QRCode.toDataURL(qrCode, { margin: 1, width: 220 });
+      return {
+        outTradeNo,
+        subject: skuDef.subject,
+        amount: skuDef.amount,
+        qrContent: qrCode,
+        qrDataUrl,
+        cashierHint: '请用支付宝扫码完成支付，到账后本页自动解锁'
+      };
+    },
+    async queryOrder(outTradeNo) {
+      const row = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
+      if (!row) return null;
+      if (row.status !== 'TRADE_SUCCESS') {
+        try {
+          const res = await sdk.curl('POST', '/v3/alipay/trade/query', { body: { out_trade_no: outTradeNo } });
+          const tradeStatus = res?.data?.tradeStatus || res?.data?.trade_status;
+          if (tradeStatus) settleIfPaid(outTradeNo, tradeStatus);
+        } catch {
+          // 交易尚未创建完成等情况下 query 会报错，保持 WAIT_BUYER_PAY 即可
+        }
+      }
+      const fresh = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
+      return { outTradeNo: fresh.out_trade_no, sku: fresh.sku, status: fresh.status, paidAt: fresh.paid_at };
+    }
+    // 注意：alipay provider 没有 simulateBuyerConfirm —— 付款只能由用户在支付宝完成
+  };
+}
+
+export async function createPaymentProvider({ db }) {
   ensurePaymentSchema(db);
   const useAlipay = !!(process.env.ALIPAY_APP_ID && process.env.ALIPAY_PRIVATE_KEY);
   if (useAlipay) return createAlipayProvider({ db });

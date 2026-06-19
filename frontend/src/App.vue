@@ -47,6 +47,54 @@
           >
             致谢
           </button>
+          <template v-if="authUser">
+            <span class="auth-user" :title="`已登录：${authUser.username}`">{{ authUser.username }}</span>
+            <button type="button" class="pref-link" title="退出登录" @click="logout">退出</button>
+          </template>
+          <button v-else type="button" class="pref-link auth-login-btn" title="登录 / 注册" @click="openAuthModal('login')">
+            登录
+          </button>
+        </div>
+      </div>
+
+      <!-- 登录 / 注册弹窗 -->
+      <div v-if="authModal.open" class="auth-modal-overlay" @click.self="closeAuthModal">
+        <div class="auth-modal card" role="dialog" aria-label="登录或注册">
+          <div class="auth-modal__head">
+            <strong>{{ authModal.mode === 'register' ? '注册新账号' : '登录' }}</strong>
+            <button type="button" class="auth-modal__close" aria-label="关闭" @click="closeAuthModal">×</button>
+          </div>
+          <form class="auth-modal__form" @submit.prevent="submitAuth">
+            <input
+              v-model="authModal.username"
+              class="auth-input"
+              type="text"
+              autocomplete="username"
+              placeholder="用户名（2-32 字符）"
+              :disabled="authModal.loading"
+            />
+            <input
+              v-model="authModal.password"
+              class="auth-input"
+              type="password"
+              :autocomplete="authModal.mode === 'register' ? 'new-password' : 'current-password'"
+              placeholder="密码（至少 6 位）"
+              :disabled="authModal.loading"
+            />
+            <p v-if="authModal.error" class="auth-error">{{ authModal.error }}</p>
+            <button type="submit" class="search-btn auth-submit" :disabled="authModal.loading">
+              {{ authModal.loading ? '处理中…' : (authModal.mode === 'register' ? '注册并登录' : '登录') }}
+            </button>
+          </form>
+          <p class="auth-switch">
+            <template v-if="authModal.mode === 'login'">
+              还没有账号？<button type="button" class="auth-link" @click="authModal.mode = 'register'; authModal.error = ''">去注册</button>
+            </template>
+            <template v-else>
+              已有账号？<button type="button" class="auth-link" @click="authModal.mode = 'login'; authModal.error = ''">去登录</button>
+            </template>
+          </p>
+          <p class="auth-note">未登录时数据归属访客账号；登录后记忆卡 / 练习记录 / 解锁权益按账号隔离。</p>
         </div>
       </div>
 
@@ -1223,8 +1271,21 @@ import { marked } from 'marked';
 import * as wanakana from 'wanakana';
 import Icon from './components/Icon.vue';
 
+// 认证：token 存 localStorage，拦截器给每个请求自动带上 Authorization
+const AUTH_TOKEN_KEY = 'jvm_auth_token';
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 // 全局模式
 const currentMode = ref('dict'); // 'dict' | 'credits'
+const authUser = ref(null); // 当前登录用户 { id, username }，null 表示未登录
+const authModal = ref({ open: false, mode: 'login', username: '', password: '', error: '', loading: false });
 const workbenchSection = ref('dict'); // 'dict' | 'memory' | 'docs' | 'dojo'
 const isComposing = ref(false); // 跟踪输入法状态，防止回车键误触
 const darkMode = ref(false);
@@ -1246,6 +1307,57 @@ const saveBooleanPreference = (key, value) => {
   } catch (e) {
     // Ignore storage failures in private browsing or restricted environments.
   }
+};
+
+// === 认证 ===
+const loadCurrentUser = async () => {
+  if (!localStorage.getItem(AUTH_TOKEN_KEY)) {
+    authUser.value = null;
+    return;
+  }
+  try {
+    const { data } = await axios.get('/api/auth/me');
+    authUser.value = data.user || null;
+    if (!authUser.value) localStorage.removeItem(AUTH_TOKEN_KEY); // token 失效
+  } catch (e) {
+    authUser.value = null;
+  }
+};
+
+const openAuthModal = (mode = 'login') => {
+  authModal.value = { open: true, mode, username: '', password: '', error: '', loading: false };
+};
+
+const closeAuthModal = () => {
+  authModal.value.open = false;
+};
+
+const submitAuth = async () => {
+  const m = authModal.value;
+  const username = m.username.trim();
+  if (username.length < 2) { m.error = '用户名至少 2 个字符'; return; }
+  if (m.password.length < 6) { m.error = '密码至少 6 位'; return; }
+  m.loading = true;
+  m.error = '';
+  try {
+    const url = m.mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+    const { data } = await axios.post(url, { username, password: m.password });
+    localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+    authUser.value = data.user;
+    authModal.value.open = false;
+    // 切换用户后刷新与用户绑定的数据
+    await Promise.allSettled([loadMemoryCards?.(), loadUserProfile?.(), loadEntitlements?.()]);
+  } catch (e) {
+    m.error = e.response?.data?.error || '操作失败，请重试';
+  } finally {
+    m.loading = false;
+  }
+};
+
+const logout = async () => {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  authUser.value = null;
+  await Promise.allSettled([loadMemoryCards?.(), loadUserProfile?.(), loadEntitlements?.()]);
 };
 
 const applyDisplayPreferences = () => {
@@ -3309,6 +3421,7 @@ const loadHotPlaceholderExamples = async (force = false) => {
 
 onMounted(async () => {
   ensureAgentThreadId();
+  await loadCurrentUser();
   const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches || false;
   darkMode.value = readBooleanPreference('jvmDarkMode', prefersDark);
   accessibilityMode.value = readBooleanPreference('jvmAccessibilityMode', false);
@@ -4272,6 +4385,113 @@ const fetchAiExplanation = async () => {
   color: var(--primary);
   border-color: color-mix(in srgb, var(--primary) 40%, var(--surface-border));
   background: color-mix(in srgb, var(--primary) 8%, var(--field-bg));
+}
+
+/* === 登录用户区 + 认证弹窗 === */
+.auth-user {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 12px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.auth-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--text-primary) 32%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.auth-modal {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 1.05rem;
+}
+
+.auth-modal__close {
+  border: none;
+  background: transparent;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.auth-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--surface-border);
+  border-radius: 12px;
+  background: var(--field-bg);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.auth-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.auth-submit {
+  width: 100%;
+  margin-top: 2px;
+}
+
+.auth-error {
+  margin: 0;
+  color: #d9534f;
+  font-size: 0.85rem;
+}
+
+.auth-switch {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.auth-link {
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.auth-note {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 
 .pref-link:focus-visible {

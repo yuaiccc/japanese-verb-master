@@ -137,8 +137,13 @@ async function createAlipayProvider({ db }) {
     appId: process.env.ALIPAY_APP_ID,
     privateKey: process.env.ALIPAY_PRIVATE_KEY,
     alipayPublicKey: process.env.ALIPAY_PUBLIC_KEY,
-    // 沙箱网关 https://openapi.alipaydev.com/gateway.do；生产留空走默认
-    ...(process.env.ALIPAY_GATEWAY ? { gateway: process.env.ALIPAY_GATEWAY } : {})
+    signType: 'RSA2',
+    // 私钥格式：密钥工具生成的多为 PKCS8（-----BEGIN PRIVATE KEY-----）；
+    // 老格式 PKCS1（-----BEGIN RSA PRIVATE KEY-----）。验签失败先改这个。
+    keyType: process.env.ALIPAY_KEY_TYPE || 'PKCS8',
+    // 重要：curl() 走 v3 REST API，沙箱要设 endpoint（不是老 exec 的 gateway）。
+    // 沙箱 v3：https://openapi-sandbox.dl.alipaydev.com  生产留空走默认 openapi.alipay.com
+    ...(process.env.ALIPAY_ENDPOINT ? { endpoint: process.env.ALIPAY_ENDPOINT } : {})
   });
 
   // 到账后落库 + 授予权益（幂等）
@@ -200,6 +205,18 @@ async function createAlipayProvider({ db }) {
 export async function createPaymentProvider({ db }) {
   ensurePaymentSchema(db);
   const useAlipay = !!(process.env.ALIPAY_APP_ID && process.env.ALIPAY_PRIVATE_KEY);
-  if (useAlipay) return createAlipayProvider({ db });
+  if (useAlipay) {
+    try {
+      const provider = await createAlipayProvider({ db });
+      const env = process.env.ALIPAY_ENDPOINT?.includes('sandbox') ? '沙箱' : '生产';
+      console.log(`[payments] Alipay provider 已启用（${env}，APP_ID=${process.env.ALIPAY_APP_ID}）`);
+      return provider;
+    } catch (err) {
+      // 半配置 / 缺依赖 / 密钥错不应让服务起不来：回退 mock 并告警
+      console.warn(`[payments] Alipay 初始化失败，回退 mock provider：${err.message}`);
+      return createMockProvider({ db });
+    }
+  }
+  console.log('[payments] 未配置 ALIPAY_* ，使用 mock provider（零资金演示）');
   return createMockProvider({ db });
 }

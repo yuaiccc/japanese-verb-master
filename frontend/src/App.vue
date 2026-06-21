@@ -142,6 +142,11 @@
     <template v-if="currentMode !== 'credits'">
     <section v-if="workbenchSection === 'dict'" class="agent-panel agent-panel--hero card">
       <div class="agent-chat">
+        <div v-if="agentMessages.length === 0" class="hero-intro">
+          <p class="hero-eyebrow">JAPANESE WORD MASTER</p>
+          <h1 class="hero-title">問<span class="hero-title-accent">日本語</span></h1>
+          <p class="hero-subtitle">查词 · 辨析 · 活用 · 造句 —— 用一句中文提问，AI 帮你拆解日语。</p>
+        </div>
         <div class="agent-chat-input">
           <input
             id="agent-command"
@@ -175,6 +180,16 @@
             <span v-if="loading" class="search-btn__spinner" aria-hidden="true"></span>
             <Icon v-else name="arrow-up" class="search-btn__arrow" />
           </button>
+        </div>
+
+        <div v-if="agentMessages.length === 0" class="hero-chips">
+          <button
+            v-for="chip in heroChips"
+            :key="chip.prompt"
+            type="button"
+            class="hero-chip"
+            @click="runHeroExample(chip.prompt)"
+          >{{ chip.label }}</button>
         </div>
 
         <ul v-if="showDropdown && (suggestions.length > 0 || showHistory)" class="suggestions-list agent-suggestions">
@@ -1026,6 +1041,18 @@ const defaultAgentPlaceholderExamples = [
   '问日语：把 猫 翻成日语并推荐相近词'
 ];
 const agentPlaceholderExamples = ref([...defaultAgentPlaceholderExamples]);
+
+// 首屏快捷示例：短标签 + 实际发送的完整提问
+const heroChips = [
+  { label: '食べる 的活用', prompt: '问日语：食べる 的全部活用形式' },
+  { label: '〜ている 的用法', prompt: '问日语：为什么 〜ている 有时表示状态' },
+  { label: '便利店场景例句', prompt: '问日语：给我 3 个便利店场景例句' },
+  { label: '把「猫」翻成日语', prompt: '问日语：把 猫 翻成日语并推荐相近词' }
+];
+const runHeroExample = (prompt) => {
+  agentInput.value = prompt;
+  submitAgentCommand();
+};
 const animatedAgentPlaceholder = ref(agentPlaceholderExamples.value[0]);
 let placeholderInterval = null;
 let placeholderRefreshInterval = null;
@@ -4233,6 +4260,72 @@ const fetchAiExplanation = async () => {
 .agent-panel--hero {
   border-color: color-mix(in srgb, var(--primary) 32%, var(--surface-border));
   box-shadow: var(--shadow-lift);
+}
+
+/* 首屏引导 */
+.hero-intro {
+  text-align: center;
+  padding: 18px 12px 22px;
+}
+
+.hero-eyebrow {
+  margin: 0 0 10px;
+  font-size: 0.72rem;
+  letter-spacing: 0.32em;
+  font-weight: 700;
+  color: var(--primary);
+  opacity: 0.85;
+}
+
+.hero-title {
+  margin: 0;
+  font-size: clamp(2.4rem, 6vw, 3.4rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+
+.hero-title-accent {
+  color: var(--primary);
+}
+
+.hero-subtitle {
+  margin: 12px auto 0;
+  max-width: 30em;
+  font-size: 0.98rem;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.hero-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.hero-chip {
+  border: 1px solid var(--surface-border);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.5), transparent),
+    var(--field-bg);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 7px 15px;
+  font-size: 0.86rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.2s var(--ease-out), color 0.2s var(--ease-out),
+    transform 0.3s var(--ease-spring), box-shadow 0.25s var(--ease-out);
+}
+
+.hero-chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-soft);
 }
 
 /* .agent-chip（含 hover）已移至 styles/shared.css（全局共享） */

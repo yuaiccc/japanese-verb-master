@@ -916,6 +916,11 @@ import { useDojo } from './composables/useDojo';
 
 // 认证：token 存 localStorage，拦截器给每个请求自动带上 Authorization
 const AUTH_TOKEN_KEY = 'jvm_auth_token';
+
+// 拼接绝对 API 地址：生产构建 VITE_API_BASE=https://xxx.onrender.com，开发不设时退到相对路径走 Vite proxy。
+// axios 走 main.js 的 defaults.baseURL；这里给绕过 axios 的 fetch / EventSource 用。
+const apiUrl = (path) => `${import.meta.env.VITE_API_BASE || ''}${path}`;
+
 axios.interceptors.request.use((config) => {
   const token = localStorage.getItem(AUTH_TOKEN_KEY);
   if (token) {
@@ -2380,7 +2385,7 @@ const runAgent = async () => {
     const controller = new AbortController();
     agentAbortController.value = controller;
     timeoutId = window.setTimeout(() => controller.abort(), 90000);
-    const response = await fetch('/api/agent/stream', {
+    const response = await fetch(apiUrl('/api/agent/stream'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
@@ -3146,7 +3151,7 @@ const fetchAiExplanation = async () => {
   
   try {
     startProgress();
-    const response = await fetch('/api/ai-explain', {
+    const response = await fetch(apiUrl('/api/ai-explain'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

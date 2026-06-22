@@ -81,7 +81,9 @@ import {
 import {
   buildFeishuAgentContext,
   createFeishuClient,
+  createFeishuLongConnection,
   createRecentEventDedupe,
+  FEISHU_CONNECTION_MODES,
   parseFeishuTextMessage
 } from './integrations/feishu.js';
 
@@ -2231,14 +2233,18 @@ function lookupWordJisho(keyword) {
 // 初始化 Ollama
 const app = express();
 const PORT = process.env.PORT || 3456;
+const HOST = process.env.HOST || '127.0.0.1';
 const feishuClient = createFeishuClient();
 const shouldProcessFeishuEvent = createRecentEventDedupe();
+let feishuLongConnection = null;
 
 // 中间件
+// 跨域：默认放开（演示/开发），生产可设 CORS_ORIGIN 为具体 Vercel 域收紧。
+// Authorization 必须放行，否则前端的 JWT 登录态过不来。
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type']
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
 
@@ -2997,13 +3003,31 @@ function truncatePlatformReply(text = '', limit = 3500) {
   return `${normalized.slice(0, limit - 20)}\n\n（内容较长，已截断）`;
 }
 
-async function processFeishuMessage(parsed) {
+async function processFeishuMessage(parsed, { dedupe = true } = {}) {
+  if (dedupe && !shouldProcessFeishuEvent(parsed.eventId || parsed.messageId)) {
+    return;
+  }
   const context = buildFeishuAgentContext(parsed);
   const result = await runToolCallingAgent({
     message: parsed.text,
     context
   });
   await feishuClient.replyText(parsed.messageId, truncatePlatformReply(result.answer));
+}
+
+async function startFeishuLongConnection() {
+  const mode = String(process.env.FEISHU_CONNECTION_MODE || FEISHU_CONNECTION_MODES.DISABLED).trim().toLowerCase();
+  if (mode !== FEISHU_CONNECTION_MODES.WEBSOCKET) return;
+
+  try {
+    feishuLongConnection = await createFeishuLongConnection({
+      onMessage: processFeishuMessage
+    });
+    await feishuLongConnection.start();
+    console.log('[feishu] long connection started.');
+  } catch (error) {
+    console.error('[feishu] long connection disabled:', error.message || error);
+  }
 }
 
 app.post('/api/integrations/feishu/webhook', (req, res) => {
@@ -3029,7 +3053,7 @@ app.post('/api/integrations/feishu/webhook', (req, res) => {
   }
 
   res.json({ ok: true, accepted: true });
-  processFeishuMessage(parsed).catch((error) => {
+  processFeishuMessage(parsed, { dedupe: false }).catch((error) => {
     console.error('[feishu] failed to process message:', error);
     feishuClient.replyText(parsed.messageId, `处理失败：${error.message || '未知错误'}`).catch((replyError) => {
       console.error('[feishu] failed to send error reply:', replyError);
@@ -4255,6 +4279,7 @@ app.get('/api/dojo-quiz', (req, res) => {
 });
 
 // 启动服务器
-app.listen(PORT, () => {
-  console.log(`Japanese Verb Master API running on port ${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Japanese Verb Master API running on http://${HOST}:${PORT}`);
+  startFeishuLongConnection();
 });

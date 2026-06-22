@@ -3227,7 +3227,10 @@ const fetchAiExplanation = async () => {
   color: #191714;
   font-family: "Songti SC", "STSong", "Source Han Serif SC", "Noto Serif SC", "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", "游明朝", serif;
   font-feature-settings: "palt" 1;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 

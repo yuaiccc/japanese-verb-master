@@ -6,6 +6,7 @@
         <!-- 准备界面 -->
         <div v-if="dojoState === 'start'" class="card dojo-card dojo-start" key="start">
           <Icon name="brain" class="icon-brain-large" />
+          <p class="dojo-eyebrow">活用 · CONJUGATION DOJO</p>
           <h2>动词变形道场</h2>
           <p class="dojo-start-copy">先选一个练习场景，再开始 10 题挑战。你在道场里的答题表现会自动生成学习画像。</p>
           <div class="dojo-scene-grid">
@@ -262,15 +263,26 @@ const {
 }
 
 .icon-brain-large {
-  width: 64px;
-  height: 64px;
+  width: 56px;
+  height: 56px;
   color: var(--primary);
-  margin-bottom: 16px;
+  margin-bottom: 10px;
+}
+
+.dojo-eyebrow {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  letter-spacing: 0.3em;
+  font-weight: 700;
+  color: var(--primary);
+  opacity: 0.85;
 }
 
 .dojo-start h2 {
-  font-size: 2em;
-  margin-bottom: 16px;
+  font-size: clamp(2rem, 4.5vw, 2.6rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 14px;
   color: var(--text-primary);
 }
 

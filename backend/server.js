@@ -23,6 +23,11 @@ import {
   reviewMemoryCard,
   getReviewQueue,
   getDailyQuota,
+  retrieveAgentMemory,
+  writeAgentMemory,
+  listAgentMemory,
+  deleteAgentMemory,
+  AGENT_MEMORY_TYPES,
   findSimilarWords,
   getMemorySettings,
   saveMemorySettings,
@@ -73,6 +78,12 @@ import {
   requestCancelBackgroundTask,
   requestCancelTasksForRun
 } from './subagentTaskRuntime.js';
+import {
+  buildFeishuAgentContext,
+  createFeishuClient,
+  createRecentEventDedupe,
+  parseFeishuTextMessage
+} from './integrations/feishu.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1527,6 +1538,62 @@ async function generateFollowUpQuestions({ message = '', finalAnswer = '', inten
   }
 }
 
+// Agent Memory 抽取（写路径）：run 结束时判断本轮有没有值得长期记的用户信息。
+// 借鉴 mem0 的"抽原子事实"：只抽稳定的目标/偏好/事实/长期任务，不抽一次性问答内容。
+// 返回 [{ type, mkey, value }]；ollama 或异常时返回 []（不阻塞主流程）。
+async function extractAgentMemoryCandidates({ message = '', finalAnswer = '' }) {
+  if (getLlmProvider() === 'ollama' || !message.trim()) return [];
+  try {
+    const text = await callLlmText({
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是日语学习产品的「长期记忆抽取器」。从这一轮对话里抽取**关于用户本人、值得跨会话长期记住**的信息。',
+            '只抽稳定信息，分四类（type）：',
+            '- goal：学习目标（如"备考 N2"、"想练商务日语"）',
+            '- preference：偏好（如"例句要商务场景"、"解释要简短"、"先给假名"）',
+            '- fact：关于用户的事实（如"母语中文"、"在日企做开发"）',
+            '- task：正在推进的长期任务（如"系统过一遍 N2 语法点"）',
+            '严格要求：',
+            '- 只抽用户**明确表达或强暗示**的，不要臆测、不要把一次性的查词问题当记忆',
+            '- 每条给一个稳定的英文 snake_case 归一化键 mkey（如 jlpt_target / example_style / native_lang），同类信息复用同一 mkey',
+            '- value 用简短中文陈述句',
+            '- 没有值得记的就返回空数组',
+            '- 只输出 JSON 数组：[{"type":"goal","mkey":"jlpt_target","value":"备考 N2"}]'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: `User: ${String(message).slice(0, 800)}\nAssistant: ${String(finalAnswer).slice(0, 800)}\n\n抽取长期记忆条目（JSON 数组，没有则 []）。`
+        }
+      ],
+      model: getDefaultLlmModel(),
+      temperature: 0.2,
+      maxTokens: 320,
+      responseFormat: { type: 'json_object' }
+    });
+
+    let parsed = [];
+    try {
+      const obj = JSON.parse(text);
+      parsed = Array.isArray(obj) ? obj : (Array.isArray(obj.items) ? obj.items : (Array.isArray(obj.memories) ? obj.memories : []));
+    } catch (e) {
+      parsed = [];
+    }
+    return parsed
+      .filter(item => item && AGENT_MEMORY_TYPES.includes(String(item.type)) && item.mkey && item.value)
+      .map(item => ({
+        type: String(item.type),
+        mkey: String(item.mkey).trim().toLowerCase().slice(0, 60),
+        value: String(item.value).replace(/\s+/g, ' ').trim().slice(0, 280)
+      }))
+      .slice(0, 6);
+  } catch (error) {
+    return [];
+  }
+}
+
 // 用同一动词的其他活用形作为干扰项——并根据难度控制“迷惑程度”。
 function buildPracticeOptions(conjugation, answerKey, answer, difficultyLevel = 'N3') {
   const distractorPools = {
@@ -2164,6 +2231,8 @@ function lookupWordJisho(keyword) {
 // 初始化 Ollama
 const app = express();
 const PORT = process.env.PORT || 3456;
+const feishuClient = createFeishuClient();
+const shouldProcessFeishuEvent = createRecentEventDedupe();
 
 // 中间件
 app.use(cors({
@@ -2916,6 +2985,58 @@ app.post('/api/llm-settings', (req, res) => {
   }
 });
 
+function verifyFeishuToken(payload = {}) {
+  const expected = String(process.env.FEISHU_VERIFICATION_TOKEN || '').trim();
+  if (!expected) return true;
+  return String(payload.token || payload.header?.token || '').trim() === expected;
+}
+
+function truncatePlatformReply(text = '', limit = 3500) {
+  const normalized = String(text || '').trim() || '我暂时没有生成有效回答。';
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit - 20)}\n\n（内容较长，已截断）`;
+}
+
+async function processFeishuMessage(parsed) {
+  const context = buildFeishuAgentContext(parsed);
+  const result = await runToolCallingAgent({
+    message: parsed.text,
+    context
+  });
+  await feishuClient.replyText(parsed.messageId, truncatePlatformReply(result.answer));
+}
+
+app.post('/api/integrations/feishu/webhook', (req, res) => {
+  const payload = req.body || {};
+
+  if (payload.type === 'url_verification') {
+    if (!verifyFeishuToken(payload)) {
+      return res.status(403).json({ error: 'Invalid Feishu verification token.' });
+    }
+    return res.json({ challenge: payload.challenge });
+  }
+
+  if (!verifyFeishuToken(payload)) {
+    return res.status(403).json({ error: 'Invalid Feishu verification token.' });
+  }
+
+  const parsed = parseFeishuTextMessage(payload);
+  if (!parsed) {
+    return res.json({ ok: true, ignored: true, reason: 'not_text_message' });
+  }
+  if (!shouldProcessFeishuEvent(parsed.eventId || parsed.messageId)) {
+    return res.json({ ok: true, ignored: true, reason: 'duplicate_event' });
+  }
+
+  res.json({ ok: true, accepted: true });
+  processFeishuMessage(parsed).catch((error) => {
+    console.error('[feishu] failed to process message:', error);
+    feishuClient.replyText(parsed.messageId, `处理失败：${error.message || '未知错误'}`).catch((replyError) => {
+      console.error('[feishu] failed to send error reply:', replyError);
+    });
+  });
+});
+
 app.get('/api/subagent-tasks', (req, res) => {
   const limit = Math.max(0, Number.parseInt(String(req.query.limit || '0'), 10) || 0);
   res.json(listBackgroundTasks({
@@ -3243,6 +3364,27 @@ app.post('/api/memory-settings', (req, res) => {
   }
 });
 
+// Agent Memory 管理：用户可查看/删除 Agent 记住的长期信息（透明可控）
+app.get('/api/agent-memory', (req, res) => {
+  try {
+    res.json(listAgentMemory(req.userId));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load agent memory.' });
+  }
+});
+
+app.delete('/api/agent-memory/:id', (req, res) => {
+  try {
+    const removed = deleteAgentMemory(req.params.id, req.userId);
+    if (!removed.changes) {
+      return res.status(404).json({ error: 'Agent memory not found.' });
+    }
+    res.json(listAgentMemory(req.userId));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete agent memory.' });
+  }
+});
+
 // 相似词推荐：词典结构 + 读音 + 释义 + 场景的轻量推荐
 app.post('/api/similar-words', (req, res) => {
   try {
@@ -3323,15 +3465,12 @@ app.post('/api/agent/learning-plan', async (req, res) => {
   }
 });
 
-// Tool-calling Agent：LLM 决策，后端执行工具，再汇总答案
-app.post('/api/agent/run', async (req, res) => {
-  try {
-    const { message, context = {} } = req.body || {};
-    if (!message || !message.trim()) {
-      return res.status(400).json({ error: 'Missing agent message.' });
-    }
+async function runToolCallingAgent({ message, context = {} }) {
+  if (!message || !message.trim()) {
+    throw new Error('Missing agent message.');
+  }
 
-    const systemPrompt = `你是 Japanese Word Master 的日语学习 Agent。
+  const systemPrompt = `你是 Japanese Word Master 的日语学习 Agent。
 你必须像 DeerFlow 风格的垂类 agent 一样工作：先判断是否需要工具，然后调用工具获取事实。
 可用工具包括外部搜索、词典查询、相似词推荐、记忆状态、加入记忆卡。
 回答要求：
@@ -3340,87 +3479,100 @@ app.post('/api/agent/run', async (req, res) => {
 3. 如果涉及日语语法/词义/例句，优先用工具结果，不要凭空编造。
 4. 给出下一步可执行学习动作。`;
 
-    const userContent = JSON.stringify({
-      userMessage: message,
-      currentLookup: context.lookup || null,
-      memoryStats: context.memoryStats || null,
-      userProfile: context.userProfile || null,
-      exampleDifficulty: context.exampleDifficulty || getMemorySettings().exampleDifficulty || 'auto'
-    });
+  const userContent = JSON.stringify({
+    userMessage: message,
+    currentLookup: context.lookup || null,
+    memoryStats: context.memoryStats || null,
+    userProfile: context.userProfile || null,
+    channel: context.channel || 'web',
+    sessionId: context.sessionId || null,
+    platformUserId: context.platformUserId || null,
+    exampleDifficulty: context.exampleDifficulty || getMemorySettings().exampleDifficulty || 'auto'
+  });
 
-    if (getLlmProvider() === 'ollama') {
-      const searchResult = await externalJapaneseSearch(message);
-      const answer = await callLlmText({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `${userContent}\n\n工具结果：${JSON.stringify(searchResult)}` }
-        ],
-        maxTokens: 1000
-      });
-      return res.json({
-        answer,
-        toolCalls: [{ name: 'external_search', arguments: { query: message }, result: summarizeToolResult(searchResult) }]
-      });
-    }
-
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userContent }
-    ];
-    const toolCalls = [];
-
-    for (let i = 0; i < 4; i++) {
-      const response = await callOpenAiCompatibleChat({
-        messages,
-        model: getDefaultLlmModel(),
-        stream: false,
-        temperature: 0.25,
-        maxTokens: 1200,
-        tools: agentTools,
-        toolChoice: 'auto'
-      });
-      const data = await response.json();
-      const assistantMessage = data.choices?.[0]?.message;
-      if (!assistantMessage) break;
-
-      if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
-        return res.json({ answer: assistantMessage.content || '', toolCalls });
-      }
-
-      messages.push(assistantMessage);
-
-      for (const call of assistantMessage.tool_calls) {
-        const name = call.function?.name;
-        let args = {};
-        try {
-          args = JSON.parse(call.function?.arguments || '{}');
-        } catch (e) {
-          args = {};
-        }
-        const result = await executeAgentTool(name, args);
-        toolCalls.push({
-          name,
-          arguments: args,
-          result: summarizeToolResult(result)
-        });
-        messages.push({
-          role: 'tool',
-          tool_call_id: call.id,
-          content: JSON.stringify(result)
-        });
-      }
-    }
-
-    const finalAnswer = await callLlmText({
+  if (getLlmProvider() === 'ollama') {
+    const searchResult = await externalJapaneseSearch(message);
+    const answer = await callLlmText({
       messages: [
-        ...messages,
-        { role: 'user', content: '请基于以上工具结果给出最终学习建议。' }
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `${userContent}\n\n工具结果：${JSON.stringify(searchResult)}` }
       ],
-      model: getDefaultLlmModel(),
-      temperature: 0.25,
-      maxTokens: 1200
+      maxTokens: 1000
     });
-    res.json({ answer: finalAnswer, toolCalls });
+    return {
+      answer,
+      toolCalls: [{ name: 'external_search', arguments: { query: message }, result: summarizeToolResult(searchResult) }]
+    };
+  }
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userContent }
+  ];
+  const toolCalls = [];
+
+  for (let i = 0; i < 4; i++) {
+    const response = await callOpenAiCompatibleChat({
+      messages,
+      model: getDefaultLlmModel(),
+      stream: false,
+      temperature: 0.25,
+      maxTokens: 1200,
+      tools: agentTools,
+      toolChoice: 'auto'
+    });
+    const data = await response.json();
+    const assistantMessage = data.choices?.[0]?.message;
+    if (!assistantMessage) break;
+
+    if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
+      return { answer: assistantMessage.content || '', toolCalls };
+    }
+
+    messages.push(assistantMessage);
+
+    for (const call of assistantMessage.tool_calls) {
+      const name = call.function?.name;
+      let args = {};
+      try {
+        args = JSON.parse(call.function?.arguments || '{}');
+      } catch (e) {
+        args = {};
+      }
+      const result = await executeAgentTool(name, args);
+      toolCalls.push({
+        name,
+        arguments: args,
+        result: summarizeToolResult(result)
+      });
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: JSON.stringify(result)
+      });
+    }
+  }
+
+  const finalAnswer = await callLlmText({
+    messages: [
+      ...messages,
+      { role: 'user', content: '请基于以上工具结果给出最终学习建议。' }
+    ],
+    model: getDefaultLlmModel(),
+    temperature: 0.25,
+    maxTokens: 1200
+  });
+  return { answer: finalAnswer, toolCalls };
+}
+
+// Tool-calling Agent：LLM 决策，后端执行工具，再汇总答案
+app.post('/api/agent/run', async (req, res) => {
+  try {
+    const { message, context = {} } = req.body || {};
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: 'Missing agent message.' });
+    }
+    res.json(await runToolCallingAgent({ message, context }));
   } catch (error) {
     console.error('Agent run failed:', error);
     res.status(500).json({ error: 'Agent run failed.' });
@@ -3450,7 +3602,8 @@ app.post('/api/agent/stream', async (req, res) => {
 回答要求：
 1. 用中文回答，必要时保留日语原文。
 2. 工具结果优先，不确定就说明不确定。
-3. 输出要适合日语学习者：对比表、例句、误用提醒、下一步练习。`;
+3. 输出要适合日语学习者：对比表、例句、误用提醒、下一步练习。
+4. 若 context 里有 agentMemory（用户的长期目标/偏好/事实/任务），请据此个性化：贴合其学习目标与水平、遵守其偏好（如例句风格、解释详略），但不要生硬复述这些记忆。`;
 
     const compactSummary = buildPersistedCompactSummary({
       currentRunId: runId,
@@ -3459,11 +3612,16 @@ app.post('/api/agent/stream', async (req, res) => {
       model: getDefaultLlmModel()
     });
 
+    // Agent Memory 注入（读路径）：检索 top-k 长期记忆，喂给编排器做个性化
+    const agentMemory = retrieveAgentMemory(req.userId, { limit: 8 })
+      .map(m => ({ type: m.type, value: m.value }));
+
     const userContent = JSON.stringify({
       userMessage: message,
       currentLookup: context.lookup || null,
       memoryStats: context.memoryStats || null,
       userProfile: context.userProfile || null,
+      agentMemory: agentMemory.length > 0 ? agentMemory : null,
       exampleDifficulty: context.exampleDifficulty || getMemorySettings().exampleDifficulty || 'auto',
       compactSummary,
       recentConversation: compactSummary.recentConversation
@@ -3570,6 +3728,16 @@ app.post('/api/agent/stream', async (req, res) => {
         })
       }
     });
+
+    // Agent Memory 抽取（写路径，fire-and-forget 不阻塞响应）：
+    // 从本轮对话抽取值得长期记的用户目标/偏好/事实/任务 → 写入 agent_memory。
+    const memUserId = req.userId;
+    extractAgentMemoryCandidates({ message, finalAnswer: finalState.finalAnswer || '' })
+      .then(candidates => {
+        if (candidates.length > 0) writeAgentMemory(candidates, memUserId, runId);
+      })
+      .catch(err => console.error('Agent Memory 抽取失败', err?.message || err));
+
     const knowledgeSources = knowledgeHits
       .filter((hit, index, arr) => arr.findIndex(h => h.id === hit.id) === index)
       .slice(0, 5);

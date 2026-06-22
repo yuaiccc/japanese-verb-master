@@ -65,6 +65,25 @@ db.exec(`
   )
 `);
 
+// 逐次复习日志：每次评分写一行，保留调度前后状态。
+// 用途：每日复习量统计 / 复习曲线分析 / 未来拟合 FSRS 参数的训练数据。
+db.exec(`
+  CREATE TABLE IF NOT EXISTS review_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL DEFAULT 1,
+    card_id INTEGER NOT NULL,
+    grade TEXT NOT NULL,
+    was_new INTEGER NOT NULL DEFAULT 0,
+    ease_before REAL NOT NULL DEFAULT 0,
+    ease_after REAL NOT NULL DEFAULT 0,
+    interval_before INTEGER NOT NULL DEFAULT 0,
+    interval_after INTEGER NOT NULL DEFAULT 0,
+    reviewed_at TEXT NOT NULL
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_review_logs_user_time ON review_logs(user_id, reviewed_at)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_review_logs_card ON review_logs(card_id)`);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
@@ -519,19 +538,29 @@ export function deleteMemoryCard(id, userId = 1) {
 }
 
 const getMemoryByIdStmt = db.prepare(`
-  SELECT id, ease, interval_days AS intervalDays
+  SELECT id, ease, interval_days AS intervalDays, review_count AS reviewCount
   FROM memory_cards
   WHERE id = ? AND user_id = ?
   LIMIT 1
 `);
 
-export function reviewMemoryCard(id, grade, settings = getMemorySettings(), userId = 1) {
-  const card = getMemoryByIdStmt.get(Number(id), Number(userId) || 1);
-  if (!card) return null;
+const insertReviewLogStmt = db.prepare(`
+  INSERT INTO review_logs (
+    user_id, card_id, grade, was_new,
+    ease_before, ease_after, interval_before, interval_after, reviewed_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
 
-  const now = new Date();
+/**
+ * 纯调度函数（无 db 副作用，便于单测）。算法是 **SM-2 衍生**（ease factor + 区间倍增），
+ * 不是 FSRS：没有 FSRS 的 stability / difficulty 双状态变量。命名里的 `desiredRetention`
+ * 在这里仅作为区间缩放系数（retention 越高、区间增长越慢），并非 FSRS 的目标保持率拟合。
+ * grade: 'forgot' 遗忘（回炉）/ 'hard' 偏难（小步增长）/ 'good' 正常（ease 增长）。
+ * 返回调度后的 { ease, intervalDays, lapseDelta, dueAt }（dueAt 为 Date）。
+ */
+export function scheduleReview(card = {}, grade = 'good', settings = {}, now = new Date()) {
   let ease = Number(card.ease) || 2.2;
-  let intervalDays = Number(card.intervalDays) || 0;
+  let intervalDays = Number(card.intervalDays ?? card.interval_days) || 0;
   let lapseDelta = 0;
   let dueAt;
 
@@ -553,9 +582,92 @@ export function reviewMemoryCard(id, grade, settings = getMemorySettings(), user
     ease = Math.min(2.8, ease + (Number(settings.easeBonus) || 0.08));
     dueAt = new Date(now.getTime() + intervalDays * 24 * 60 * 60 * 1000);
   }
+  return { ease, intervalDays, lapseDelta, dueAt };
+}
+
+// 每次评分写入 review_logs，为将来真正拟合 FSRS 参数预留训练数据。
+export function reviewMemoryCard(id, grade, settings = getMemorySettings(), userId = 1) {
+  const card = getMemoryByIdStmt.get(Number(id), Number(userId) || 1);
+  if (!card) return null;
+
+  const now = new Date();
+  const easeBefore = Number(card.ease) || 2.2;
+  const intervalBefore = Number(card.intervalDays) || 0;
+  const wasNew = (Number(card.reviewCount) || 0) === 0 ? 1 : 0;
+  const { ease, intervalDays, lapseDelta, dueAt } = scheduleReview(card, grade, settings, now);
 
   reviewMemoryStmt.run(ease, intervalDays, lapseDelta, dueAt.toISOString(), now.toISOString(), id);
+  insertReviewLogStmt.run(
+    Number(userId) || 1, Number(id), grade, wasNew,
+    easeBefore, ease, intervalBefore, intervalDays, now.toISOString()
+  );
   return listMemoryCards(500, Number(userId) || 1).find(item => item.id === Number(id));
+}
+
+// 当日起点（服务器本地时区零点），用于每日复习/新卡限流统计。
+function startOfTodayISO() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+const countReviewsTodayStmt = db.prepare(
+  'SELECT COUNT(*) AS n FROM review_logs WHERE user_id = ? AND reviewed_at >= ?'
+);
+const countNewTodayStmt = db.prepare(
+  'SELECT COUNT(DISTINCT card_id) AS n FROM review_logs WHERE user_id = ? AND reviewed_at >= ? AND was_new = 1'
+);
+
+export function getDailyReviewStats(userId = 1) {
+  const since = startOfTodayISO();
+  const uid = Number(userId) || 1;
+  return {
+    reviewsToday: countReviewsTodayStmt.get(uid, since).n,
+    newCardsToday: countNewTodayStmt.get(uid, since).n
+  };
+}
+
+export function getDailyQuota(userId = 1, settings = getMemorySettings()) {
+  const { reviewsToday, newCardsToday } = getDailyReviewStats(userId);
+  const reviewLimit = Number(settings.reviewLimitPerDay) || 60;
+  const newLimit = Number(settings.newCardsPerDay) || 12;
+  return {
+    reviewsToday,
+    reviewLimit,
+    reviewsRemaining: Math.max(0, reviewLimit - reviewsToday),
+    newCardsToday,
+    newLimit,
+    newRemaining: Math.max(0, newLimit - newCardsToday)
+  };
+}
+
+// 纯队列构建（无 db，便于单测）：到期卡按 due 升序后，新卡（review_count===0）受当日新卡
+// 上限约束，整体不超过当日复习上限；new 卡配额用尽时仍优先放行复习卡。
+export function buildReviewQueue(dueCards = [], quota = {}, nowMs = Date.now()) {
+  const due = dueCards
+    .filter(card => new Date(card.dueAt ?? card.due_at).getTime() <= nowMs)
+    .sort((a, b) => new Date(a.dueAt ?? a.due_at) - new Date(b.dueAt ?? b.due_at));
+
+  const reviewsRemaining = Math.max(0, Number(quota.reviewsRemaining) || 0);
+  let newAllowance = Math.max(0, Number(quota.newRemaining) || 0);
+  const cards = [];
+  for (const card of due) {
+    if (cards.length >= reviewsRemaining) break;
+    const isNew = (Number(card.reviewCount ?? card.review_count) || 0) === 0;
+    if (isNew) {
+      if (newAllowance <= 0) continue;
+      newAllowance -= 1;
+    }
+    cards.push(card);
+  }
+  return cards;
+}
+
+// 限流后的当日复习队列 + 配额。
+export function getReviewQueue(userId = 1, settings = getMemorySettings()) {
+  const quota = getDailyQuota(userId, settings);
+  const cards = buildReviewQueue(listMemoryCards(500, userId), quota);
+  return { cards, quota };
 }
 
 export function findSimilarWords({ word, kana = '', wordType = '', meaning = '', limit = 8 }) {

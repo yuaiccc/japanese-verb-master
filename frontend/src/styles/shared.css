@@ -1,0 +1,96 @@
+/*
+ * 跨组件共享的设计系统基元。
+ * 这些类原先定义在 App.vue 的 scoped 样式里，被多个区块（含已抽出的子组件）复用；
+ * 抽成全局样式后，子组件无需重复声明即可命中。配色全部走 CSS 变量，
+ * 变量定义在根容器 .container / .container.app-dark 上，按 DOM 继承级联到这里。
+ */
+
+.card {
+  background: var(--glass-noise), var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-soft), var(--glass-highlight);
+  border: 1px solid var(--surface-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.card h3 {
+  color: var(--text-primary);
+  margin-bottom: 14px;
+  font-size: 1.05em;
+}
+
+.search-btn {
+  padding: 0 22px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 0.95em;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  height: 44px;
+}
+
+.search-btn:hover {
+  transform: translateY(-1px);
+  background: var(--primary-hover);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.search-btn:active {
+  transform: scale(0.95);
+}
+
+.search-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.agent-chip {
+  height: 30px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0 10px;
+  font-weight: 700;
+  font-size: 0.84rem;
+}
+
+.agent-chip:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.icon-check {
+  color: var(--success);
+}
+
+.icon-error {
+  width: 13px;
+  height: 13px;
+}
+
+.title-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.title-with-icon .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.mt-4 {
+  margin-top: 1.5rem;
+}

@@ -1,4 +1,5 @@
 import { createApp } from 'vue';
+import './styles/shared.css';
 import App from './App.vue';
 
 const app = createApp(App);

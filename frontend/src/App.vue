@@ -8,10 +8,6 @@
   >
     <header class="header">
       <div class="header-top">
-        <div class="brand-block">
-          <span class="brand-mark" aria-hidden="true">日</span>
-        </div>
-
         <div class="preference-bar" aria-label="显示偏好设置">
           <button
             type="button"
@@ -3330,8 +3326,8 @@ const fetchAiExplanation = async () => {
   --danger: #a33d2f;
   --error: var(--danger);
   --border: var(--surface-border);
-  --shadow-soft: 0 8px 24px rgba(25, 23, 20, 0.05);
-  --shadow-lift: 0 12px 32px rgba(25, 23, 20, 0.07);
+  --shadow-soft: 0 1px 2px rgba(25, 23, 20, 0.04), 0 6px 16px rgba(25, 23, 20, 0.06);
+  --shadow-lift: 0 2px 4px rgba(25, 23, 20, 0.05), 0 20px 42px rgba(25, 23, 20, 0.11);
   --focus-ring: 0 0 0 3px rgba(185, 95, 69, 0.24);
   --space-2: 8px;
   --space-3: 12px;
@@ -3371,8 +3367,8 @@ const fetchAiExplanation = async () => {
   --accent-soft: rgba(244, 241, 234, 0.1);
   --success: #8fbe8e;
   --danger: #f19a84;
-  --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.26);
-  --shadow-lift: 0 14px 36px rgba(0, 0, 0, 0.3);
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 22px rgba(0, 0, 0, 0.32);
+  --shadow-lift: 0 2px 6px rgba(0, 0, 0, 0.34), 0 22px 46px rgba(0, 0, 0, 0.42);
   --focus-ring: 0 0 0 3px rgba(224, 139, 112, 0.3);
 }
 
@@ -3397,6 +3393,7 @@ const fetchAiExplanation = async () => {
 }
 
 .header-top {
+  justify-content: flex-end;
   padding-bottom: 18px;
   border-bottom: 1px solid var(--surface-border);
 }
@@ -3465,29 +3462,6 @@ const fetchAiExplanation = async () => {
 
 .nav-llm-credit:hover {
   color: var(--primary);
-}
-
-.brand-block {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-}
-
-.brand-mark {
-  width: 54px;
-  height: 54px;
-  border-radius: var(--radius-md);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: #fdf6ec;
-  background:
-    linear-gradient(150deg, var(--primary), color-mix(in srgb, var(--primary) 55%, #2b1b14));
-  box-shadow: 0 14px 26px color-mix(in srgb, var(--primary) 28%, transparent);
-  font-size: 1.7rem;
-  font-weight: 800;
 }
 
 .eyebrow {
@@ -3654,8 +3628,8 @@ const fetchAiExplanation = async () => {
 
 .mode-switch button.active {
   background: var(--field-bg);
-  color: var(--text-primary);
-  box-shadow: 0 4px 12px rgba(24, 35, 31, 0.08);
+  color: var(--primary);
+  box-shadow: 0 1px 2px rgba(25, 23, 20, 0.08), 0 6px 16px rgba(25, 23, 20, 0.12);
 }
 
 
@@ -6381,12 +6355,6 @@ select:focus-visible,
   color: var(--text-primary);
 }
 
-.app-dark .brand-mark {
-  color: #1d1410;
-  background: linear-gradient(150deg, var(--primary), color-mix(in srgb, var(--primary) 60%, #f0d9b5));
-  box-shadow: 0 16px 30px color-mix(in srgb, var(--primary) 30%, transparent);
-}
-
 .app-dark .search-bar--success {
   border-color: rgba(74, 222, 128, 0.58);
 }
@@ -6464,16 +6432,6 @@ select:focus-visible,
   .header-bottom {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .brand-block {
-    align-items: center;
-  }
-
-  .brand-mark {
-    width: 46px;
-    height: 46px;
-    font-size: 1.45rem;
   }
 
   .header h1 {

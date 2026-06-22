@@ -462,6 +462,18 @@ export function getLlmSettings({ includeSecret = false } = {}) {
     model: String(parsed.model || defaultLlmSettings.model).trim(),
     apiKey: String(parsed.apiKey || '').trim()
   };
+  // 部署场景兜底：db 中无 apiKey 时回退到环境变量（Render/容器重启不丢配置）。
+  // 优先按 provider 查具体变量（DEEPSEEK_API_KEY / OPENAI_API_KEY 等），再退到通用 LLM_API_KEY。
+  if (!settings.apiKey) {
+    const providerKey = process.env[`${settings.provider.toUpperCase()}_API_KEY`];
+    settings.apiKey = (providerKey || process.env.LLM_API_KEY || '').trim();
+  }
+  if (!parsed.baseUrl && process.env.LLM_BASE_URL) {
+    settings.baseUrl = String(process.env.LLM_BASE_URL).trim();
+  }
+  if (!parsed.model && process.env.LLM_MODEL) {
+    settings.model = String(process.env.LLM_MODEL).trim();
+  }
   settings.apiKeySet = !!settings.apiKey;
   if (!includeSecret) {
     delete settings.apiKey;

@@ -1,0 +1,28 @@
+# Render Blueprint：一键创建 japanese-verb-master 的后端 Web Service。
+# 用法：登录 Render → New + → Blueprint → 选本仓库 + 分支 → Apply。
+# 文档：https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: japanese-verb-master
+    runtime: node
+    # 国内访问 Singapore 延迟最低（80–150ms vs Oregon 200ms+）。
+    region: singapore
+    plan: free
+    rootDir: backend
+    # 构建期：装依赖 → 从 common-words.json 重建 dictionary.db → 构建知识库索引。
+    # 免费实例无持久磁盘，所有数据在容器重启后丢失（演示可接受；正式上线请改 plan: starter）。
+    buildCommand: npm install && npm run db:import && npm run kb:build
+    startCommand: npm start
+    # 健康检查端点：词典查询不依赖 LLM，启动后即可 200。
+    healthCheckPath: /api/scenes
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: JVM_AUTH_SECRET
+        # 首次部署 Render 会生成随机值；后续保持不变。
+        generateValue: true
+      # LLM API Key——Render UI 里手动填，避免出现在仓库里。
+      # 代码会按 provider 自动选 ${PROVIDER}_API_KEY，否则退到 LLM_API_KEY。
+      - key: DEEPSEEK_API_KEY
+        sync: false

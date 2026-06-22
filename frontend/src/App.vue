@@ -628,6 +628,12 @@
         </div>
       </div>
 
+      <div v-if="reviewQuota" class="memory-quota">
+        <span class="memory-quota-item">今日复习 <strong>{{ reviewQuota.reviewsToday }}/{{ reviewQuota.reviewLimit }}</strong></span>
+        <span class="memory-quota-dot" aria-hidden="true">·</span>
+        <span class="memory-quota-item">新卡 <strong>{{ reviewQuota.newCardsToday }}/{{ reviewQuota.newLimit }}</strong></span>
+      </div>
+
       <div v-if="activeMemoryCard" class="memory-review">
         <div class="memory-card-face">
           <span class="memory-word">{{ activeMemoryCard.word }}</span>
@@ -650,8 +656,8 @@
       </div>
 
       <div v-else class="memory-empty">
-        <strong>{{ memoryCards.length > 0 ? '今日清空' : '暂无卡片' }}</strong>
-        <p>{{ memoryCards.length > 0 ? nextMemoryText : '查词后加入记忆。' }}</p>
+        <strong>{{ reviewLimitReached ? '今日已达上限' : (memoryCards.length > 0 ? '今日清空' : '暂无卡片') }}</strong>
+        <p>{{ reviewLimitReached ? '今天的复习 / 新卡配额已用完，明天继续。' : (memoryCards.length > 0 ? nextMemoryText : '查词后加入记忆。') }}</p>
       </div>
 
       <div class="memory-library">
@@ -1005,6 +1011,8 @@ const agentThreadId = ref('');
 const MAX_HISTORY = 20;
 const history = ref([]);
 const memoryCards = ref([]);
+const reviewQueue = ref([]);      // 服务端限流后的当日复习队列
+const reviewQuota = ref(null);    // { reviewsToday/reviewLimit/newCardsToday/newLimit/... }
 const memoryRevealed = ref(false);
 const memoryLibraryQuery = ref('');
 const memoryLibraryFilter = ref('all');
@@ -1784,9 +1792,20 @@ const loadMemoryCards = async () => {
   try {
     const res = await axios.get('/api/memory-cards');
     memoryCards.value = res.data.map(normalizeMemoryCard);
-    await loadUserProfile();
+    await Promise.allSettled([loadUserProfile(), loadReviewQueue()]);
   } catch (e) {
     console.error('加载记忆卡片失败', e);
+  }
+};
+
+// 服务端限流后的复习队列 + 当日配额（newCardsPerDay / reviewLimitPerDay 在此生效）
+const loadReviewQueue = async () => {
+  try {
+    const { data } = await axios.get('/api/memory-review-queue');
+    reviewQueue.value = (data.cards || []).map(normalizeMemoryCard);
+    reviewQuota.value = data.quota || null;
+  } catch (e) {
+    console.error('加载复习队列失败', e);
   }
 };
 
@@ -2086,7 +2105,8 @@ const dueMemoryCards = computed(() => {
 });
 
 const activeMemoryCard = computed(() => {
-  const card = dueMemoryCards.value[0];
+  // 复习会话走服务端限流队列；未命中再回退到客户端到期列表（队列未加载时）
+  const card = reviewQueue.value[0] || dueMemoryCards.value[0];
   if (!card) return null;
   return {
     ...card,
@@ -2095,6 +2115,11 @@ const activeMemoryCard = computed(() => {
       : (wordTypeDisplayMap[card.wordType] || card.wordType || '词汇')
   };
 });
+
+// 有到期卡但限流队列为空 → 当日配额用尽（区别于"真的清空了"）
+const reviewLimitReached = computed(() =>
+  !!reviewQuota.value && dueMemoryCards.value.length > 0 && reviewQueue.value.length === 0
+);
 
 const memoryStats = computed(() => {
   const total = memoryCards.value.length;
@@ -2199,7 +2224,9 @@ const reviewMemory = async (id, grade) => {
   try {
     const res = await axios.post(`/api/memory-cards/${id}/review`, { grade });
     memoryCards.value = res.data.cards.map(normalizeMemoryCard);
+    if (res.data.quota) reviewQuota.value = res.data.quota;
     memoryRevealed.value = false;
+    await loadReviewQueue(); // 取下一张（仍受当日限流约束）
     if (result.value) await refreshAgentPlan(result.value);
   } catch (e) {
     console.error('复习记录保存失败', e);
@@ -4002,6 +4029,24 @@ const fetchAiExplanation = async () => {
 @media (prefers-reduced-motion: reduce) {
   .traffic-dot--red.is-active { animation: none; }
   .search-btn__spinner { animation-duration: 1.2s; }
+}
+
+.memory-quota {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.memory-quota strong {
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-quota-dot {
+  color: var(--surface-border);
 }
 
 .memory-review {

@@ -21,6 +21,8 @@ import {
   upsertMemoryCard,
   deleteMemoryCard,
   reviewMemoryCard,
+  getReviewQueue,
+  getDailyQuota,
   findSimilarWords,
   getMemorySettings,
   saveMemorySettings,
@@ -3200,6 +3202,15 @@ app.delete('/api/memory-cards/:id', (req, res) => {
   }
 });
 
+// 限流后的当日复习队列 + 配额（newCardsPerDay / reviewLimitPerDay 在此生效）
+app.get('/api/memory-review-queue', (req, res) => {
+  try {
+    res.json(getReviewQueue(req.userId, getMemorySettings()));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to build review queue.' });
+  }
+});
+
 app.post('/api/memory-cards/:id/review', (req, res) => {
   try {
     const { grade } = req.body || {};
@@ -3210,7 +3221,11 @@ app.post('/api/memory-cards/:id/review', (req, res) => {
     if (!updated) {
       return res.status(404).json({ error: 'Memory card not found.' });
     }
-    res.json({ updated, cards: listMemoryCards(500, req.userId) });
+    res.json({
+      updated,
+      cards: listMemoryCards(500, req.userId),
+      quota: getDailyQuota(req.userId, getMemorySettings())
+    });
   } catch (error) {
     res.status(500).json({ error: 'Failed to review memory card.' });
   }

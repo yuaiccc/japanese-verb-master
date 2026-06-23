@@ -700,6 +700,22 @@
         </div>
         <div v-else class="memory-library-empty">没有匹配到已保存词条。</div>
       </div>
+
+      <!-- Agent 长期记忆：区别于上面的 SRS 复习卡，记的是"你是谁/要什么/在做什么" -->
+      <div class="agent-memory-block">
+        <div class="agent-memory-head">
+          <h3>Agent 长期记忆</h3>
+          <span class="agent-memory-sub">个性化回答的依据 · 与复习卡相互独立</span>
+        </div>
+        <div v-if="agentMemoryList.length > 0" class="agent-memory-list">
+          <div v-for="item in agentMemoryList" :key="item.id" class="agent-memory-item">
+            <span class="agent-memory-tag" :data-type="item.type">{{ agentMemoryTypeLabel(item.type) }}</span>
+            <span class="agent-memory-value">{{ item.value }}</span>
+            <button class="agent-memory-del" title="忘记这条" @click="deleteAgentMemoryItem(item.id)">×</button>
+          </div>
+        </div>
+        <p v-else class="agent-memory-empty">还没有长期记忆。多和 Agent 聊聊学习目标和偏好，它会逐渐记住你。</p>
+      </div>
     </section>
 
     <main class="main-content" v-if="workbenchSection === 'dict' && (result || loadingAi)">
@@ -900,12 +916,39 @@ import { useDojo } from './composables/useDojo';
 
 // 认证：token 存 localStorage，拦截器给每个请求自动带上 Authorization
 const AUTH_TOKEN_KEY = 'jvm_auth_token';
+
+// 自带 LLM key（方案 A）：key 只存浏览器 localStorage，每请求带 header；不入库、不被他人共享。
+const LLM_SETTINGS_KEY = 'jvm_llm_settings';
+const readLocalLlmSettings = () => {
+  try { return JSON.parse(localStorage.getItem(LLM_SETTINGS_KEY) || '{}'); }
+  catch { return {}; }
+};
+const writeLocalLlmSettings = (s) => {
+  localStorage.setItem(LLM_SETTINGS_KEY, JSON.stringify({
+    provider: s.provider || '', baseUrl: s.baseUrl || '', model: s.model || '', apiKey: s.apiKey || ''
+  }));
+};
+const buildLlmHeaders = () => {
+  const s = readLocalLlmSettings();
+  if (!s.apiKey) return {};
+  return {
+    'X-LLM-API-Key': s.apiKey,
+    ...(s.provider ? { 'X-LLM-Provider': s.provider } : {}),
+    ...(s.baseUrl ? { 'X-LLM-Base-Url': s.baseUrl } : {}),
+    ...(s.model ? { 'X-LLM-Model': s.model } : {})
+  };
+};
+
+// 拼接绝对 API 地址：生产构建 VITE_API_BASE=https://xxx，开发不设时退到相对路径走 Vite proxy。
+// 单平台部署（Express 同时托管前端）也走相对路径，不用设 VITE_API_BASE。
+const apiUrl = (path) => `${import.meta.env.VITE_API_BASE || ''}${path}`;
+
 axios.interceptors.request.use((config) => {
+  config.headers = config.headers || {};
   const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  if (token) {
-    config.headers = config.headers || {};
-    config.headers.Authorization = `Bearer ${token}`;
-  }
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  // 注入用户自带的 LLM key（每请求生效，后端 AsyncLocalStorage 取它）
+  Object.assign(config.headers, buildLlmHeaders());
   return config;
 });
 
@@ -1013,6 +1056,7 @@ const history = ref([]);
 const memoryCards = ref([]);
 const reviewQueue = ref([]);      // 服务端限流后的当日复习队列
 const reviewQuota = ref(null);    // { reviewsToday/reviewLimit/newCardsToday/newLimit/... }
+const agentMemoryList = ref([]);  // Agent 长期记忆（goal/preference/fact/task）
 const memoryRevealed = ref(false);
 const memoryLibraryQuery = ref('');
 const memoryLibraryFilter = ref('all');
@@ -1792,7 +1836,7 @@ const loadMemoryCards = async () => {
   try {
     const res = await axios.get('/api/memory-cards');
     memoryCards.value = res.data.map(normalizeMemoryCard);
-    await Promise.allSettled([loadUserProfile(), loadReviewQueue()]);
+    await Promise.allSettled([loadUserProfile(), loadReviewQueue(), loadAgentMemory()]);
   } catch (e) {
     console.error('加载记忆卡片失败', e);
   }
@@ -1806,6 +1850,27 @@ const loadReviewQueue = async () => {
     reviewQuota.value = data.quota || null;
   } catch (e) {
     console.error('加载复习队列失败', e);
+  }
+};
+
+const AGENT_MEMORY_TYPE_LABELS = { goal: '目标', preference: '偏好', fact: '事实', task: '任务' };
+const agentMemoryTypeLabel = (type) => AGENT_MEMORY_TYPE_LABELS[type] || type;
+
+const loadAgentMemory = async () => {
+  try {
+    const { data } = await axios.get('/api/agent-memory');
+    agentMemoryList.value = Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.error('加载 Agent 记忆失败', e);
+  }
+};
+
+const deleteAgentMemoryItem = async (id) => {
+  try {
+    const { data } = await axios.delete(`/api/agent-memory/${id}`);
+    agentMemoryList.value = Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.error('删除 Agent 记忆失败', e);
   }
 };
 
@@ -1828,13 +1893,10 @@ const saveMemorySettingsToServer = async () => {
 };
 
 const loadLlmSettings = async () => {
-  try {
-    const res = await axios.get('/api/llm-settings');
-    llmSettings.value = { ...llmSettings.value, ...res.data, apiKey: '' };
-    llmStatus.value = res.data;
-  } catch (e) {
-    console.error('加载 LLM 设置失败', e);
-  }
+  // 自带 key（A 方案）：从 localStorage 读，apiKey 保留以便前端显示已配置状态。
+  const local = readLocalLlmSettings();
+  llmSettings.value = { ...llmSettings.value, ...local, apiKeySet: !!local.apiKey };
+  llmStatus.value = { provider: local.provider || llmSettings.value.provider, model: local.model || llmSettings.value.model, apiKeySet: !!local.apiKey };
 };
 
 const embeddingSettings = ref({ provider: 'ollama', model: 'bge-m3', baseUrl: 'http://localhost:11434', apiKey: '', apiKeySet: false });
@@ -1847,15 +1909,13 @@ const saveEmbeddingSettings = async () => {
 };
 
 const saveLlmSettingsToServer = async () => {
-  try {
-    const payload = { ...llmSettings.value };
-    if (!payload.apiKey) delete payload.apiKey;
-    const res = await axios.post('/api/llm-settings', payload);
-    llmSettings.value = { ...llmSettings.value, ...res.data, apiKey: '' };
-    llmStatus.value = res.data;
-  } catch (e) {
-    console.error('保存 LLM 设置失败', e);
-  }
+  // 自带 key（A 方案）：保存到 localStorage，不再 POST 到后端，避免共享 key 被打爆额度。
+  writeLocalLlmSettings(llmSettings.value);
+  llmStatus.value = {
+    provider: llmSettings.value.provider,
+    model: llmSettings.value.model,
+    apiKeySet: !!llmSettings.value.apiKey
+  };
 };
 
 const applyLlmProviderPreset = () => {
@@ -2342,9 +2402,9 @@ const runAgent = async () => {
     const controller = new AbortController();
     agentAbortController.value = controller;
     timeoutId = window.setTimeout(() => controller.abort(), 90000);
-    const response = await fetch('/api/agent/stream', {
+    const response = await fetch(apiUrl('/api/agent/stream'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...buildLlmHeaders() },
       signal: controller.signal,
       body: JSON.stringify({
         runId,
@@ -3108,10 +3168,11 @@ const fetchAiExplanation = async () => {
   
   try {
     startProgress();
-    const response = await fetch('/api/ai-explain', {
+    const response = await fetch(apiUrl('/api/ai-explain'), {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        ...buildLlmHeaders()
       },
       signal: controller.signal,
       body: JSON.stringify(requestBody)
@@ -4277,6 +4338,92 @@ const fetchAiExplanation = async () => {
   padding: 14px 0 2px;
   color: var(--text-muted);
   font-size: 0.84rem;
+}
+
+/* Agent 长期记忆区 */
+.agent-memory-block {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px dashed var(--surface-border);
+}
+
+.agent-memory-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.agent-memory-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.agent-memory-sub {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.agent-memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-memory-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--field-bg);
+}
+
+.agent-memory-tag {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.agent-memory-tag[data-type="fact"] { color: var(--text-secondary); background: var(--surface-muted); }
+
+.agent-memory-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.agent-memory-del {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: color 0.2s, background 0.2s;
+}
+
+.agent-memory-del:hover {
+  color: var(--danger);
+  background: var(--surface-muted);
+}
+
+.agent-memory-empty {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  line-height: 1.6;
 }
 
 .agent-panel--hero {

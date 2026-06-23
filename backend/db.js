@@ -84,6 +84,27 @@ db.exec(`
 db.exec(`CREATE INDEX IF NOT EXISTS idx_review_logs_user_time ON review_logs(user_id, reviewed_at)`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_review_logs_card ON review_logs(card_id)`);
 
+// Agent Memory（区别于上面的学习记忆/SRS）：记"用户是谁、要什么、长期在做什么"。
+// 借鉴 Hermes 的 USER.md（结构化版）+ mem0 的事实抽取/冲突消解思路。
+// type: goal 目标 / preference 偏好 / fact 关于用户的事实 / task 长期任务。
+// mkey 是归一化的记忆键，(user_id, type, mkey) 唯一 → 同一条信息更新而非堆积。
+db.exec(`
+  CREATE TABLE IF NOT EXISTS agent_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL DEFAULT 1,
+    type TEXT NOT NULL,
+    mkey TEXT NOT NULL,
+    value TEXT NOT NULL,
+    salience REAL NOT NULL DEFAULT 1.0,
+    source_run_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL DEFAULT '',
+    UNIQUE(user_id, type, mkey)
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_memory_user ON agent_memory(user_id, type)`);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
@@ -441,6 +462,18 @@ export function getLlmSettings({ includeSecret = false } = {}) {
     model: String(parsed.model || defaultLlmSettings.model).trim(),
     apiKey: String(parsed.apiKey || '').trim()
   };
+  // 部署场景兜底：db 中无 apiKey 时回退到环境变量（Render/容器重启不丢配置）。
+  // 优先按 provider 查具体变量（DEEPSEEK_API_KEY / OPENAI_API_KEY 等），再退到通用 LLM_API_KEY。
+  if (!settings.apiKey) {
+    const providerKey = process.env[`${settings.provider.toUpperCase()}_API_KEY`];
+    settings.apiKey = (providerKey || process.env.LLM_API_KEY || '').trim();
+  }
+  if (!parsed.baseUrl && process.env.LLM_BASE_URL) {
+    settings.baseUrl = String(process.env.LLM_BASE_URL).trim();
+  }
+  if (!parsed.model && process.env.LLM_MODEL) {
+    settings.model = String(process.env.LLM_MODEL).trim();
+  }
   settings.apiKeySet = !!settings.apiKey;
   if (!includeSecret) {
     delete settings.apiKey;
@@ -668,6 +701,115 @@ export function getReviewQueue(userId = 1, settings = getMemorySettings()) {
   const quota = getDailyQuota(userId, settings);
   const cards = buildReviewQueue(listMemoryCards(500, userId), quota);
   return { cards, quota };
+}
+
+// ===== Agent Memory =====
+
+export const AGENT_MEMORY_TYPES = ['goal', 'preference', 'fact', 'task'];
+
+/**
+ * 纯排序（无 db，便于单测）：salience × 时间衰减。
+ * 借鉴 mem0 的 recency×salience 检索：近期更新/常用的记忆排前，旧的自然下沉。
+ * 半衰期默认 30 天。返回按分数降序的 top-k。
+ */
+export function rankAgentMemories(memories = [], { nowMs = Date.now(), limit = 8, halfLifeDays = 30 } = {}) {
+  const halfLifeMs = halfLifeDays * 24 * 60 * 60 * 1000;
+  return memories
+    .map((m) => {
+      const ref = new Date(m.updatedAt || m.updated_at || m.createdAt || m.created_at || 0).getTime();
+      const ageMs = Math.max(0, nowMs - (Number.isFinite(ref) ? ref : 0));
+      const recency = Math.pow(0.5, ageMs / halfLifeMs); // 1 → 0
+      const score = (Number(m.salience) || 1) * recency;
+      return { ...m, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(0, limit));
+}
+
+/**
+ * 纯冲突消解（无 db）：把抽取到的候选并入已有记忆。
+ * 同 (type, mkey) 视为同一条 → 更新 value、salience 提分（mem0 的 conflict resolution）。
+ * 新键则新增。返回 { upserts:[...], skipped:[...] }，由调用方落库。
+ */
+export function resolveAgentMemoryConflicts(existing = [], candidates = [], { bump = 0.5 } = {}) {
+  const index = new Map(existing.map((m) => [`${m.type}::${m.mkey}`, m]));
+  const upserts = [];
+  const skipped = [];
+  for (const cand of candidates) {
+    const type = String(cand.type || '').trim();
+    const mkey = String(cand.mkey || '').trim().toLowerCase();
+    const value = String(cand.value || '').trim();
+    if (!AGENT_MEMORY_TYPES.includes(type) || !mkey || !value) {
+      skipped.push(cand);
+      continue;
+    }
+    const prev = index.get(`${type}::${mkey}`);
+    if (prev && String(prev.value).trim() === value) {
+      // 内容完全一致：只提 salience，不算更新
+      upserts.push({ type, mkey, value, salience: (Number(prev.salience) || 1) + bump, unchanged: true });
+    } else if (prev) {
+      upserts.push({ type, mkey, value, salience: (Number(prev.salience) || 1) + bump, unchanged: false });
+    } else {
+      upserts.push({ type, mkey, value, salience: 1, unchanged: false });
+    }
+  }
+  return { upserts, skipped };
+}
+
+const listAgentMemoryStmt = db.prepare(`
+  SELECT id, user_id AS userId, type, mkey, value, salience,
+         source_run_id AS sourceRunId,
+         created_at AS createdAt, updated_at AS updatedAt, last_used_at AS lastUsedAt
+  FROM agent_memory
+  WHERE user_id = ?
+  ORDER BY datetime(updated_at) DESC
+`);
+
+export function listAgentMemory(userId = 1) {
+  return listAgentMemoryStmt.all(Number(userId) || 1);
+}
+
+const upsertAgentMemoryStmt = db.prepare(`
+  INSERT INTO agent_memory (user_id, type, mkey, value, salience, source_run_id, created_at, updated_at, last_used_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
+  ON CONFLICT(user_id, type, mkey) DO UPDATE SET
+    value = excluded.value,
+    salience = excluded.salience,
+    source_run_id = excluded.source_run_id,
+    updated_at = excluded.updated_at
+`);
+
+// 把抽取候选并入持久库（内部先做纯冲突消解，再落库）。返回写入条数。
+export function writeAgentMemory(candidates = [], userId = 1, sourceRunId = '') {
+  const uid = Number(userId) || 1;
+  const { upserts } = resolveAgentMemoryConflicts(listAgentMemory(uid), candidates);
+  const now = new Date().toISOString();
+  const tx = db.transaction((rows) => {
+    for (const row of rows) {
+      upsertAgentMemoryStmt.run(uid, row.type, row.mkey, row.value, row.salience, sourceRunId, now, now);
+    }
+  });
+  tx(upserts);
+  return upserts.length;
+}
+
+const touchAgentMemoryStmt = db.prepare('UPDATE agent_memory SET last_used_at = ? WHERE id = ?');
+
+// 检索注入用 top-k：排序后顺手标记 last_used_at（便于将来做使用频率衰减）。
+export function retrieveAgentMemory(userId = 1, { limit = 8 } = {}) {
+  const ranked = rankAgentMemories(listAgentMemory(userId), { limit });
+  const now = new Date().toISOString();
+  const tx = db.transaction((rows) => {
+    for (const r of rows) touchAgentMemoryStmt.run(now, r.id);
+  });
+  tx(ranked);
+  return ranked;
+}
+
+const deleteAgentMemoryStmt = db.prepare('DELETE FROM agent_memory WHERE id = ? AND user_id = ?');
+
+export function deleteAgentMemory(id, userId = 1) {
+  return deleteAgentMemoryStmt.run(Number(id), Number(userId) || 1);
 }
 
 export function findSimilarWords({ word, kana = '', wordType = '', meaning = '', limit = 8 }) {

@@ -122,10 +122,21 @@
         <input v-model="llmSettings.model" type="text" placeholder="model">
         <input v-model="llmSettings.baseUrl" type="text" placeholder="Base URL">
         <input v-model="llmSettings.apiKey" type="password" :placeholder="llmSettings.apiKeySet ? 'API Key 已保存' : 'API Key'">
-        <button class="agent-chip agent-chip--with-icon" @click="saveLlmSettingsToServer">
-          <Icon name="save" />
-          保存
+        <button
+          class="agent-chip agent-chip--with-icon"
+          :class="`agent-chip--${llmSaveStatus}`"
+          :disabled="llmSaveStatus === 'saving'"
+          @click="saveLlmSettingsToServer"
+        >
+          <span v-if="llmSaveStatus === 'saving'" class="mini-spinner" aria-hidden="true"></span>
+          <Icon v-else :name="llmSaveStatus === 'saved' ? 'check' : 'save'" />
+          {{ llmSaveStatus === 'saving' ? '保存中' : llmSaveStatus === 'saved' ? '已保存' : '保存' }}
         </button>
+        <span
+          v-if="llmSaveMessage"
+          class="nav-llm-save-message"
+          :class="`nav-llm-save-message--${llmSaveStatus}`"
+        >{{ llmSaveMessage }}</span>
         <a
           class="nav-llm-credit"
           href="https://github.com/farion1231/cc-switch"
@@ -143,10 +154,21 @@
           <input v-model="embeddingSettings.model" type="text" placeholder="embedding model">
           <input v-model="embeddingSettings.baseUrl" type="text" placeholder="Base URL">
           <input v-if="embeddingSettings.provider !== 'ollama'" v-model="embeddingSettings.apiKey" type="password" :placeholder="embeddingSettings.apiKeySet ? 'API Key 已保存' : 'API Key'">
-          <button class="agent-chip agent-chip--with-icon" @click="saveEmbeddingSettings">
-            <Icon name="save" />
-            保存检索设置
+          <button
+            class="agent-chip agent-chip--with-icon"
+            :class="`agent-chip--${embeddingSaveStatus}`"
+            :disabled="embeddingSaveStatus === 'saving'"
+            @click="saveEmbeddingSettings"
+          >
+            <span v-if="embeddingSaveStatus === 'saving'" class="mini-spinner" aria-hidden="true"></span>
+            <Icon v-else :name="embeddingSaveStatus === 'saved' ? 'check' : 'save'" />
+            {{ embeddingSaveStatus === 'saving' ? '保存中' : embeddingSaveStatus === 'saved' ? '已保存' : '保存检索设置' }}
           </button>
+          <span
+            v-if="embeddingSaveMessage"
+            class="nav-llm-save-message nav-llm-save-message--embedding"
+            :class="`nav-llm-save-message--${embeddingSaveStatus}`"
+          >{{ embeddingSaveMessage }}</span>
         </div>
       </div>
       </transition>
@@ -1092,6 +1114,9 @@ const llmSettings = ref({
   apiKey: '',
   apiKeySet: false
 });
+const llmSaveStatus = ref('idle'); // idle | saving | saved | error
+const llmSaveMessage = ref('');
+let llmSaveMessageTimer = null;
 let suggestTimeout = null;
 
 const agentThreadSummary = ref(null);
@@ -1948,22 +1973,84 @@ const loadLlmSettings = async () => {
 };
 
 const embeddingSettings = ref({ provider: 'ollama', model: 'bge-m3', baseUrl: 'http://localhost:11434', apiKey: '', apiKeySet: false });
+const embeddingSaveStatus = ref('idle');
+const embeddingSaveMessage = ref('');
+let embeddingSaveMessageTimer = null;
+
+const setTransientSaveMessage = (statusRef, messageRef, timerSetter, status, message, timeout = 2600) => {
+  statusRef.value = status;
+  messageRef.value = message;
+  timerSetter((existingTimer) => {
+    if (existingTimer) window.clearTimeout(existingTimer);
+    return window.setTimeout(() => {
+      statusRef.value = 'idle';
+      messageRef.value = '';
+      timerSetter(() => null);
+    }, timeout);
+  });
+};
+
+const setLlmSaveMessage = (status, message, timeout) => {
+  setTransientSaveMessage(
+    llmSaveStatus,
+    llmSaveMessage,
+    (updater) => { llmSaveMessageTimer = updater(llmSaveMessageTimer); },
+    status,
+    message,
+    timeout
+  );
+};
+
+const setEmbeddingSaveMessage = (status, message, timeout) => {
+  setTransientSaveMessage(
+    embeddingSaveStatus,
+    embeddingSaveMessage,
+    (updater) => { embeddingSaveMessageTimer = updater(embeddingSaveMessageTimer); },
+    status,
+    message,
+    timeout
+  );
+};
+
 const loadEmbeddingSettings = async () => {
   try { embeddingSettings.value = { ...embeddingSettings.value, ...(await axios.get('/api/knowledge/embedding-settings')).data }; } catch (e) { console.error('加载检索设置失败', e); }
 };
 const saveEmbeddingSettings = async () => {
   const { apiKeySet, ...payload } = embeddingSettings.value;
-  try { embeddingSettings.value = { ...embeddingSettings.value, ...(await axios.post('/api/knowledge/embedding-settings', payload)).data, apiKey: '' }; } catch (e) { console.error('保存检索设置失败', e); }
+  embeddingSaveStatus.value = 'saving';
+  embeddingSaveMessage.value = '正在保存检索配置...';
+  try {
+    embeddingSettings.value = { ...embeddingSettings.value, ...(await axios.post('/api/knowledge/embedding-settings', payload)).data, apiKey: '' };
+    setEmbeddingSaveMessage('saved', '检索配置已保存。');
+  } catch (e) {
+    console.error('保存检索设置失败', e);
+    setEmbeddingSaveMessage('error', e.response?.data?.error || '保存失败，请稍后重试。', 4200);
+  }
 };
 
 const saveLlmSettingsToServer = async () => {
   // 自带 key（A 方案）：保存到 localStorage，不再 POST 到后端，避免共享 key 被打爆额度。
-  writeLocalLlmSettings(llmSettings.value);
-  llmStatus.value = {
-    provider: llmSettings.value.provider,
-    model: llmSettings.value.model,
-    apiKeySet: !!llmSettings.value.apiKey
-  };
+  llmSaveStatus.value = 'saving';
+  llmSaveMessage.value = '正在保存到当前浏览器...';
+  try {
+    writeLocalLlmSettings(llmSettings.value);
+    llmSettings.value = {
+      ...llmSettings.value,
+      apiKeySet: !!llmSettings.value.apiKey
+    };
+    llmStatus.value = {
+      provider: llmSettings.value.provider,
+      model: llmSettings.value.model,
+      apiKeySet: !!llmSettings.value.apiKey
+    };
+    const keyMessage = llmSettings.value.apiKey
+      ? 'API Key 已保存到当前浏览器。可以重新发送问题。'
+      : '配置已保存，但还没有填写 API Key。';
+    setLlmSaveMessage(llmSettings.value.apiKey ? 'saved' : 'error', keyMessage, llmSettings.value.apiKey ? 3000 : 5200);
+  } catch (e) {
+    console.error('保存 LLM 设置失败', e);
+    setLlmSaveMessage('error', '浏览器拒绝写入本地设置，请检查隐私模式或存储权限。', 5200);
+  }
 };
 
 const applyLlmProviderPreset = () => {
@@ -1974,8 +2061,11 @@ const applyLlmProviderPreset = () => {
     baseUrl: preset.baseUrl,
     model: preset.model,
     // 切换 provider 后旧 key 已在后端失效，清空输入提示用户重新填写。
-    apiKey: ''
+    apiKey: '',
+    apiKeySet: false
   };
+  llmSaveStatus.value = 'idle';
+  llmSaveMessage.value = '';
 };
 
 const addAgentMemoryCandidate = async (item) => {
@@ -2439,6 +2529,7 @@ const runAgent = async () => {
   agentInput.value = '';
   let hasTutorToken = false;
   let timeoutId = null;
+  let timedOut = false;
 
   const setStreamingPlaceholder = (text) => {
     if (!hasTutorToken) {
@@ -2449,7 +2540,10 @@ const runAgent = async () => {
   try {
     const controller = new AbortController();
     agentAbortController.value = controller;
-    timeoutId = window.setTimeout(() => controller.abort(), 90000);
+    timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 60000);
     const response = await fetch(apiUrl('/api/agent/stream'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...buildLlmHeaders() },
@@ -2649,6 +2743,9 @@ const runAgent = async () => {
         break;
       }
     }
+    if (!streamDone) {
+      throw new Error('连接提前结束，尚未收到 Agent 完成事件。请重试；如果仍失败，多半是模型服务或网络中断。');
+    }
     if (timeoutId) {
       window.clearTimeout(timeoutId);
       timeoutId = null;
@@ -2676,10 +2773,14 @@ const runAgent = async () => {
     await loadMemoryCards();
   } catch (e) {
     if (e.name === 'AbortError') {
-      assistantMessage.content ||= '已停止上一次请求。';
+      assistantMessage.content = timedOut
+        ? '这次请求超过 60 秒没有完成，已自动停止。请检查 API Key 是否有效，或稍后重试。'
+        : (assistantMessage.content || '已停止上一次请求。');
       streamedAssistantText.value = assistantMessage.content;
       if (runSeq === agentRunSeq) {
-        agentRuntimeNote.value = '上一次请求已停止，可以继续新的查询。';
+        agentRuntimeNote.value = timedOut
+          ? '请求已超时停止，可以修改问题或检查模型配置后重试。'
+          : '上一次请求已停止，可以继续新的查询。';
       }
     } else if (e.code === 'no_llm_key') {
       // 自带 key 模式：用户没填，自动展开设置面板引导
@@ -3134,6 +3235,8 @@ onUnmounted(() => {
   if (aiProgressInterval) clearInterval(aiProgressInterval);
   if (placeholderInterval) window.clearInterval(placeholderInterval);
   if (placeholderRefreshInterval) window.clearInterval(placeholderRefreshInterval);
+  if (llmSaveMessageTimer) window.clearTimeout(llmSaveMessageTimer);
+  if (embeddingSaveMessageTimer) window.clearTimeout(embeddingSaveMessageTimer);
 });
 
 const conjugate = async () => {
@@ -3605,6 +3708,53 @@ const fetchAiExplanation = async () => {
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
+}
+
+.nav-llm-panel .agent-chip:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+
+.agent-chip--saved {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 42%, var(--surface-border));
+  background: color-mix(in srgb, var(--success) 10%, var(--field-bg));
+}
+
+.agent-chip--error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--surface-border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--field-bg));
+}
+
+.mini-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.nav-llm-save-message {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-height: 18px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.nav-llm-save-message--embedding {
+  justify-self: start;
+}
+
+.nav-llm-save-message--saved {
+  color: var(--success);
+}
+
+.nav-llm-save-message--error {
+  color: var(--danger);
 }
 
 .nav-llm-panel select,

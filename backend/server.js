@@ -68,7 +68,7 @@ import {
   getAgentQueue,
   learningSubagentRegistry,
   pickScopedTools,
-  selectSpecialistSubagent
+  selectSpecialistSubagents
 } from './learningSubagents.js';
 import { formatPlannerNote } from './subagentContexts.js';
 import { buildSpecialistNodeExecutor } from './subagentNodeHelpers.js';
@@ -1723,7 +1723,7 @@ const LearningAgentState = Annotation.Root({
 });
 
 function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits = [] }) {
-  const specialistId = selectSpecialistSubagent(intent);
+  const specialistIds = selectSpecialistSubagents(intent);
   // 工具结果在 toolCalls 里会被摘要截断为字符串，无法回取结构化命中；
   // 这里包一层，把 knowledge_search 的原始命中收集到请求级数组，供 done 事件引用。
   const executeToolWithKnowledge = async (name, args) => {
@@ -2005,7 +2005,7 @@ function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits
       };
     });
 
-  if (specialistId === 'example_designer') {
+  if (specialistIds.includes('example_designer')) {
     graph = graph.addNode('example_designer', buildSpecialistNodeExecutor({
       specialistId: 'example_designer',
       runId,
@@ -2023,7 +2023,7 @@ function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits
     }));
   }
 
-  if (specialistId === 'practice_coach') {
+  if (specialistIds.includes('practice_coach')) {
     graph = graph.addNode('practice_coach', buildSpecialistNodeExecutor({
       specialistId: 'practice_coach',
       runId,
@@ -2045,10 +2045,13 @@ function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits
     .addEdge(START, 'planner')
     .addEdge('planner', 'researcher');
 
-  if (specialistId === 'example_designer') {
-    graph = graph.addEdge('researcher', 'example_designer').addEdge('example_designer', 'tutor');
-  } else if (specialistId === 'practice_coach') {
-    graph = graph.addEdge('researcher', 'practice_coach').addEdge('practice_coach', 'tutor');
+  if (specialistIds.length > 0) {
+    let previousNode = 'researcher';
+    for (const specialistId of specialistIds) {
+      graph = graph.addEdge(previousNode, specialistId);
+      previousNode = specialistId;
+    }
+    graph = graph.addEdge(previousNode, 'tutor');
   } else {
     graph = graph.addEdge('researcher', 'tutor');
   }
@@ -4502,8 +4505,9 @@ app.get('/api/dojo-quiz', (req, res) => {
 
 // === 静态托管前端 ===
 // 单平台部署：Express 同时提供 API + 前端静态文件，避免跨域、省一个 Vercel。
-// build 阶段已把 frontend 构建到 ../frontend/dist；找不到目录就只跑 API（开发模式）。
-const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
+// build 阶段把 frontend dist 复制到 backend/public（必须在 rootDir 内，Render 才会
+// 把它打包进运行容器）；找不到目录就只跑 API（开发模式）。
+const frontendDist = path.join(__dirname, 'public');
 if (fs.existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
   // SPA fallback：非 /api/* 的未匹配路由都回 index.html，让前端路由接管

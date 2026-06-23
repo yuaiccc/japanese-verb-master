@@ -9,10 +9,10 @@ services:
     region: singapore
     plan: free
     rootDir: backend
-    # 构建期：装后端依赖 → 重建 dictionary.db → 构建知识库索引 → 构建前端到 ../frontend/dist。
-    # 单平台部署：Express 同时托管 API + 前端，省一个 Vercel、避免跨域。
+    # 构建期：见 backend/package.json 的 build script。
+    # 关键点：前端 dist 复制到 backend/public（必须在 rootDir 内，Render 才会打包进运行容器）。
     # 免费实例无持久磁盘，所有写入数据在容器重启后丢失（演示可接受；正式上线请改 plan: starter）。
-    buildCommand: npm install && npm run db:import && npm run kb:build && cd ../frontend && npm install && npm run build
+    buildCommand: npm run build
     startCommand: npm start
     # 健康检查端点：词典查询不依赖 LLM，启动后即可 200。
     healthCheckPath: /api/scenes

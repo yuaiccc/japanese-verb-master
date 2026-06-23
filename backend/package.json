@@ -7,10 +7,10 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
     "dev": "node --env-file-if-exists=.env --watch server.js",
-    "build": "npm install && npm run db:import && npm run kb:build && (cd ../frontend && npm install && npm run build) && rm -rf public && cp -R ../frontend/dist public",
+    "build": "npm install && npm run db:import && npm run kb:build",
     "db:import": "node import-words.js",
     "db:fetch": "node fetch-words.js",
-    "kb:build": "node scripts/kb-build.js",
+    "kb:build": "node scripts/kb-build.js && (cd ../frontend && npm install && npm run build) && rm -rf public && cp -R ../frontend/dist public",
     "kb:eval": "node scripts/kb-eval.js",
     "kb:eval:answer": "node scripts/kb-eval-answer.js",
     "kb:tune": "node scripts/kb-tune.js",

@@ -15,10 +15,12 @@ export const agentQueueTemplate = [
 ];
 
 const agentQueueMap = Object.fromEntries(agentQueueTemplate.map(item => [item.id, item]));
+const GRAMMAR_OR_CONJUGATION_RE = /て形|た形|ない形|ます形|辞書形|可能形|受身|被动|使役|命令形|意向形|活用|变形|变化|怎么变|接续|助词|句型|敬语|文法|grammar|conjugat/i;
+const MEMORY_RE = /复习|记忆|记住|背过|错题|到期|待复习|memory|review|srs/i;
 
 export function getAgentQueue(intent = {}) {
-  const specialistId = intent?.wantsExamples ? 'example_designer' : intent?.wantsPractice ? 'practice_coach' : null;
-  const orderedIds = ['planner', 'researcher', ...(specialistId ? [specialistId] : []), 'tutor', 'memory_manager'];
+  const specialistIds = selectSpecialistSubagents(intent);
+  const orderedIds = ['planner', 'researcher', ...specialistIds, 'tutor', 'memory_manager'];
   return orderedIds.map(id => agentQueueMap[id]).filter(Boolean);
 }
 
@@ -60,7 +62,8 @@ function extractLookupTargets(text = '') {
       const leadingKanji = firstKanaIndex > 0 && /[\p{Script=Han}]/u.test(chars[firstKanaIndex - 1])
         ? chars[firstKanaIndex - 1]
         : '';
-      return `${leadingKanji}${chars.slice(firstKanaIndex, lastKanaIndex + 1).join('')}`;
+      const prefix = leadingKanji === '的' ? '' : leadingKanji;
+      return `${prefix}${chars.slice(firstKanaIndex, lastKanaIndex + 1).join('')}`;
     })
     .filter(item => item && !stopWords.has(item))
     .slice(0, 4);
@@ -87,21 +90,30 @@ export function detectLearningIntent(message = '') {
   const wantsExamples = /例句|场景|对话|便利店|餐厅|公司|学校|怎么说|怎么表达/.test(text);
   const wantsPractice = /练习|填空|测验|测试|题目|专项|出题|来一题|来一道|考我|测测我|quiz|practice/i.test(text);
   const wantsComparison = /区别|差别|对比|敬语|误用/.test(text);
+  const wantsGrammar = GRAMMAR_OR_CONJUGATION_RE.test(text);
+  const wantsMemory = MEMORY_RE.test(text);
 
   return {
-    type: wantsPractice ? 'practice' : wantsExamples ? 'scene_examples' : wantsComparison ? 'comparison' : 'lookup',
+    type: wantsPractice ? 'practice' : wantsExamples ? 'scene_examples' : wantsComparison ? 'comparison' : wantsGrammar ? 'grammar' : 'lookup',
     wantsExamples,
     wantsPractice,
     wantsComparison,
+    wantsGrammar,
+    wantsMemory,
     terms,
     rawMessage: text
   };
 }
 
+export function selectSpecialistSubagents(intent = {}) {
+  return [
+    intent?.wantsExamples ? 'example_designer' : null,
+    intent?.wantsPractice ? 'practice_coach' : null
+  ].filter(Boolean);
+}
+
 export function selectSpecialistSubagent(intent = {}) {
-  if (intent?.wantsExamples) return 'example_designer';
-  if (intent?.wantsPractice) return 'practice_coach';
-  return null;
+  return selectSpecialistSubagents(intent)[0] || null;
 }
 
 export const learningSubagentRegistry = {
@@ -132,14 +144,20 @@ export const learningSubagentRegistry = {
       const rawTerms = lookupTargets.length > 0 ? lookupTargets : (intent?.terms || extractJapaneseTerms(message));
       // 只保留像"词"的候选：剔除整句中文与单字假名助词（那些靠 knowledge_search 回答）
       const terms = rawTerms.filter(isLookupWorthy);
+      const wantsGrammar = intent?.wantsGrammar || GRAMMAR_OR_CONJUGATION_RE.test(message);
+      const wantsMemory = intent?.wantsMemory || MEMORY_RE.test(message);
+      const simpleGrammarQuestion = wantsGrammar && !intent?.wantsExamples && !intent?.wantsPractice && !intent?.wantsComparison;
       const shouldLookupWords = terms.length > 0
         && (!intent?.wantsExamples || terms.some(term => /[\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(term)));
+      const shouldSearchExternally = !simpleGrammarQuestion && (intent?.wantsComparison || intent?.wantsExamples || !wantsGrammar);
+      const shouldRecommendSimilar = shouldLookupWords && terms[0] && !wantsGrammar && !intent?.wantsComparison;
+      const shouldReadMemory = wantsMemory || intent?.wantsPractice;
       return [
         { name: 'knowledge_search', arguments: { query: message } },
-        ...(shouldLookupWords ? terms.slice(0, 3).map(word => ({ name: 'lookup_word', arguments: { word } })) : []),
-        { name: 'external_search', arguments: { query: message } },
-        ...(shouldLookupWords && terms[0] ? [{ name: 'recommend_similar', arguments: { word: terms[0] } }] : []),
-        { name: 'memory_status', arguments: {} }
+        ...(shouldLookupWords ? terms.slice(0, simpleGrammarQuestion ? 1 : 3).map(word => ({ name: 'lookup_word', arguments: { word } })) : []),
+        ...(shouldSearchExternally ? [{ name: 'external_search', arguments: { query: message } }] : []),
+        ...(shouldRecommendSimilar ? [{ name: 'recommend_similar', arguments: { word: terms[0] } }] : []),
+        ...(shouldReadMemory ? [{ name: 'memory_status', arguments: {} }] : [])
       ];
     }
   },

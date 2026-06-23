@@ -87,6 +87,7 @@ import {
   FEISHU_CONNECTION_MODES,
   parseFeishuTextMessage
 } from './integrations/feishu.js';
+import { addLangSmithEvent, traceLangSmithRun } from './tracing/langsmith.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -663,6 +664,18 @@ const agentTools = [
 ];
 
 async function executeAgentTool(name, args = {}) {
+  return traceLangSmithRun({
+    name: `tool.${name || 'unknown'}`,
+    runType: 'tool',
+    inputs: { name, args },
+    metadata: { tool_name: name || 'unknown' },
+    tags: ['tool', String(name || 'unknown')]
+  }, () => executeAgentToolImpl(name, args), {
+    processOutputs: (result) => ({ result: summarizeToolResult(result) })
+  });
+}
+
+async function executeAgentToolImpl(name, args = {}) {
   if (name === 'knowledge_search') {
     const rawQuery = args.query || '';
     // 查询改写（默认开）：口语提问→检索友好查询 + 关键术语，与原查询拼接做多路召回；失败降级为原查询。
@@ -2047,7 +2060,58 @@ function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits
   return graph.compile();
 }
 
-async function streamLlmText({ messages, model, temperature = 0.25, maxTokens = 1600, onToken, onUsage, shouldCancel }) {
+async function streamLlmText(options) {
+  const {
+    messages,
+    model,
+    temperature = 0.25,
+    maxTokens = 1600,
+    onToken,
+    onUsage
+  } = options;
+  let content = '';
+  let usage = null;
+
+  return traceLangSmithRun({
+    name: 'llm.stream',
+    runType: 'llm',
+    inputs: {
+      messages,
+      model: model || getDefaultLlmModel(),
+      temperature,
+      maxTokens,
+      stream: true
+    },
+    metadata: {
+      provider: getLlmProvider(),
+      model: model || getDefaultLlmModel(),
+      temperature,
+      max_tokens: maxTokens,
+      stream: true
+    },
+    tags: ['llm', 'stream', getLlmProvider()]
+  }, () => streamLlmTextImpl({
+    ...options,
+    temperature,
+    maxTokens,
+    onToken: (chunk) => {
+      content += chunk;
+      onToken?.(chunk);
+    },
+    onUsage: (nextUsage) => {
+      usage = nextUsage;
+      onUsage?.(nextUsage);
+    }
+  }), {
+    processOutputs: () => ({
+      content: content.slice(0, 4000),
+      contentLength: content.length,
+      usage
+    })
+  });
+}
+
+async function streamLlmTextImpl({ messages, model, temperature = 0.25, maxTokens = 1600, onToken, onUsage, shouldCancel }) {
   if (getLlmProvider() !== 'ollama') {
     const response = await callOpenAiCompatibleChat({ messages, model, stream: true, temperature, maxTokens, timeoutMs: 25000 });
     const reader = response.body.getReader();
@@ -2234,7 +2298,9 @@ function lookupWordJisho(keyword) {
 // 初始化 Ollama
 const app = express();
 const PORT = process.env.PORT || 3456;
-const HOST = process.env.HOST || '127.0.0.1';
+// 容器环境（Render/Docker/Fly 等）必须监听 0.0.0.0 才能从外部访问；
+// 本地默认绑回环更安全。Render 自动注入 RENDER=true 让我们识别。
+const HOST = process.env.HOST || (process.env.RENDER ? '0.0.0.0' : '127.0.0.1');
 const feishuClient = createFeishuClient();
 const shouldProcessFeishuEvent = createRecentEventDedupe();
 let feishuLongConnection = null;
@@ -2577,7 +2643,55 @@ function buildChatCompletionsUrl(baseUrl = '') {
   return `${trimmed}/chat/completions`;
 }
 
-async function callOpenAiCompatibleChat({
+async function callOpenAiCompatibleChat(options) {
+  const {
+    messages,
+    model,
+    stream = false,
+    temperature = 0.4,
+    maxTokens = 1200,
+    responseFormat,
+    tools,
+    toolChoice
+  } = options;
+
+  return traceLangSmithRun({
+    name: stream ? 'llm.request.stream' : 'llm.request',
+    runType: 'llm',
+    inputs: {
+      messages,
+      model: model || getDefaultLlmModel(),
+      stream,
+      temperature,
+      maxTokens,
+      responseFormat: responseFormat || null,
+      tools: Array.isArray(tools) ? tools.map(tool => tool.function?.name || tool.name).filter(Boolean) : undefined,
+      toolChoice: toolChoice || null
+    },
+    metadata: {
+      provider: getLlmProvider(),
+      model: model || getDefaultLlmModel(),
+      stream,
+      temperature,
+      max_tokens: maxTokens
+    },
+    tags: ['llm', getLlmProvider(), stream ? 'stream' : 'request']
+  }, () => callOpenAiCompatibleChatImpl({
+    ...options,
+    stream,
+    temperature,
+    maxTokens
+  }), {
+    processOutputs: (response) => ({
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      stream
+    })
+  });
+}
+
+async function callOpenAiCompatibleChatImpl({
   messages,
   model,
   stream = false,
@@ -2651,6 +2765,33 @@ async function callOpenAiCompatibleChat({
 }
 
 async function callLlmText({ messages, model, temperature = 0.4, maxTokens = 1200, responseFormat }) {
+  return traceLangSmithRun({
+    name: 'llm.chat',
+    runType: 'llm',
+    inputs: {
+      messages,
+      model: model || getDefaultLlmModel(),
+      temperature,
+      maxTokens,
+      responseFormat: responseFormat || null
+    },
+    metadata: {
+      provider: getLlmProvider(),
+      model: model || getDefaultLlmModel(),
+      temperature,
+      max_tokens: maxTokens,
+      stream: false
+    },
+    tags: ['llm', 'chat', getLlmProvider()]
+  }, () => callLlmTextImpl({ messages, model, temperature, maxTokens, responseFormat }), {
+    processOutputs: (text) => ({
+      content: String(text || '').slice(0, 4000),
+      contentLength: String(text || '').length
+    })
+  });
+}
+
+async function callLlmTextImpl({ messages, model, temperature = 0.4, maxTokens = 1200, responseFormat }) {
   if (getLlmProvider() !== 'ollama') {
     const response = await callOpenAiCompatibleChat({ messages, model, stream: false, temperature, maxTokens, responseFormat });
     const data = await response.json();
@@ -3615,7 +3756,31 @@ app.post('/api/agent/run', async (req, res) => {
     if (!message || !message.trim()) {
       return res.status(400).json({ error: 'Missing agent message.' });
     }
-    res.json(await runToolCallingAgent({ message, context }));
+    const result = await traceLangSmithRun({
+      name: 'agent.run',
+      runType: 'chain',
+      inputs: {
+        message,
+        context: {
+          channel: context.channel || 'api',
+          sessionId: context.sessionId || null,
+          hasLookup: !!context.lookup,
+          hasMemoryStats: !!context.memoryStats
+        }
+      },
+      metadata: {
+        endpoint: '/api/agent/run',
+        provider: getLlmProvider(),
+        model: getDefaultLlmModel()
+      },
+      tags: ['agent', 'tool-calling']
+    }, () => runToolCallingAgent({ message, context }), {
+      processOutputs: (output) => ({
+        answer: String(output?.answer || '').slice(0, 4000),
+        toolCalls: Array.isArray(output?.toolCalls) ? output.toolCalls.map(call => call.name) : []
+      })
+    });
+    res.json(result);
   } catch (error) {
     console.error('Agent run failed:', error);
     res.status(500).json({ error: 'Agent run failed.' });
@@ -3726,30 +3891,68 @@ app.post('/api/agent/stream', async (req, res) => {
 
     const knowledgeHits = [];
     const graph = createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits });
-    const finalState = await graph.invoke({
-      runId,
-      message,
-      context: {
-        ...context,
-        compactSummary,
-        conversation: compactSummary.recentConversation
+    const finalState = await traceLangSmithRun({
+      name: 'agent.stream',
+      runType: 'chain',
+      inputs: {
+        message,
+        runId,
+        threadId,
+        intent,
+        context: {
+          channel: context.channel || 'web',
+          sessionId: context.sessionId || null,
+          hasLookup: !!context.lookup,
+          hasMemoryStats: !!context.memoryStats,
+          conversationTurns: Array.isArray(context.conversation) ? context.conversation.length : 0
+        }
       },
-      intent,
-      agentQueue,
-      subagentContexts: {},
-      systemPrompt,
-      userContent,
-      completed: [],
-      plannerNote: {},
-      messages: [],
-      toolCalls: [],
-      memoryCandidates: [],
-      finalAnswer: '',
-      structuredExamples: [],
-      memorySnapshot: null,
-      interactivePractice: null,
-      followUpQuestions: [],
-      usageReport: null
+      metadata: {
+        endpoint: '/api/agent/stream',
+        runtime: 'langgraph',
+        runId,
+        threadId,
+        provider: getLlmProvider(),
+        model: getDefaultLlmModel(),
+        intentType: intent.type || 'lookup'
+      },
+      tags: ['agent', 'langgraph', 'stream']
+    }, () => {
+      addLangSmithEvent('agent_queue', {
+        agents: agentQueue.map(item => item.id || item.label || item)
+      });
+      return graph.invoke({
+        runId,
+        message,
+        context: {
+          ...context,
+          compactSummary,
+          conversation: compactSummary.recentConversation
+        },
+        intent,
+        agentQueue,
+        subagentContexts: {},
+        systemPrompt,
+        userContent,
+        completed: [],
+        plannerNote: {},
+        messages: [],
+        toolCalls: [],
+        memoryCandidates: [],
+        finalAnswer: '',
+        structuredExamples: [],
+        memorySnapshot: null,
+        interactivePractice: null,
+        followUpQuestions: [],
+        usageReport: null
+      });
+    }, {
+      processOutputs: (state) => ({
+        finalAnswer: String(state?.finalAnswer || '').slice(0, 4000),
+        completed: state?.completed || [],
+        toolCalls: Array.isArray(state?.toolCalls) ? state.toolCalls.map(call => call.name) : [],
+        usage: state?.usageReport || null
+      })
     });
 
     emitAgentQueue(res, agentQueue, '', finalState.completed, '本轮 Agent 工作流完成');

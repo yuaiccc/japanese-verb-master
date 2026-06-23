@@ -8,7 +8,7 @@
           <Icon name="brain" class="icon-brain-large" />
           <p class="dojo-eyebrow">活用 · CONJUGATION DOJO</p>
           <h2>动词变形道场</h2>
-          <p class="dojo-start-copy">先选一个练习场景，再开始 10 题挑战。你在道场里的答题表现会自动生成学习画像。</p>
+          <p class="dojo-start-copy">选择场景，开始 10 题挑战。</p>
           <div class="dojo-scene-grid">
             <button
               v-for="scene in sceneOptions"
@@ -142,7 +142,7 @@
               </div>
             </div>
           </div>
-          <p v-else class="dojo-profile-empty">完成几轮挑战后，这里会出现你的薄弱变形、场景掌握度和推荐练习。</p>
+          <p v-else class="dojo-profile-empty">完成挑战后这里会显示你的学习画像。</p>
         </div>
 
         <!-- 游戏界面 -->

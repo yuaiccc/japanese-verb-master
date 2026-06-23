@@ -917,16 +917,38 @@ import { useDojo } from './composables/useDojo';
 // 认证：token 存 localStorage，拦截器给每个请求自动带上 Authorization
 const AUTH_TOKEN_KEY = 'jvm_auth_token';
 
-// 拼接绝对 API 地址：生产构建 VITE_API_BASE=https://xxx.onrender.com，开发不设时退到相对路径走 Vite proxy。
-// axios 走 main.js 的 defaults.baseURL；这里给绕过 axios 的 fetch / EventSource 用。
+// 自带 LLM key（方案 A）：key 只存浏览器 localStorage，每请求带 header；不入库、不被他人共享。
+const LLM_SETTINGS_KEY = 'jvm_llm_settings';
+const readLocalLlmSettings = () => {
+  try { return JSON.parse(localStorage.getItem(LLM_SETTINGS_KEY) || '{}'); }
+  catch { return {}; }
+};
+const writeLocalLlmSettings = (s) => {
+  localStorage.setItem(LLM_SETTINGS_KEY, JSON.stringify({
+    provider: s.provider || '', baseUrl: s.baseUrl || '', model: s.model || '', apiKey: s.apiKey || ''
+  }));
+};
+const buildLlmHeaders = () => {
+  const s = readLocalLlmSettings();
+  if (!s.apiKey) return {};
+  return {
+    'X-LLM-API-Key': s.apiKey,
+    ...(s.provider ? { 'X-LLM-Provider': s.provider } : {}),
+    ...(s.baseUrl ? { 'X-LLM-Base-Url': s.baseUrl } : {}),
+    ...(s.model ? { 'X-LLM-Model': s.model } : {})
+  };
+};
+
+// 拼接绝对 API 地址：生产构建 VITE_API_BASE=https://xxx，开发不设时退到相对路径走 Vite proxy。
+// 单平台部署（Express 同时托管前端）也走相对路径，不用设 VITE_API_BASE。
 const apiUrl = (path) => `${import.meta.env.VITE_API_BASE || ''}${path}`;
 
 axios.interceptors.request.use((config) => {
+  config.headers = config.headers || {};
   const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  if (token) {
-    config.headers = config.headers || {};
-    config.headers.Authorization = `Bearer ${token}`;
-  }
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  // 注入用户自带的 LLM key（每请求生效，后端 AsyncLocalStorage 取它）
+  Object.assign(config.headers, buildLlmHeaders());
   return config;
 });
 
@@ -1871,13 +1893,10 @@ const saveMemorySettingsToServer = async () => {
 };
 
 const loadLlmSettings = async () => {
-  try {
-    const res = await axios.get('/api/llm-settings');
-    llmSettings.value = { ...llmSettings.value, ...res.data, apiKey: '' };
-    llmStatus.value = res.data;
-  } catch (e) {
-    console.error('加载 LLM 设置失败', e);
-  }
+  // 自带 key（A 方案）：从 localStorage 读，apiKey 保留以便前端显示已配置状态。
+  const local = readLocalLlmSettings();
+  llmSettings.value = { ...llmSettings.value, ...local, apiKeySet: !!local.apiKey };
+  llmStatus.value = { provider: local.provider || llmSettings.value.provider, model: local.model || llmSettings.value.model, apiKeySet: !!local.apiKey };
 };
 
 const embeddingSettings = ref({ provider: 'ollama', model: 'bge-m3', baseUrl: 'http://localhost:11434', apiKey: '', apiKeySet: false });
@@ -1890,15 +1909,13 @@ const saveEmbeddingSettings = async () => {
 };
 
 const saveLlmSettingsToServer = async () => {
-  try {
-    const payload = { ...llmSettings.value };
-    if (!payload.apiKey) delete payload.apiKey;
-    const res = await axios.post('/api/llm-settings', payload);
-    llmSettings.value = { ...llmSettings.value, ...res.data, apiKey: '' };
-    llmStatus.value = res.data;
-  } catch (e) {
-    console.error('保存 LLM 设置失败', e);
-  }
+  // 自带 key（A 方案）：保存到 localStorage，不再 POST 到后端，避免共享 key 被打爆额度。
+  writeLocalLlmSettings(llmSettings.value);
+  llmStatus.value = {
+    provider: llmSettings.value.provider,
+    model: llmSettings.value.model,
+    apiKeySet: !!llmSettings.value.apiKey
+  };
 };
 
 const applyLlmProviderPreset = () => {
@@ -2387,7 +2404,7 @@ const runAgent = async () => {
     timeoutId = window.setTimeout(() => controller.abort(), 90000);
     const response = await fetch(apiUrl('/api/agent/stream'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...buildLlmHeaders() },
       signal: controller.signal,
       body: JSON.stringify({
         runId,
@@ -3154,7 +3171,8 @@ const fetchAiExplanation = async () => {
     const response = await fetch(apiUrl('/api/ai-explain'), {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        ...buildLlmHeaders()
       },
       signal: controller.signal,
       body: JSON.stringify(requestBody)

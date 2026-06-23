@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import kuromoji from 'kuromoji';
 import * as wanakana from 'wanakana';
 import { encodingForModel, getEncoding } from 'js-tiktoken';
@@ -2239,14 +2240,29 @@ const shouldProcessFeishuEvent = createRecentEventDedupe();
 let feishuLongConnection = null;
 
 // 中间件
-// 跨域：默认放开（演示/开发），生产可设 CORS_ORIGIN 为具体 Vercel 域收紧。
-// Authorization 必须放行，否则前端的 JWT 登录态过不来。
+// 跨域：默认放开（演示/开发），生产可设 CORS_ORIGIN 为具体域名收紧。
+// Authorization 必须放行；X-LLM-* 是用户自带 key 的运行时覆盖（每请求生效，不入库）。
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-LLM-API-Key', 'X-LLM-Provider', 'X-LLM-Base-Url', 'X-LLM-Model']
 }));
 app.use(express.json());
+
+// 请求级 LLM 配置覆盖：前端把用户的 key/配置放在 header 里，每请求独立、不入库；
+// getRuntimeLlmSettings 取此 store 作最高优先级，避免共享一把 key 被打爆额度。
+const llmRequestStore = new AsyncLocalStorage();
+app.use((req, _res, next) => {
+  const apiKey = String(req.headers['x-llm-api-key'] || '').trim();
+  if (!apiKey) return next();
+  const override = {
+    apiKey,
+    provider: String(req.headers['x-llm-provider'] || '').trim() || undefined,
+    baseUrl: String(req.headers['x-llm-base-url'] || '').trim() || undefined,
+    model: String(req.headers['x-llm-model'] || '').trim() || undefined
+  };
+  llmRequestStore.run(override, () => next());
+});
 
 // 用户认证：建 users 表 + 默认用户；authOptional 给每个请求挂 req.userId
 // （未登录或历史数据 fallback 到默认用户 1，保证向后兼容、不破坏现有功能）
@@ -2522,16 +2538,19 @@ function buildUsageReport({
 }
 
 function getRuntimeLlmSettings({ includeSecret = false } = {}) {
+  // 优先用本次请求的 header override（A 方案：每用户带自己的 key，不入库）。
+  const override = llmRequestStore.getStore();
   const saved = getLlmSettings({ includeSecret: true });
   const envProvider = process.env.LLM_PROVIDER;
-  const provider = envProvider || saved.provider || (process.env.DEEPSEEK_API_KEY ? 'deepseek' : 'ollama');
+  const provider = override?.provider || envProvider || saved.provider || (process.env.DEEPSEEK_API_KEY ? 'deepseek' : 'ollama');
   const defaults = providerDefaults[provider] || providerDefaults.custom;
+  const apiKey = override?.apiKey || process.env.DEEPSEEK_API_KEY || saved.apiKey || '';
   const settings = {
     provider,
-    baseUrl: process.env.DEEPSEEK_BASE_URL || saved.baseUrl || defaults.baseUrl,
-    model: process.env.DEEPSEEK_MODEL || saved.model || defaults.model,
-    apiKey: process.env.DEEPSEEK_API_KEY || saved.apiKey || '',
-    apiKeySet: !!(process.env.DEEPSEEK_API_KEY || saved.apiKey)
+    baseUrl: override?.baseUrl || process.env.DEEPSEEK_BASE_URL || saved.baseUrl || defaults.baseUrl,
+    model: override?.model || process.env.DEEPSEEK_MODEL || saved.model || defaults.model,
+    apiKey,
+    apiKeySet: !!apiKey
   };
   if (!includeSecret) {
     delete settings.apiKey;
@@ -4277,6 +4296,19 @@ app.get('/api/dojo-quiz', (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// === 静态托管前端 ===
+// 单平台部署：Express 同时提供 API + 前端静态文件，避免跨域、省一个 Vercel。
+// build 阶段已把 frontend 构建到 ../frontend/dist；找不到目录就只跑 API（开发模式）。
+const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  // SPA fallback：非 /api/* 的未匹配路由都回 index.html，让前端路由接管
+  app.get(/^\/(?!api\/).*/, (_req, res) => {
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+  console.log(`Serving frontend from ${frontendDist}`);
+}
 
 // 启动服务器
 app.listen(PORT, HOST, () => {

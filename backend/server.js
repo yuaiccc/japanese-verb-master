@@ -3759,6 +3759,12 @@ app.post('/api/agent/run', async (req, res) => {
     if (!message || !message.trim()) {
       return res.status(400).json({ error: 'Missing agent message.' });
     }
+    if (!getRuntimeLlmSettings({ includeSecret: true }).apiKey) {
+      return res.status(400).json({
+        error: '尚未配置 LLM API Key。请到设置面板填入你自己的 OpenAI 兼容 API Key。',
+        code: 'no_llm_key'
+      });
+    }
     const result = await traceLangSmithRun({
       name: 'agent.run',
       runType: 'chain',
@@ -3798,6 +3804,14 @@ app.post('/api/agent/stream', async (req, res) => {
     const { message, context = {}, runId: clientRunId, threadId: clientThreadId } = req.body || {};
     if (!message || !message.trim()) {
       writeSse(res, 'error', { message: 'Missing agent message.' });
+      return res.end();
+    }
+    // 自带 key 模式：未提供 LLM key 直接给清晰的中文提示，避免让用户跑完 agent 才看到"超时"等误导文案
+    if (!getRuntimeLlmSettings({ includeSecret: true }).apiKey) {
+      writeSse(res, 'error', {
+        message: '尚未配置 LLM API Key。请点击右上角「设置」填入你自己的 OpenAI 兼容 API Key（推荐 DeepSeek，注册赠送免费额度），key 只保存在你的浏览器里，不会上传服务器。',
+        code: 'no_llm_key'
+      });
       return res.end();
     }
     const runId = String(clientRunId || `agent-run-${Date.now()}`);
@@ -4050,6 +4064,12 @@ app.post('/api/ai-explain', async (req, res) => {
     const { verb, model, conjugationResult, wordType, wordInfo } = req.body;
     if (!verb) {
       return res.status(400).json({ error: 'Missing required parameter: verb' });
+    }
+    if (!getRuntimeLlmSettings({ includeSecret: true }).apiKey) {
+      return res.status(400).json({
+        error: '尚未配置 LLM API Key。请到设置面板填入你自己的 OpenAI 兼容 API Key 以获得 AI 解析。',
+        code: 'no_llm_key'
+      });
     }
     const selectedModel = model || getDefaultLlmModel();
 

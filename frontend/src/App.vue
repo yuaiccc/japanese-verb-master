@@ -2584,7 +2584,10 @@ const runAgent = async () => {
           usage: agentUsage.value || null
         });
       } else if (event === 'error') {
-        throw new Error(payload.message || 'Agent stream failed.');
+        // 后端用 code 区分语义化错误，比如 no_llm_key 是用户没在设置面板填 key
+        const err = new Error(payload.message || 'Agent stream failed.');
+        if (payload.code) err.code = payload.code;
+        throw err;
       }
     };
 
@@ -2630,8 +2633,16 @@ const runAgent = async () => {
       if (runSeq === agentRunSeq) {
         agentRuntimeNote.value = '上一次请求已停止，可以继续新的查询。';
       }
+    } else if (e.code === 'no_llm_key') {
+      // 自带 key 模式：用户没填，自动展开设置面板引导
+      assistantMessage.content = e.message;
+      streamedAssistantText.value = assistantMessage.content;
+      showLlmSettings.value = true;
+      if (runSeq === agentRunSeq) {
+        agentRuntimeNote.value = '👈 在上方设置面板填入 API Key 后即可使用 AI 功能。';
+      }
     } else {
-      assistantMessage.content = 'Agent 调用失败，请检查 DeepSeek Key、网络或后端日志。';
+      assistantMessage.content = e.message || 'Agent 调用失败，请检查网络或后端日志。';
       streamedAssistantText.value = assistantMessage.content;
       if (runSeq === agentRunSeq) {
         agentRuntimeNote.value = e.message || 'Agent 调用失败。';
@@ -3179,7 +3190,16 @@ const fetchAiExplanation = async () => {
     });
     
     if (!response.ok) {
-      throw new Error('网络请求失败');
+      // 区分 no_llm_key（自带 key 模式未配置）和真实网络错误
+      let errBody = null;
+      try { errBody = await response.json(); } catch { /* 非 JSON 当作普通错误 */ }
+      if (errBody?.code === 'no_llm_key') {
+        aiError.value = errBody.error;
+        showLlmSettings.value = true;
+        completeProgress();
+        return;
+      }
+      throw new Error(errBody?.error || '网络请求失败');
     }
 
     const reader = response.body.getReader();

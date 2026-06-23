@@ -703,13 +703,28 @@
           <div v-if="activeMemoryCard.sample" class="memory-sample">{{ activeMemoryCard.sample }}</div>
         </div>
         <div class="memory-actions">
-          <button v-if="!memoryRevealed" class="btn-secondary" @click="memoryRevealed = true">显示</button>
+          <button v-if="!memoryRevealed" class="btn-secondary" @click="memoryRevealed = true">
+            <Icon name="chevron" />
+            显示
+          </button>
           <template v-else>
-            <button class="memory-grade grade-forgot" @click="reviewMemory(activeMemoryCard.id, 'forgot')">忘记</button>
-            <button class="memory-grade grade-hard" @click="reviewMemory(activeMemoryCard.id, 'hard')">模糊</button>
-            <button class="memory-grade grade-good" @click="reviewMemory(activeMemoryCard.id, 'good')">记住</button>
+            <button class="memory-grade grade-forgot" @click="reviewMemory(activeMemoryCard.id, 'forgot')">
+              <Icon name="x" />
+              忘记
+            </button>
+            <button class="memory-grade grade-hard" @click="reviewMemory(activeMemoryCard.id, 'hard')">
+              <Icon name="hourglass" />
+              模糊
+            </button>
+            <button class="memory-grade grade-good" @click="reviewMemory(activeMemoryCard.id, 'good')">
+              <Icon name="check" />
+              记住
+            </button>
           </template>
-          <button class="btn-secondary" @click="searchMemoryCard(activeMemoryCard)">查词</button>
+          <button class="btn-secondary" @click="searchMemoryCard(activeMemoryCard)">
+            <Icon name="search" />
+            查词
+          </button>
         </div>
       </div>
 

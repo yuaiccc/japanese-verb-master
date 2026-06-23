@@ -13,12 +13,20 @@
         </div>
         <ul class="credits-list">
           <li v-for="item in group.items" :key="item.name">
-            <a :href="item.url" target="_blank" rel="noreferrer" class="credits-item" :title="item.repo">
+            <a :href="item.url" target="_blank" rel="noreferrer" class="credits-item" :title="repoTitle(item)">
               <span class="credits-item-name">{{ item.name }}</span>
               <span class="credits-item-tag">{{ item.tag }}</span>
-              <svg class="credits-item-icon" viewBox="0 0 24 24" fill="currentColor" aria-label="GitHub" role="img">
-                <path d="M12 2C6.48 2 2 6.6 2 12.26c0 4.53 2.87 8.37 6.84 9.72.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.72-2.78.62-3.37-1.37-3.37-1.37-.46-1.2-1.12-1.52-1.12-1.52-.91-.64.07-.63.07-.63 1.01.08 1.55 1.07 1.55 1.07.9 1.6 2.36 1.13 2.93.86.09-.67.35-1.13.64-1.39-2.22-.26-4.56-1.15-4.56-5.13 0-1.13.39-2.06 1.03-2.78-.11-.26-.45-1.31.1-2.73 0 0 .84-.28 2.75 1.06A9.2 9.2 0 0 1 12 7.25c.83 0 1.67.12 2.45.36 1.9-1.34 2.74-1.06 2.74-1.06.56 1.42.22 2.47.11 2.73.64.72 1.03 1.65 1.03 2.78 0 3.99-2.34 4.86-4.57 5.12.36.32.69.95.69 1.92 0 1.39-.01 2.5-.01 2.84 0 .27.18.6.69.49A10.28 10.28 0 0 0 22 12.26C22 6.6 17.52 2 12 2Z"/>
-              </svg>
+              <img
+                v-if="item.icon"
+                class="credits-item-brand"
+                :class="{ 'credits-item-brand--invert': item.invertDark }"
+                :src="brandIconUrl(item.icon)"
+                :alt="`${item.name} icon`"
+                width="18"
+                height="18"
+                loading="lazy"
+              >
+              <Icon v-else name="github" class="credits-item-icon" />
             </a>
           </li>
         </ul>
@@ -39,39 +47,56 @@
 </template>
 
 <script setup>
-// 开源致谢列表（静态数据；展示只用 name + tag + url，note/repo 字段在 hover/title 中辅助）
+import Icon from './Icon.vue';
+
+// 开源致谢列表。icon 用 simpleicons.org CDN（自动品牌色 SVG）；
+// 无品牌 icon 的项目（NLP/工具类）回落到 GitHub 图标。
 const creditsGroups = [
   {
     title: '前端与交互',
     items: [
-      { name: 'Vue 3', url: 'https://github.com/vuejs/core', repo: 'vuejs/core', tag: 'UI' },
-      { name: 'Vite', url: 'https://github.com/vitejs/vite', repo: 'vitejs/vite', tag: 'Build' },
-      { name: 'Axios', url: 'https://github.com/axios/axios', repo: 'axios/axios', tag: 'HTTP' },
-      { name: 'Marked', url: 'https://github.com/markedjs/marked', repo: 'markedjs/marked', tag: 'Markdown' },
-      { name: 'WanaKana', url: 'https://github.com/WaniKani/WanaKana', repo: 'WaniKani/WanaKana', tag: 'Japanese' }
+      { name: 'Vue 3', url: 'https://github.com/vuejs/core', tag: 'UI', icon: 'vuedotjs' },
+      { name: 'Vite', url: 'https://github.com/vitejs/vite', tag: 'Build', icon: 'vite' },
+      { name: 'Axios', url: 'https://github.com/axios/axios', tag: 'HTTP', icon: 'axios' },
+      { name: 'Marked', url: 'https://github.com/markedjs/marked', tag: 'Markdown', icon: 'markdown' },
+      { name: 'WanaKana', url: 'https://github.com/WaniKani/WanaKana', tag: 'Japanese' }
     ]
   },
   {
     title: 'Agent 与后端运行时',
     items: [
-      { name: 'LangGraph', url: 'https://github.com/langchain-ai/langgraphjs', repo: 'langchain-ai/langgraphjs', tag: 'Agent' },
-      { name: 'Express', url: 'https://github.com/expressjs/express', repo: 'expressjs/express', tag: 'API' },
-      { name: 'better-sqlite3', url: 'https://github.com/WiseLibs/better-sqlite3', repo: 'WiseLibs/better-sqlite3', tag: 'Storage' },
-      { name: 'js-tiktoken', url: 'https://github.com/dqbd/tiktoken', repo: 'dqbd/tiktoken', tag: 'Tokens' },
-      { name: 'Ollama JS', url: 'https://github.com/ollama/ollama-js', repo: 'ollama/ollama-js', tag: 'LLM' },
-      { name: 'CORS', url: 'https://github.com/expressjs/cors', repo: 'expressjs/cors', tag: 'Middleware' }
+      { name: 'LangGraph', url: 'https://github.com/langchain-ai/langgraphjs', tag: 'Agent', icon: 'langchain', invertDark: true },
+      { name: 'Express', url: 'https://github.com/expressjs/express', tag: 'API', icon: 'express', invertDark: true },
+      { name: 'better-sqlite3', url: 'https://github.com/WiseLibs/better-sqlite3', tag: 'Storage', icon: 'sqlite' },
+      { name: 'js-tiktoken', url: 'https://github.com/dqbd/tiktoken', tag: 'Tokens', icon: 'openai', invertDark: true },
+      { name: 'Ollama JS', url: 'https://github.com/ollama/ollama-js', tag: 'LLM', icon: 'ollama', invertDark: true },
+      { name: 'CORS', url: 'https://github.com/expressjs/cors', tag: 'Middleware' }
     ]
   },
   {
     title: '日语处理与学习能力',
     items: [
-      { name: 'Kuromoji', url: 'https://github.com/takuyaa/kuromoji.js', repo: 'takuyaa/kuromoji.js', tag: 'NLP' },
-      { name: 'ts-fsrs', url: 'https://github.com/open-spaced-repetition/ts-fsrs', repo: 'open-spaced-repetition/ts-fsrs', tag: 'Memory' },
-      { name: 'deer-flow', url: 'https://github.com/bytedance/deer-flow', repo: 'bytedance/deer-flow', tag: 'Agent' },
-      { name: 'cc-switch', url: 'https://github.com/farion1231/cc-switch', repo: 'farion1231/cc-switch', tag: 'LLM Switch' }
+      { name: 'Kuromoji', url: 'https://github.com/takuyaa/kuromoji.js', tag: 'NLP' },
+      { name: 'ts-fsrs', url: 'https://github.com/open-spaced-repetition/ts-fsrs', tag: 'Memory' },
+      { name: 'deer-flow', url: 'https://github.com/bytedance/deer-flow', tag: 'Agent', icon: 'bytedance' },
+      { name: 'cc-switch', url: 'https://github.com/farion1231/cc-switch', tag: 'LLM Switch' }
     ]
   }
 ];
+
+const brandIconUrl = (slug) => `https://cdn.simpleicons.org/${slug}`;
+
+const repoTitle = (item) => {
+  if (item.repo) return item.repo;
+  try {
+    const url = new URL(item.url);
+    return url.hostname === 'github.com'
+      ? url.pathname.replace(/^\/+/, '')
+      : item.url;
+  } catch {
+    return item.url;
+  }
+};
 </script>
 
 <style scoped>
@@ -178,15 +203,28 @@ const creditsGroups = [
   white-space: nowrap;
 }
 
-.credits-item-icon {
+.credits-item-icon,
+.credits-item-brand {
   width: 16px;
   height: 16px;
-  color: var(--text-muted);
   flex-shrink: 0;
+}
+
+.credits-item-icon {
+  color: var(--text-muted);
+}
+
+.credits-item-brand {
+  display: block;
+  object-fit: contain;
 }
 
 .credits-item:hover .credits-item-icon {
   color: var(--text-primary);
+}
+
+:global(.app-dark) .credits-item-brand--invert {
+  filter: invert(1);
 }
 
 /* 上下文压缩参考：每条一行，去掉冗长说明 */

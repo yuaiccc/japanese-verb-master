@@ -17,7 +17,10 @@
               :class="{ active: selectedSceneId === scene.id, 'is-locked': scene.locked }"
               @click="selectDojoScene(scene.id)"
             >
-              <span class="scene-card-title">{{ scene.locked ? '🔒 ' : '' }}{{ scene.name }}</span>
+              <span class="scene-card-title">
+                <Icon :name="scene.locked ? 'lock' : sceneIcon(scene)" class="scene-card-icon" />
+                {{ scene.name }}
+              </span>
               <span class="scene-card-desc">{{ scene.description }}</span>
               <span class="scene-card-meta">{{ scene.meta }}</span>
               <span v-if="scene.preview" class="scene-card-preview">{{ scene.preview }}</span>
@@ -27,7 +30,9 @@
           <div v-if="paywall.visible" class="paywall-card" role="dialog" aria-label="解锁 N1 专项练习">
             <div class="paywall-head">
               <strong>解锁 N1 专项练习</strong>
-              <button type="button" class="paywall-close" aria-label="关闭" @click="closePaywall">×</button>
+              <button type="button" class="paywall-close" aria-label="关闭" @click="closePaywall">
+                <Icon name="x" />
+              </button>
             </div>
             <template v-if="paywall.order">
               <div class="paywall-body">
@@ -41,14 +46,20 @@
                     前往支付宝收银台付款
                   </button>
                   <p class="paywall-hint">{{ paywall.order.cashierHint }}</p>
-                  <p v-if="paywall.polling" class="paywall-hint paywall-polling">⏳ 正在等待支付结果，付款完成后自动解锁…</p>
+                  <p v-if="paywall.polling" class="paywall-hint paywall-polling">
+                    <Icon name="hourglass" />
+                    正在等待支付结果，付款完成后自动解锁…
+                  </p>
                 </template>
 
                 <!-- 当面付：扫码 -->
                 <template v-else-if="paywall.order.qrDataUrl">
                   <img class="paywall-qr-img" :src="paywall.order.qrDataUrl" alt="支付宝收款二维码" width="200" height="200" />
                   <p class="paywall-hint">{{ paywall.order.cashierHint }}</p>
-                  <p v-if="paywall.polling" class="paywall-hint paywall-polling">⏳ 正在等待支付结果，付款完成后自动解锁…</p>
+                  <p v-if="paywall.polling" class="paywall-hint paywall-polling">
+                    <Icon name="hourglass" />
+                    正在等待支付结果，付款完成后自动解锁…
+                  </p>
                 </template>
 
                 <!-- mock 演示 -->
@@ -192,8 +203,14 @@
                 <Icon name="x" class="icon-x" />
               </button>
             </div>
-            <button class="agent-chip" :disabled="dojoCoachBusy || !!dojoFeedback" @click="requestDojoHint">提示</button>
-            <button class="search-btn" :disabled="dojoCoachBusy || !dojoInput.trim() || !!dojoFeedback" @click="submitDojoAnswer">提交</button>
+            <button class="agent-chip agent-chip--with-icon" :disabled="dojoCoachBusy || !!dojoFeedback" @click="requestDojoHint">
+              <Icon name="sparkles" />
+              提示
+            </button>
+            <button class="search-btn" :disabled="dojoCoachBusy || !dojoInput.trim() || !!dojoFeedback" @click="submitDojoAnswer">
+              <Icon name="check" />
+              提交
+            </button>
           </div>
 
           <div v-if="dojoCoachHint && !dojoFeedback" class="dojo-coach-hint">
@@ -202,6 +219,7 @@
 
           <div class="dojo-action-row">
             <button v-if="dojoFeedback" class="search-btn btn-next" @click="nextDojoQuestion">
+              <Icon name="arrow-right" />
               {{ dojoCurrentIndex < dojoQuestions.length - 1 ? '下一题' : '查看成绩' }}
             </button>
           </div>
@@ -225,18 +243,20 @@
             <span class="score-number">{{ dojoScore }}</span> / {{ dojoQuestions.length }}
           </div>
           <p class="score-eval">
-            {{ dojoScore === dojoQuestions.length ? '完美！你是动词大师 🏆' : 
-               dojoScore >= 8 ? '非常棒！只有一点点小瑕疵 🌟' : 
-               dojoScore >= 5 ? '不错，继续加油！💪' : 
-               '看来还需要多加练习哦 📚' }}
+            <Icon :name="scoreIcon" class="score-eval-icon" />
+            {{ scoreCopy }}
           </p>
-          <button class="search-btn btn-dojo-start" @click="startDojo">再来一局</button>
+          <button class="search-btn btn-dojo-start" @click="startDojo">
+            <Icon name="dojo" />
+            再来一局
+          </button>
         </div>
       </transition>
     </div>
 </template>
 
 <script setup>
+import { computed } from 'vue';
 import Icon from './Icon.vue';
 import { useDojo } from '../composables/useDojo';
 
@@ -249,6 +269,28 @@ const {
   startDojo, selectDojoScene, submitDojoAnswer, requestDojoHint, nextDojoQuestion,
   closePaywall, goToAlipayCashier, simulatePaywallPay
 } = useDojo();
+
+const sceneIcon = (scene) => {
+  if (scene.id === 'all') return 'sparkles';
+  if (scene.id === 'n1') return 'star';
+  if (/食|飲|買|店|餐|饭|咖啡|料理/.test(scene.name || scene.description || '')) return 'chat';
+  if (/旅|駅|道|移動|交通/.test(scene.name || scene.description || '')) return 'arrow-right';
+  return 'dojo';
+};
+
+const scoreIcon = computed(() => {
+  if (dojoScore.value === dojoQuestions.value.length) return 'trophy';
+  if (dojoScore.value >= 8) return 'star';
+  if (dojoScore.value >= 5) return 'flame';
+  return 'book';
+});
+
+const scoreCopy = computed(() => {
+  if (dojoScore.value === dojoQuestions.value.length) return '完美！你是动词大师';
+  if (dojoScore.value >= 8) return '非常棒！只有一点点小瑕疵';
+  if (dojoScore.value >= 5) return '不错，继续加油';
+  return '看来还需要多加练习哦';
+});
 </script>
 
 <style scoped>
@@ -354,9 +396,16 @@ const {
   border: 0;
   background: transparent;
   color: var(--text-muted);
-  font-size: 1.1rem;
   cursor: pointer;
-  padding: 2px 6px;
+  padding: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.paywall-close .icon {
+  width: 16px;
+  height: 16px;
 }
 
 .paywall-body { display: grid; gap: 4px; }
@@ -374,6 +423,14 @@ const {
 
 .paywall-polling {
   color: var(--primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paywall-polling .icon {
+  width: 14px;
+  height: 14px;
 }
 
 .paywall-amount {
@@ -441,9 +498,19 @@ const {
 }
 
 .scene-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 1rem;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+.scene-card-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--primary);
+  flex: 0 0 auto;
 }
 
 .scene-card-desc {
@@ -512,6 +579,19 @@ const {
 .profile-stat span {
   font-size: 0.82rem;
   color: var(--text-muted);
+}
+
+.score-eval {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.score-eval-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--primary);
 }
 
 .profile-recommendation {

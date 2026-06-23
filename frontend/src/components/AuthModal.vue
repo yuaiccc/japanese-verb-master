@@ -3,7 +3,9 @@
         <div class="auth-modal card" role="dialog" aria-label="登录或注册">
           <div class="auth-modal__head">
             <strong>{{ modal.mode === 'register' ? '注册新账号' : '登录' }}</strong>
-            <button type="button" class="auth-modal__close" aria-label="关闭" @click="$emit('close')">×</button>
+            <button type="button" class="auth-modal__close" aria-label="关闭" @click="$emit('close')">
+              <Icon name="x" />
+            </button>
           </div>
           <form class="auth-modal__form" @submit.prevent="$emit('submit')">
             <input
@@ -24,6 +26,8 @@
             />
             <p v-if="modal.error" class="auth-error">{{ modal.error }}</p>
             <button type="submit" class="search-btn auth-submit" :disabled="modal.loading">
+              <span v-if="modal.loading" class="auth-spinner" aria-hidden="true"></span>
+              <Icon v-else :name="modal.mode === 'register' ? 'plus' : 'login'" />
               {{ modal.loading ? '处理中…' : (modal.mode === 'register' ? '注册并登录' : '登录') }}
             </button>
           </form>
@@ -41,6 +45,8 @@
 </template>
 
 <script setup>
+import Icon from './Icon.vue';
+
 // 登录 / 注册弹窗（纯展示）：状态由父级 authModal 传入，提交/关闭通过事件回传
 defineProps({ modal: { type: Object, required: true } });
 defineEmits(['submit', 'close']);
@@ -75,12 +81,19 @@ defineEmits(['submit', 'close']);
 }
 
 .auth-modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
-  font-size: 1.4rem;
-  line-height: 1;
   cursor: pointer;
   color: var(--text-muted);
+  padding: 5px;
+}
+
+.auth-modal__close .icon {
+  width: 16px;
+  height: 16px;
 }
 
 .auth-modal__form {
@@ -108,6 +121,24 @@ defineEmits(['submit', 'close']);
 .auth-submit {
   width: 100%;
   margin-top: 2px;
+}
+
+.auth-submit .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.auth-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: auth-spin 0.8s linear infinite;
+}
+
+@keyframes auth-spin {
+  to { transform: rotate(360deg); }
 }
 
 .auth-error {

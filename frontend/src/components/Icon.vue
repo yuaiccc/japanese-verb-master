@@ -105,6 +105,85 @@
       <path d="M12 8.4v6"></path>
       <path d="M8.8 20.5 12 14.4l3.2 6.1"></path>
     </template>
+
+    <template v-else-if="name === 'home'">
+      <path d="M4 11.5 12 5l8 6.5"></path>
+      <path d="M6.5 10.5v8h11v-8"></path>
+      <path d="M10 18.5v-5h4v5"></path>
+    </template>
+
+    <template v-else-if="name === 'dictionary'">
+      <path d="M5.5 4.5h11A2.5 2.5 0 0 1 19 7v12.5H7.5A2.5 2.5 0 0 1 5 17V7a2.5 2.5 0 0 1 2.5-2.5"></path>
+      <path d="M8 4.5v15"></path>
+      <path d="M11 8h4"></path>
+      <path d="M11 11h3"></path>
+    </template>
+
+    <template v-else-if="name === 'dojo'">
+      <path d="M4 19.5h16"></path>
+      <path d="M6.5 19.5v-6.2L12 8l5.5 5.3v6.2"></path>
+      <path d="M9.2 19.5v-4h5.6v4"></path>
+      <path d="M7 8.4 12 4l5 4.4"></path>
+    </template>
+
+    <template v-else-if="name === 'login'">
+      <path d="M10 6H6.5A2.5 2.5 0 0 0 4 8.5v7A2.5 2.5 0 0 0 6.5 18H10"></path>
+      <path d="M10 12h10"></path>
+      <polyline points="15 7 20 12 15 17"></polyline>
+    </template>
+
+    <template v-else-if="name === 'logout'">
+      <path d="M14 6h3.5A2.5 2.5 0 0 1 20 8.5v7a2.5 2.5 0 0 1-2.5 2.5H14"></path>
+      <path d="M14 12H4"></path>
+      <polyline points="9 7 4 12 9 17"></polyline>
+    </template>
+
+    <template v-else-if="name === 'settings'">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19 12a7.2 7.2 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14.2 3h-4.4l-.4 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7.2 7.2 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2l.4 2.6h4.4l.4-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2z"></path>
+    </template>
+
+    <template v-else-if="name === 'save'">
+      <path d="M5 4.5h11.2L19 7.3v12.2H5z"></path>
+      <path d="M8 4.5v5h7v-5"></path>
+      <path d="M8 19.5v-6h8v6"></path>
+    </template>
+
+    <template v-else-if="name === 'lock'">
+      <rect x="5.5" y="10" width="13" height="10" rx="2"></rect>
+      <path d="M8.5 10V7.8a3.5 3.5 0 0 1 7 0V10"></path>
+      <path d="M12 14v2"></path>
+    </template>
+
+    <template v-else-if="name === 'hourglass'">
+      <path d="M7 4.5h10"></path>
+      <path d="M7 19.5h10"></path>
+      <path d="M8 4.5v3.2c0 1 .5 1.9 1.3 2.5L12 12l2.7-1.8c.8-.6 1.3-1.5 1.3-2.5V4.5"></path>
+      <path d="M8 19.5v-3.2c0-1 .5-1.9 1.3-2.5L12 12l2.7 1.8c.8.6 1.3 1.5 1.3 2.5v3.2"></path>
+    </template>
+
+    <template v-else-if="name === 'trophy'">
+      <path d="M8 4.5h8v4.8a4 4 0 0 1-8 0z"></path>
+      <path d="M8 6.5H5.5a2.5 2.5 0 0 0 2.8 4"></path>
+      <path d="M16 6.5h2.5a2.5 2.5 0 0 1-2.8 4"></path>
+      <path d="M12 13.5v3.2"></path>
+      <path d="M8.5 19.5h7"></path>
+      <path d="M10 16.7h4"></path>
+    </template>
+
+    <template v-else-if="name === 'star'">
+      <path d="M12 4.3l2.3 4.6 5.1.7-3.7 3.6.9 5.1-4.6-2.4-4.6 2.4.9-5.1-3.7-3.6 5.1-.7z"></path>
+    </template>
+
+    <template v-else-if="name === 'flame'">
+      <path d="M12.5 21a6 6 0 0 0 5.8-6.1c0-3.5-2.2-5.8-5.2-9.9-.4 2.4-1.5 4-3.1 5.4-.9.8-2.3 2.1-2.3 4.5A4.8 4.8 0 0 0 12.5 21z"></path>
+      <path d="M12 18a2.4 2.4 0 0 0 2.2-2.5c0-1.1-.6-2-1.7-3.4-.2 1-.7 1.6-1.4 2.2-.4.4-.8.9-.8 1.6A1.8 1.8 0 0 0 12 18z"></path>
+    </template>
+
+    <template v-else-if="name === 'github'">
+      <path d="M9 19.5c-4 1.2-4-2-5.6-2.4"></path>
+      <path d="M15 21v-3.2c0-.9.3-1.5.7-1.9-2.4-.3-4.9-1.2-4.9-5.3a4.1 4.1 0 0 1 1.1-2.9 3.8 3.8 0 0 1 .1-2.8s.9-.3 2.9 1.1a10 10 0 0 1 5.2 0C22.1 4.6 23 4.9 23 4.9a3.8 3.8 0 0 1 .1 2.8 4.1 4.1 0 0 1 1.1 2.9c0 4.1-2.5 5-4.9 5.3.5.4.8 1.2.8 2.3V21"></path>
+    </template>
   </svg>
 </template>
 

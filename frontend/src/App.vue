@@ -41,13 +41,18 @@
             aria-label="开源致谢"
             @click="currentMode = 'credits'"
           >
+            <Icon name="github" />
             致谢
           </button>
           <template v-if="authUser">
             <span class="auth-user" :title="`已登录：${authUser.username}`">{{ authUser.username }}</span>
-            <button type="button" class="pref-link" title="退出登录" @click="logout">退出</button>
+            <button type="button" class="pref-link" title="退出登录" @click="logout">
+              <Icon name="logout" />
+              退出
+            </button>
           </template>
           <button v-else type="button" class="pref-link auth-login-btn" title="登录 / 注册" @click="openAuthModal('login')">
+            <Icon name="login" />
             登录
           </button>
         </div>
@@ -62,6 +67,7 @@
             class="active"
             @click="currentMode = 'dict'"
           >
+            <Icon name="home" />
             返回工作台
           </button>
           <button
@@ -69,6 +75,7 @@
             :class="{ active: workbenchSection === 'dict' }"
             @click="workbenchSection = 'dict'"
           >
+            <Icon name="dictionary" />
             词典查询
           </button>
           <button
@@ -76,6 +83,7 @@
             :class="{ active: workbenchSection === 'memory' }"
             @click="workbenchSection = 'memory'"
           >
+            <Icon name="brain" />
             单词复习
           </button>
           <button
@@ -83,6 +91,7 @@
             :class="{ active: workbenchSection === 'docs' }"
             @click="workbenchSection = 'docs'"
           >
+            <Icon name="book" />
             说明
           </button>
           <button
@@ -90,10 +99,12 @@
             :class="{ active: workbenchSection === 'dojo' }"
             @click="workbenchSection = 'dojo'"
           >
+            <Icon name="dojo" />
             变形道场
           </button>
         </div>
         <button class="nav-llm-toggle" @click="showLlmSettings = !showLlmSettings">
+          <Icon name="settings" />
           {{ llmSettings.provider }} · {{ llmSettings.model || 'model' }}
         </button>
       </div>
@@ -111,7 +122,10 @@
         <input v-model="llmSettings.model" type="text" placeholder="model">
         <input v-model="llmSettings.baseUrl" type="text" placeholder="Base URL">
         <input v-model="llmSettings.apiKey" type="password" :placeholder="llmSettings.apiKeySet ? 'API Key 已保存' : 'API Key'">
-        <button class="agent-chip" @click="saveLlmSettingsToServer">保存</button>
+        <button class="agent-chip agent-chip--with-icon" @click="saveLlmSettingsToServer">
+          <Icon name="save" />
+          保存
+        </button>
         <a
           class="nav-llm-credit"
           href="https://github.com/farion1231/cc-switch"
@@ -129,7 +143,10 @@
           <input v-model="embeddingSettings.model" type="text" placeholder="embedding model">
           <input v-model="embeddingSettings.baseUrl" type="text" placeholder="Base URL">
           <input v-if="embeddingSettings.provider !== 'ollama'" v-model="embeddingSettings.apiKey" type="password" :placeholder="embeddingSettings.apiKeySet ? 'API Key 已保存' : 'API Key'">
-          <button class="agent-chip" @click="saveEmbeddingSettings">保存检索设置</button>
+          <button class="agent-chip agent-chip--with-icon" @click="saveEmbeddingSettings">
+            <Icon name="save" />
+            保存检索设置
+          </button>
         </div>
       </div>
       </transition>
@@ -185,7 +202,10 @@
             type="button"
             class="hero-chip"
             @click="runHeroExample(chip.prompt)"
-          >{{ chip.label }}</button>
+          >
+            <Icon :name="chip.icon" />
+            {{ chip.label }}
+          </button>
         </div>
 
         <ul v-if="showDropdown && (suggestions.length > 0 || showHistory)" class="suggestions-list agent-suggestions">
@@ -538,7 +558,10 @@
       </div>
 
       <div v-if="similarWords.length > 0" class="agent-section">
-        <h3>相似词推荐</h3>
+        <h3 class="title-with-icon">
+          <Icon name="sparkles" />
+          相似词推荐
+        </h3>
         <div class="similar-grid">
           <button
             v-for="item in similarWords"
@@ -555,7 +578,10 @@
       </div>
 
       <div v-if="agentPlan?.recommendedActions?.length" class="agent-section">
-        <h3>下一步学习动作</h3>
+        <h3 class="title-with-icon">
+          <Icon name="arrow-right" />
+          下一步学习动作
+        </h3>
         <div class="agent-actions-list">
           <div v-for="action in agentPlan.recommendedActions" :key="`${action.type}-${action.title}`" class="agent-action">
             <strong>{{ action.title }}</strong>
@@ -568,7 +594,10 @@
     <section v-if="workbenchSection === 'memory'" class="memory-panel card">
       <div class="memory-header">
         <div>
-          <h2>记忆复习</h2>
+          <h2 class="title-with-icon">
+            <Icon name="brain" />
+            记忆复习
+          </h2>
         </div>
         <div class="memory-traffic" role="img" :aria-label="`待复习 ${memoryStats.due}，学习中 ${memoryStats.learning}，已稳定 ${memoryStats.mastered}`">
           <span class="traffic-dot traffic-dot--red" :class="{ 'is-active': memoryStats.due > 0 }" title="待复习">{{ memoryStats.due }}</span>
@@ -579,8 +608,12 @@
 
       <div class="memory-settings memory-settings--panel">
         <div class="memory-settings__header">
-          <h3>参数</h3>
-          <button class="agent-chip" @click="showMemorySettings = !showMemorySettings">
+          <h3 class="title-with-icon">
+            <Icon name="settings" />
+            参数
+          </h3>
+          <button class="agent-chip agent-chip--with-icon" @click="showMemorySettings = !showMemorySettings">
+            <Icon name="chevron" />
             {{ showMemorySettings ? '收起' : '展开' }}
           </button>
         </div>
@@ -624,7 +657,10 @@
             <input v-model="memorySettings.autoAddSimilar" type="checkbox">
             <span>查词后自动收集推荐词</span>
           </label>
-          <button class="search-btn settings-save" @click="saveMemorySettingsToServer">保存参数</button>
+          <button class="search-btn settings-save" @click="saveMemorySettingsToServer">
+            <Icon name="save" />
+            保存参数
+          </button>
         </div>
       </div>
 
@@ -694,7 +730,10 @@
             </div>
             <div class="memory-library-meta">
               <small>{{ formatMemoryDueLabel(card) }}</small>
-              <button class="memory-library-action" @click="searchMemoryCard(card)">查词</button>
+            <button class="memory-library-action" @click="searchMemoryCard(card)">
+              <Icon name="search" />
+              查词
+            </button>
             </div>
           </div>
         </div>
@@ -711,7 +750,9 @@
           <div v-for="item in agentMemoryList" :key="item.id" class="agent-memory-item">
             <span class="agent-memory-tag" :data-type="item.type">{{ agentMemoryTypeLabel(item.type) }}</span>
             <span class="agent-memory-value">{{ item.value }}</span>
-            <button class="agent-memory-del" title="忘记这条" @click="deleteAgentMemoryItem(item.id)">×</button>
+            <button class="agent-memory-del" title="忘记这条" aria-label="忘记这条长期记忆" @click="deleteAgentMemoryItem(item.id)">
+              <Icon name="x" />
+            </button>
           </div>
         </div>
         <p v-else class="agent-memory-empty">还没有长期记忆。多和 Agent 聊聊学习目标和偏好，它会逐渐记住你。</p>
@@ -792,7 +833,10 @@
             </button>
           </div>
           <div class="dict-meanings">
-            <h3>📖 释义</h3>
+            <h3 class="title-with-icon">
+              <Icon name="book" />
+              释义
+            </h3>
             <div v-for="(m, idx) in result.meanings" :key="idx" class="meaning-item">
               <span class="meaning-pos">{{ m.pos }}</span>
               <span class="meaning-def">{{ m.definitions }}</span>
@@ -817,7 +861,8 @@
               <select v-model="selectedModel" class="model-select" v-if="availableModels.length > 0">
                 <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
               </select>
-              <button v-if="(!loadingAi && result) || aiRawExplanation" @click="fetchAiExplanation" class="btn-secondary" :disabled="loadingAi">
+              <button v-if="(!loadingAi && result) || aiRawExplanation" @click="fetchAiExplanation" class="btn-secondary btn-secondary--with-icon" :disabled="loadingAi">
+                <Icon name="sparkles" />
                 {{ aiRawExplanation ? '重新生成' : '获取解析' }}
               </button>
             </div>
@@ -834,7 +879,10 @@
           
           <div v-else-if="aiError && !aiRawExplanation && aiExamples.length === 0" class="error-message">
             {{ aiError }}
-            <button @click="fetchAiExplanation" class="retry-btn">重试</button>
+            <button @click="fetchAiExplanation" class="retry-btn">
+              <Icon name="arrow-right" />
+              重试
+            </button>
           </div>
           
           <div v-if="aiExamples.length > 0" class="ai-module">
@@ -1092,10 +1140,10 @@ const agentPlaceholderExamples = ref([...defaultAgentPlaceholderExamples]);
 
 // 首屏快捷示例：短标签 + 实际发送的完整提问
 const heroChips = [
-  { label: '食べる 的活用', prompt: '问日语：食べる 的全部活用形式' },
-  { label: '〜ている 的用法', prompt: '问日语：为什么 〜ている 有时表示状态' },
-  { label: '便利店场景例句', prompt: '问日语：给我 3 个便利店场景例句' },
-  { label: '把「猫」翻成日语', prompt: '问日语：把 猫 翻成日语并推荐相近词' }
+  { label: '食べる 的活用', prompt: '问日语：食べる 的全部活用形式', icon: 'dictionary' },
+  { label: '〜ている 的用法', prompt: '问日语：为什么 〜ている 有时表示状态', icon: 'book' },
+  { label: '便利店场景例句', prompt: '问日语：给我 3 个便利店场景例句', icon: 'chat' },
+  { label: '把「猫」翻成日语', prompt: '问日语：把 猫 翻成日语并推荐相近词', icon: 'sparkles' }
 ];
 const runHeroExample = (prompt) => {
   agentInput.value = prompt;
@@ -3514,6 +3562,10 @@ const fetchAiExplanation = async () => {
 }
 
 .nav-llm-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   max-width: min(280px, 42vw);
   height: 28px;
   border: 1px solid transparent;
@@ -3529,6 +3581,12 @@ const fetchAiExplanation = async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.nav-llm-toggle .icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
 }
 
 .nav-llm-toggle:hover {
@@ -3666,6 +3724,7 @@ const fetchAiExplanation = async () => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   min-height: 40px;
   padding: 0 14px;
   border: 1px solid var(--surface-border);
@@ -3677,6 +3736,11 @@ const fetchAiExplanation = async () => {
   cursor: pointer;
   transition: color 0.25s var(--ease-out), border-color 0.25s var(--ease-out),
     background 0.25s var(--ease-out), transform 0.3s var(--ease-spring);
+}
+
+.pref-link .icon {
+  width: 15px;
+  height: 15px;
 }
 
 .pref-link:hover {
@@ -3726,6 +3790,10 @@ const fetchAiExplanation = async () => {
 }
 
 .mode-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   background: transparent;
   border: none;
   padding: 8px 18px;
@@ -3735,6 +3803,11 @@ const fetchAiExplanation = async () => {
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 0.3s ease;
+}
+
+.mode-switch button .icon {
+  width: 15px;
+  height: 15px;
 }
 
 .mode-switch button.active {
@@ -4038,6 +4111,10 @@ const fetchAiExplanation = async () => {
   font-weight: 760;
 }
 
+.memory-header h2 .icon {
+  color: var(--primary);
+}
+
 .memory-eyebrow {
   margin-bottom: 4px;
 }
@@ -4275,6 +4352,10 @@ const fetchAiExplanation = async () => {
 
 .memory-library-filter,
 .memory-library-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   height: 30px;
   border: 1px solid var(--surface-border);
   border-radius: var(--radius-sm);
@@ -4285,6 +4366,11 @@ const fetchAiExplanation = async () => {
   font: inherit;
   font-size: 0.8rem;
   font-weight: 650;
+}
+
+.memory-library-action .icon {
+  width: 13px;
+  height: 13px;
 }
 
 .memory-library-filter.active,
@@ -4422,16 +4508,22 @@ const fetchAiExplanation = async () => {
 }
 
 .agent-memory-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 1.1rem;
-  line-height: 1;
   cursor: pointer;
-  padding: 2px 6px;
+  padding: 4px;
   border-radius: var(--radius-sm);
   transition: color 0.2s, background 0.2s;
+}
+
+.agent-memory-del .icon {
+  width: 14px;
+  height: 14px;
 }
 
 .agent-memory-del:hover {
@@ -4496,6 +4588,10 @@ const fetchAiExplanation = async () => {
 }
 
 .hero-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border: 1px solid var(--surface-border);
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.5), transparent),
@@ -4508,6 +4604,11 @@ const fetchAiExplanation = async () => {
   cursor: pointer;
   transition: border-color 0.2s var(--ease-out), color 0.2s var(--ease-out),
     transform 0.3s var(--ease-spring), box-shadow 0.25s var(--ease-out);
+}
+
+.hero-chip .icon {
+  width: 15px;
+  height: 15px;
 }
 
 .hero-chip:hover {
@@ -6263,6 +6364,10 @@ ruby rt {
 }
 
 .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 0 var(--space-3);
   background: var(--panel-bg);
   color: var(--text-primary);
@@ -6273,6 +6378,11 @@ ruby rt {
   transition: all 0.2s;
   height: 40px;
   font-weight: 500;
+}
+
+.btn-secondary .icon {
+  width: 15px;
+  height: 15px;
 }
 
 .btn-secondary:hover {
@@ -6298,12 +6408,20 @@ ruby rt {
 }
 
 .retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   margin-left: 10px;
   background: none;
   border: none;
   text-decoration: underline;
   color: inherit;
   cursor: pointer;
+}
+
+.retry-btn .icon {
+  width: 13px;
+  height: 13px;
 }
 
 /* === AI 核对徽章 === */

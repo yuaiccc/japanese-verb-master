@@ -43,7 +43,12 @@
             </div>
 
             <div class="guide-group mt-4">
-              <h3>📝 活用形式说明</h3>
+              <h3>
+                <span class="title-with-icon">
+                  <Icon name="dictionary" class="icon-dictionary" />
+                  活用形式说明
+                </span>
+              </h3>
               <ul class="guide-list">
                 <li class="guide-item">
                   <strong>否定式 (ない形)</strong>

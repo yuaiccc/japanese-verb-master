@@ -41,6 +41,7 @@ import {
   verifyPassword,
   signToken,
   authOptional,
+  identityRequired,
   DEFAULT_USER_ID
 } from './auth.js';
 import {
@@ -2375,6 +2376,25 @@ const userRequestStore = new AsyncLocalStorage();
 app.use((req, _res, next) => {
   userRequestStore.run({ userId: req.userId }, () => next());
 });
+
+app.use([
+  '/api/entitlements',
+  '/api/payments',
+  '/api/practice-profile',
+  '/api/user-profile',
+  '/api/practice-records',
+  '/api/dojo-agent-turn',
+  '/api/dojo-quiz',
+  '/api/memory-cards',
+  '/api/memory-review-queue',
+  '/api/agent-memory',
+  '/api/agent-runs',
+  '/api/agent-thread-summary',
+  '/api/subagent-tasks',
+  '/api/agent/run',
+  '/api/agent/stream',
+  '/api/agent/follow-ups'
+], identityRequired);
 
 // 注册：用户名 + 密码，scrypt 哈希
 app.get('/api/auth/captcha-config', (_req, res) => {

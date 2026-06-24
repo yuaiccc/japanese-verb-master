@@ -95,3 +95,10 @@ export function authRequired(req, res, next) {
   req.isAuthed = true;
   next();
 }
+
+export function identityRequired(req, res, next) {
+  if (!req.isAuthed && !req.isGuest) {
+    return res.status(401).json({ error: '请先初始化访客身份或登录', code: 'identity_required' });
+  }
+  next();
+}

@@ -49,7 +49,6 @@
               已有账号？<button type="button" class="auth-link" @click="$emit('mode-change', 'login')">去登录</button>
             </template>
           </p>
-          <p class="auth-note">未登录时数据归属访客账号；登录后记忆卡 / 练习记录 / 解锁权益按账号隔离。</p>
         </div>
       </div>
 </template>
@@ -178,10 +177,4 @@ defineEmits(['submit', 'close', 'mode-change', 'captcha-token', 'captcha-error']
   padding: 0 2px;
 }
 
-.auth-note {
-  margin: 0;
-  font-size: 0.78rem;
-  line-height: 1.5;
-  color: var(--text-muted);
-}
 </style>

@@ -187,9 +187,7 @@
     <section v-if="workbenchSection === 'dict'" class="agent-panel agent-panel--hero card">
       <div class="agent-chat">
         <div v-if="agentMessages.length === 0" class="hero-intro">
-          <p class="hero-eyebrow">JAPANESE WORD MASTER</p>
           <h1 class="hero-title">問<span class="hero-title-accent">日本語</span></h1>
-          <p class="hero-subtitle">查词 · 辨析 · 活用 · 造句 —— 用一句中文提问，AI 帮你拆解日语。</p>
         </div>
         <div class="agent-chat-input">
           <input
@@ -790,7 +788,6 @@
       <div class="agent-memory-block">
         <div class="agent-memory-head">
           <h3>Agent 长期记忆</h3>
-          <span class="agent-memory-sub">个性化回答的依据 · 与复习卡相互独立</span>
         </div>
         <div v-if="agentMemoryList.length > 0" class="agent-memory-list">
           <div v-for="item in agentMemoryList" :key="item.id" class="agent-memory-item">
@@ -801,7 +798,7 @@
             </button>
           </div>
         </div>
-        <p v-else class="agent-memory-empty">还没有长期记忆。多和 Agent 聊聊学习目标和偏好，它会逐渐记住你。</p>
+        <p v-else class="agent-memory-empty">暂无长期记忆</p>
       </div>
     </section>
 
@@ -4684,11 +4681,6 @@ const fetchAiExplanation = async () => {
   color: var(--text-primary);
 }
 
-.agent-memory-sub {
-  font-size: 0.76rem;
-  color: var(--text-muted);
-}
-
 .agent-memory-list {
   display: flex;
   flex-direction: column;
@@ -4766,15 +4758,6 @@ const fetchAiExplanation = async () => {
   padding: 18px 12px 22px;
 }
 
-.hero-eyebrow {
-  margin: 0 0 10px;
-  font-size: 0.72rem;
-  letter-spacing: 0.32em;
-  font-weight: 700;
-  color: var(--primary);
-  opacity: 0.85;
-}
-
 .hero-title {
   margin: 0;
   font-size: clamp(2.4rem, 6vw, 3.4rem);
@@ -4786,14 +4769,6 @@ const fetchAiExplanation = async () => {
 
 .hero-title-accent {
   color: var(--primary);
-}
-
-.hero-subtitle {
-  margin: 12px auto 0;
-  max-width: 30em;
-  font-size: 0.98rem;
-  line-height: 1.7;
-  color: var(--text-muted);
 }
 
 .hero-chips {

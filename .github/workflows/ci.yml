@@ -20,14 +20,14 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - name: Syntax check
-        run: node --check server.js
+      - name: Type check
+        run: npx tsc --noEmit
       - name: Unit tests
         run: npm test
       - name: Build knowledge index (degraded, FTS-only)
         run: npm run kb:build
       - name: KB retrieval smoke (BM25 degradation path)
-        run: node scripts/kb-smoke.js
+        run: npx tsx scripts/kb-smoke.ts
 
   frontend:
     name: Frontend (build)

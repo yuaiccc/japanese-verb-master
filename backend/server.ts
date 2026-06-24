@@ -783,12 +783,16 @@ async function processFeishuMessage(parsed: any, { dedupe = true }: any = {}): P
   if (dedupe && !shouldProcessFeishuEvent(parsed.eventId || parsed.messageId)) {
     return;
   }
-  const context = buildFeishuAgentContext(parsed);
-  const result = await runToolCallingAgent({
-    message: parsed.text,
-    context
-  });
-  await feishuClient.replyText(parsed.messageId, truncatePlatformReply(result.answer));
+  try {
+    const context = buildFeishuAgentContext(parsed);
+    const result = await runToolCallingAgent({
+      message: parsed.text,
+      context
+    });
+    await feishuClient.replyText(parsed.messageId, truncatePlatformReply(result.answer));
+  } catch (error: any) {
+    console.error('[feishu] message processing failed:', error?.message || error);
+  }
 }
 
 async function startFeishuLongConnection(): Promise<void> {
@@ -1029,6 +1033,27 @@ if (fs.existsSync(frontendDist)) {
   });
   console.log(`Serving frontend from ${frontendDist}`);
 }
+
+// Express 错误处理中间件（必须放在所有路由之后）
+app.use((err: any, _req: any, res: any, _next: any) => {
+  console.error('[Express Error]', err?.stack || err?.message || err);
+  if (res.headersSent) return;
+  res.status(err?.status || 500).json({
+    error: err?.message || 'Internal Server Error',
+    ...(process.env.NODE_ENV !== 'production' && err?.stack ? { stack: err.stack } : {})
+  });
+});
+
+// 全局未捕获 Promise 拒绝：记录但不退出，让服务保持运行
+process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+  console.error('[Unhandled Rejection]', reason?.stack || reason?.message || reason);
+});
+
+// 全局未捕获异常：记录后优雅退出，Render 会自动重启
+process.on('uncaughtException', (err: Error) => {
+  console.error('[Uncaught Exception]', err?.stack || err?.message || err);
+  process.exit(1);
+});
 
 // 启动服务器
 app.listen(PORT, HOST, () => {

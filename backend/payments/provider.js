@@ -3,6 +3,8 @@
 //
 // - mock provider（默认）：无外部依赖的完整闭环，订单落库、收银台为本地模拟页、
 //   提供 simulate-confirm 接口模拟用户扫码付款。
+// - okx provider：设置 OKX_API_KEY / OKX_API_SECRET / OKX_API_PASSPHRASE 后，
+//   展示指定币种和网络的充值地址。用户提交 TxID，服务端用只读 API 核验到账后解锁。
 // - alipay provider（接入位）：设置 ALIPAY_APP_ID / ALIPAY_PRIVATE_KEY / ALIPAY_PUBLIC_KEY 后
 //   走支付宝当面付（alipay.trade.precreate 生成二维码 + alipay.trade.query 查单），
 //   或挂支付宝官方支付 MCP Server（@alipay/mcp-server-alipay）由 Agent 直接调用。
@@ -32,6 +34,12 @@ export function ensurePaymentSchema(db) {
       amount TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'WAIT_BUYER_PAY',
       provider TEXT NOT NULL DEFAULT 'mock',
+      payment_currency TEXT NOT NULL DEFAULT '',
+      payment_chain TEXT NOT NULL DEFAULT '',
+      deposit_address TEXT NOT NULL DEFAULT '',
+      deposit_tag TEXT NOT NULL DEFAULT '',
+      tx_id TEXT,
+      provider_payload TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       paid_at TEXT
     );
@@ -47,6 +55,23 @@ export function ensurePaymentSchema(db) {
   if (!columnExists(db, 'payment_orders', 'user_id')) {
     db.exec(`ALTER TABLE payment_orders ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1`);
   }
+  const paymentColumns = [
+    ['payment_currency', "TEXT NOT NULL DEFAULT ''"],
+    ['payment_chain', "TEXT NOT NULL DEFAULT ''"],
+    ['deposit_address', "TEXT NOT NULL DEFAULT ''"],
+    ['deposit_tag', "TEXT NOT NULL DEFAULT ''"],
+    ['tx_id', 'TEXT'],
+    ['provider_payload', "TEXT NOT NULL DEFAULT ''"]
+  ];
+  for (const [column, definition] of paymentColumns) {
+    if (!columnExists(db, 'payment_orders', column)) {
+      db.exec(`ALTER TABLE payment_orders ADD COLUMN ${column} ${definition}`);
+    }
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_orders_tx_id
+    ON payment_orders(tx_id) WHERE tx_id IS NOT NULL AND tx_id <> ''
+  `);
   if (!columnExists(db, 'entitlements', 'user_id')) {
     // 原 PRIMARY KEY(key) 需改为 (user_id, key) → 重建表，历史权益归默认用户 1
     db.exec(`
@@ -77,8 +102,12 @@ function createSqlitePaymentStore(db) {
     },
     async createPaymentOrder(order) {
       db.prepare(`
-        INSERT INTO payment_orders (out_trade_no, user_id, sku, subject, amount, status, provider, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO payment_orders (
+          out_trade_no, user_id, sku, subject, amount, status, provider,
+          payment_currency, payment_chain, deposit_address, deposit_tag,
+          tx_id, provider_payload, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         order.outTradeNo,
         Number(order.userId) || 1,
@@ -87,11 +116,33 @@ function createSqlitePaymentStore(db) {
         order.amount,
         order.status,
         order.provider,
+        order.paymentCurrency || '',
+        order.paymentChain || '',
+        order.depositAddress || '',
+        order.depositTag || '',
+        order.txId || null,
+        JSON.stringify(order.providerPayload || {}),
         order.createdAt
       );
     },
     async getPaymentOrder(outTradeNo) {
       return db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo) || null;
+    },
+    async updatePaymentOrder(outTradeNo, updates) {
+      const allowed = {
+        status: 'status',
+        txId: 'tx_id',
+        providerPayload: 'provider_payload'
+      };
+      const entries = Object.entries(updates || {}).filter(([key]) => allowed[key]);
+      if (!entries.length) return this.getPaymentOrder(outTradeNo);
+      const assignments = entries.map(([key]) => `${allowed[key]} = ?`).join(', ');
+      const values = entries.map(([key, value]) =>
+        key === 'providerPayload' ? JSON.stringify(value || {}) : value
+      );
+      db.prepare(`UPDATE payment_orders SET ${assignments} WHERE out_trade_no = ?`)
+        .run(...values, outTradeNo);
+      return this.getPaymentOrder(outTradeNo);
     },
     async settlePaymentOrder(outTradeNo, entitlement) {
       const row = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
@@ -138,15 +189,15 @@ function createMockProvider({ store }) {
         cashierHint: '演示模式：点击「模拟扫码支付」即可完成付款（真实接入时此处为支付宝收银台二维码）'
       };
     },
-    async queryOrder(outTradeNo) {
+    async queryOrder(outTradeNo, userId = 1) {
       const row = await store.getPaymentOrder(outTradeNo);
-      if (!row) return null;
+      if (!row || Number(row.user_id) !== Number(userId)) return null;
       return { outTradeNo: row.out_trade_no, sku: row.sku, status: row.status, paidAt: row.paid_at };
     },
     // 仅 mock 有：模拟「用户在支付宝完成扫码+密码确认」这一步
-    async simulateBuyerConfirm(outTradeNo) {
+    async simulateBuyerConfirm(outTradeNo, userId = 1) {
       const row = await store.getPaymentOrder(outTradeNo);
-      if (!row) return { ok: false, error: 'order not found' };
+      if (!row || Number(row.user_id) !== Number(userId)) return { ok: false, error: 'order not found' };
       if (row.status !== 'TRADE_SUCCESS') {
         const skuDef = SKUS[row.sku];
         await store.settlePaymentOrder(outTradeNo, skuDef?.entitlement || '');
@@ -158,6 +209,194 @@ function createMockProvider({ store }) {
 
 function newOutTradeNo() {
   return `JVM${Date.now()}${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+}
+
+function normalizeAmount(value) {
+  const raw = String(value ?? '').trim();
+  if (!/^\d+(?:\.\d+)?$/.test(raw)) return null;
+  if (Number(raw) <= 0) return null;
+  const [whole, fraction = ''] = raw.split('.');
+  return `${whole.replace(/^0+(?=\d)/, '') || '0'}.${fraction.replace(/0+$/, '')}`;
+}
+
+function amountsEqual(left, right) {
+  return normalizeAmount(left) === normalizeAmount(right);
+}
+
+function createOkxClient({ apiKey, secretKey, passphrase, baseUrl }) {
+  const request = async (path, params = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')
+    ).toString();
+    const requestPath = query ? `${path}?${query}` : path;
+    const timestamp = new Date().toISOString();
+    const prehash = `${timestamp}GET${requestPath}`;
+    const signature = crypto.createHmac('sha256', secretKey).update(prehash).digest('base64');
+    const response = await fetch(`${baseUrl}${requestPath}`, {
+      headers: {
+        'OK-ACCESS-KEY': apiKey,
+        'OK-ACCESS-SIGN': signature,
+        'OK-ACCESS-TIMESTAMP': timestamp,
+        'OK-ACCESS-PASSPHRASE': passphrase
+      },
+      signal: AbortSignal.timeout(10_000)
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.code !== '0') {
+      throw new Error(`OKX API ${payload.code || response.status}: ${payload.msg || 'request failed'}`);
+    }
+    return Array.isArray(payload.data) ? payload.data : [];
+  };
+  return {
+    getDepositAddresses: ccy => request('/api/v5/asset/deposit-address', { ccy }),
+    getDepositHistory: ({ ccy, txId }) =>
+      request('/api/v5/asset/deposit-history', { ccy, txId, limit: '100' })
+  };
+}
+
+async function createOkxProvider({ store }) {
+  const apiKey = String(process.env.OKX_API_KEY || '').trim();
+  const secretKey = String(process.env.OKX_API_SECRET || '').trim();
+  const passphrase = String(process.env.OKX_API_PASSPHRASE || '').trim();
+  const baseUrl = String(process.env.OKX_API_BASE_URL || 'https://www.okx.com').replace(/\/+$/, '');
+  const currency = String(process.env.OKX_PAYMENT_CURRENCY || 'USDT').trim().toUpperCase();
+  const chain = String(process.env.OKX_PAYMENT_CHAIN || 'USDT-TRC20').trim();
+  const amount = String(process.env.OKX_PAYMENT_AMOUNT || '1').trim();
+  if (!normalizeAmount(amount)) throw new Error('OKX_PAYMENT_AMOUNT 必须是正数');
+
+  const client = createOkxClient({ apiKey, secretKey, passphrase, baseUrl });
+  const addresses = await client.getDepositAddresses(currency);
+  const address = addresses.find(item => String(item.chain).toLowerCase() === chain.toLowerCase());
+  if (!address?.addr) {
+    const available = addresses.map(item => item.chain).filter(Boolean).join(', ');
+    throw new Error(`OKX 未返回 ${chain} 充值地址；可用网络：${available || '无'}`);
+  }
+
+  const QRCode = (await import('qrcode')).default;
+  const qrDataUrl = await QRCode.toDataURL(address.addr, { margin: 1, width: 220 });
+
+  const publicOrder = row => ({
+    outTradeNo: row.out_trade_no,
+    sku: row.sku,
+    status: row.status,
+    paidAt: row.paid_at,
+    txId: row.tx_id || '',
+    currency: row.payment_currency,
+    chain: row.payment_chain,
+    amount: row.amount,
+    depositAddress: row.deposit_address,
+    depositTag: row.deposit_tag || '',
+    qrDataUrl,
+    verificationStatus: row.tx_id && row.status !== 'TRADE_SUCCESS'
+      ? '正在等待 OKX 确认到账'
+      : ''
+  });
+
+  const verifyOrder = async row => {
+    if (!row?.tx_id || row.status === 'TRADE_SUCCESS') return row;
+    const deposits = await client.getDepositHistory({
+      ccy: row.payment_currency,
+      txId: row.tx_id
+    });
+    const deposit = deposits.find(item =>
+      String(item.txId || '').toLowerCase() === String(row.tx_id).toLowerCase()
+    );
+    if (!deposit) return row;
+
+    const createdAt = new Date(row.created_at).getTime();
+    const depositAt = Number(deposit.ts);
+    const addressMatches = !deposit.to
+      || String(deposit.to).toLowerCase() === String(row.deposit_address).toLowerCase();
+    const matches = (
+      String(deposit.ccy).toUpperCase() === String(row.payment_currency).toUpperCase()
+      && String(deposit.chain).toLowerCase() === String(row.payment_chain).toLowerCase()
+      && amountsEqual(deposit.amt, row.amount)
+      && addressMatches
+      && Number.isFinite(depositAt)
+      && depositAt >= createdAt - 10 * 60 * 1000
+    );
+    if (!matches || String(deposit.state) !== '2') {
+      await store.updatePaymentOrder(row.out_trade_no, {
+        providerPayload: {
+          state: String(deposit.state || ''),
+          depositId: String(deposit.depId || ''),
+          checkedAt: new Date().toISOString()
+        }
+      });
+      return store.getPaymentOrder(row.out_trade_no);
+    }
+
+    const skuDef = SKUS[row.sku];
+    await store.updatePaymentOrder(row.out_trade_no, {
+      providerPayload: {
+        state: '2',
+        depositId: String(deposit.depId || ''),
+        checkedAt: new Date().toISOString()
+      }
+    });
+    return store.settlePaymentOrder(row.out_trade_no, skuDef?.entitlement || '');
+  };
+
+  return {
+    name: 'okx',
+    async createOrder(skuDef, userId = 1) {
+      const outTradeNo = newOutTradeNo();
+      await store.createPaymentOrder({
+        outTradeNo,
+        userId,
+        sku: skuDef.sku,
+        subject: skuDef.subject,
+        amount,
+        status: 'WAIT_BUYER_PAY',
+        provider: 'okx',
+        paymentCurrency: currency,
+        paymentChain: chain,
+        depositAddress: address.addr,
+        depositTag: address.tag || address.memo || address.pmtId || '',
+        createdAt: new Date().toISOString()
+      });
+      return {
+        outTradeNo,
+        subject: skuDef.subject,
+        amount,
+        currency,
+        chain,
+        depositAddress: address.addr,
+        depositTag: address.tag || address.memo || address.pmtId || '',
+        qrDataUrl,
+        cashierHint: `请通过 ${chain} 网络充值准确的 ${amount} ${currency}，完成后提交 TxID。不要使用其他网络。`
+      };
+    },
+    async submitTransaction(outTradeNo, txId, userId = 1) {
+      const normalizedTxId = String(txId || '').trim();
+      if (!/^[A-Za-z0-9:_-]{8,200}$/.test(normalizedTxId)) {
+        return { ok: false, status: 400, error: 'TxID 格式无效' };
+      }
+      const row = await store.getPaymentOrder(outTradeNo);
+      if (!row || Number(row.user_id) !== Number(userId)) {
+        return { ok: false, status: 404, error: 'Order not found' };
+      }
+      if (row.status === 'TRADE_SUCCESS') {
+        return { ok: true, order: publicOrder(row) };
+      }
+      try {
+        await store.updatePaymentOrder(outTradeNo, { txId: normalizedTxId });
+      } catch (error) {
+        if (/unique|duplicate/i.test(error.message)) {
+          return { ok: false, status: 409, error: '该 TxID 已被其他订单使用' };
+        }
+        throw error;
+      }
+      const fresh = await verifyOrder(await store.getPaymentOrder(outTradeNo));
+      return { ok: true, order: publicOrder(fresh) };
+    },
+    async queryOrder(outTradeNo, userId = 1) {
+      const row = await store.getPaymentOrder(outTradeNo);
+      if (!row || Number(row.user_id) !== Number(userId)) return null;
+      const fresh = await verifyOrder(row);
+      return publicOrder(fresh);
+    }
+  };
 }
 
 // 支付宝「当面付」接入（alipay-sdk v4）。资金确认权始终在用户手机端：
@@ -259,9 +498,9 @@ async function createAlipayProvider({ store }) {
         cashierHint: '请用支付宝扫码完成支付，到账后本页自动解锁'
       };
     },
-    async queryOrder(outTradeNo) {
+    async queryOrder(outTradeNo, userId = 1) {
       const row = await store.getPaymentOrder(outTradeNo);
-      if (!row) return null;
+      if (!row || Number(row.user_id) !== Number(userId)) return null;
       if (row.status !== 'TRADE_SUCCESS') {
         try {
           const res = await sdk.curl('POST', '/v3/alipay/trade/query', { body: { out_trade_no: outTradeNo } });
@@ -280,6 +519,23 @@ async function createAlipayProvider({ store }) {
 
 export async function createPaymentProvider({ store, db }) {
   const paymentStore = store || createSqlitePaymentStore(db);
+  const useOkx = !!(
+    process.env.OKX_API_KEY
+    && process.env.OKX_API_SECRET
+    && process.env.OKX_API_PASSPHRASE
+  );
+  if (useOkx) {
+    try {
+      const provider = await createOkxProvider({ store: paymentStore });
+      console.log(
+        `[payments] OKX provider 已启用（${process.env.OKX_PAYMENT_CURRENCY || 'USDT'} / `
+        + `${process.env.OKX_PAYMENT_CHAIN || 'USDT-TRC20'}）`
+      );
+      return provider;
+    } catch (err) {
+      console.warn(`[payments] OKX 初始化失败，继续检查其他 provider：${err.message}`);
+    }
+  }
   const useAlipay = !!(process.env.ALIPAY_APP_ID && process.env.ALIPAY_PRIVATE_KEY);
   if (useAlipay) {
     try {
@@ -293,6 +549,6 @@ export async function createPaymentProvider({ store, db }) {
       return createMockProvider({ store: paymentStore });
     }
   }
-  console.log('[payments] 未配置 ALIPAY_* ，使用 mock provider（零资金演示）');
+  console.log('[payments] 未配置可用的 OKX/ALIPAY provider，使用 mock provider（零资金演示）');
   return createMockProvider({ store: paymentStore });
 }

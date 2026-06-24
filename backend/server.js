@@ -2539,9 +2539,30 @@ app.post('/api/payments/orders', async (req, res) => {
 });
 
 app.get('/api/payments/orders/:outTradeNo', async (req, res) => {
-  const order = await paymentProvider.queryOrder(req.params.outTradeNo);
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-  res.json(order);
+  try {
+    const order = await paymentProvider.queryOrder(req.params.outTradeNo, req.userId);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json(order);
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.post('/api/payments/orders/:outTradeNo/txid', async (req, res) => {
+  if (typeof paymentProvider.submitTransaction !== 'function') {
+    return res.status(404).json({ error: 'Not available for this provider' });
+  }
+  try {
+    const result = await paymentProvider.submitTransaction(
+      req.params.outTradeNo,
+      req.body?.txId,
+      req.userId
+    );
+    if (!result.ok) return res.status(result.status || 400).json({ error: result.error });
+    res.json(result.order);
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
 });
 
 // 仅 mock provider：模拟用户在支付宝 App 完成扫码 + 密码确认
@@ -2549,7 +2570,7 @@ app.post('/api/payments/orders/:outTradeNo/simulate-confirm', async (req, res) =
   if (typeof paymentProvider.simulateBuyerConfirm !== 'function') {
     return res.status(404).json({ error: 'Not available for this provider' });
   }
-  const result = await paymentProvider.simulateBuyerConfirm(req.params.outTradeNo);
+  const result = await paymentProvider.simulateBuyerConfirm(req.params.outTradeNo, req.userId);
   if (!result.ok) return res.status(404).json({ error: result.error });
   res.json(result);
 });

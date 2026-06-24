@@ -43,7 +43,15 @@ const userProfile = ref({
 
 // === 付费解锁（A2A 支付 demo：应用开单，确认权在用户）===
 const entitlements = ref({});
-const paywall = ref({ visible: false, order: null, paying: false, error: '', polling: false });
+const paywall = ref({
+  visible: false,
+  order: null,
+  paying: false,
+  error: '',
+  polling: false,
+  txId: '',
+  copied: false
+});
 let paywallPollTimer = null;
 
 const currentQuestion = computed(() => dojoQuestions.value[dojoCurrentIndex.value] || {});
@@ -68,7 +76,7 @@ const sceneOptions = computed(() => {
       id: 'n1',
       name: 'N1 专项',
       description: '使役被动・使役・被动等高阶变形集训。',
-      meta: entitlements.value['n1-pack'] ? '已解锁' : '¥0.01 解锁',
+      meta: entitlements.value['n1-pack'] ? '已解锁' : '支付解锁',
       preview: '飲まされる / 食べさせられる',
       locked: !entitlements.value['n1-pack']
     }
@@ -111,7 +119,15 @@ const stopPaywallPolling = () => {
 
 const closePaywall = () => {
   stopPaywallPolling();
-  paywall.value = { visible: false, order: null, paying: false, error: '', polling: false };
+  paywall.value = {
+    visible: false,
+    order: null,
+    paying: false,
+    error: '',
+    polling: false,
+    txId: '',
+    copied: false
+  };
 };
 
 const finishUnlock = async () => {
@@ -122,7 +138,7 @@ const finishUnlock = async () => {
   await startDojo();
 };
 
-// 真实支付宝（page/qr）：付款在支付宝侧完成，前端每 3s 轮询订单状态，到账即解锁
+// 真实支付：支付宝付款后直接轮询；OKX 提交 TxID 后轮询到账状态。
 const startPaywallPolling = (outTradeNo) => {
   stopPaywallPolling();
   paywall.value.polling = true;
@@ -140,7 +156,15 @@ const startPaywallPolling = (outTradeNo) => {
 
 const openPaywall = async () => {
   stopPaywallPolling();
-  paywall.value = { visible: true, order: null, paying: false, error: '', polling: false };
+  paywall.value = {
+    visible: true,
+    order: null,
+    paying: false,
+    error: '',
+    polling: false,
+    txId: '',
+    copied: false
+  };
   try {
     const res = await axios.post('/api/payments/orders', { sku: 'n1-pack' });
     paywall.value.order = res.data;
@@ -162,6 +186,41 @@ const openPaywall = async () => {
 const goToAlipayCashier = () => {
   const url = paywall.value.order?.payUrl;
   if (url) window.open(url, '_blank', 'noopener');
+};
+
+const copyOkxAddress = async () => {
+  const address = paywall.value.order?.depositAddress;
+  if (!address) return;
+  try {
+    await navigator.clipboard.writeText(address);
+    paywall.value.copied = true;
+    setTimeout(() => {
+      if (paywall.value) paywall.value.copied = false;
+    }, 1600);
+  } catch {
+    paywall.value.error = '复制失败，请手动选择充值地址。';
+  }
+};
+
+const submitOkxTxId = async () => {
+  const order = paywall.value.order;
+  const txId = paywall.value.txId.trim();
+  if (!order || !txId || paywall.value.paying) return;
+  paywall.value.paying = true;
+  paywall.value.error = '';
+  try {
+    const res = await axios.post(`/api/payments/orders/${order.outTradeNo}/txid`, { txId });
+    paywall.value.order = { ...order, ...res.data };
+    if (res.data.status === 'TRADE_SUCCESS') {
+      await finishUnlock();
+      return;
+    }
+    startPaywallPolling(order.outTradeNo);
+  } catch (e) {
+    paywall.value.error = e.response?.data?.error || 'TxID 验证失败，请检查后重试。';
+  } finally {
+    paywall.value.paying = false;
+  }
 };
 
 // mock：模拟「用户在支付宝 App 扫码 + 密码确认」
@@ -332,7 +391,8 @@ export function useDojo() {
     // 道场流程
     startDojo, selectDojoScene, submitDojoAnswer, requestDojoHint, nextDojoQuestion,
     // 付费
-    openPaywall, closePaywall, goToAlipayCashier, simulatePaywallPay,
+    openPaywall, closePaywall, goToAlipayCashier, copyOkxAddress,
+    submitOkxTxId, simulatePaywallPay,
     // 数据加载（认证 / 首屏 / Agent 跨域复用）
     loadEntitlements, loadUserProfile, recordPractice, loadDojoBootstrap
   };

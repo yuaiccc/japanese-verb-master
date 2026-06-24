@@ -37,11 +37,65 @@
             <template v-if="paywall.order">
               <div class="paywall-body">
                 <p class="paywall-subject">{{ paywall.order.subject }}</p>
-                <p class="paywall-amount">¥{{ paywall.order.amount }}</p>
+                <p class="paywall-amount">
+                  <template v-if="paywall.order.provider === 'okx'">
+                    {{ paywall.order.amount }} {{ paywall.order.currency }}
+                  </template>
+                  <template v-else>¥{{ paywall.order.amount }}</template>
+                </p>
                 <p class="paywall-meta">订单号 {{ paywall.order.outTradeNo }}</p>
 
+                <!-- OKX 链上充值：复制地址，付款后提交 TxID，后端只读核验到账 -->
+                <template v-if="paywall.order.provider === 'okx'">
+                  <p class="paywall-network">{{ paywall.order.chain }}</p>
+                  <img
+                    class="paywall-qr-img"
+                    :src="paywall.order.qrDataUrl"
+                    :alt="`${paywall.order.chain} 充值地址二维码`"
+                    width="200"
+                    height="200"
+                  />
+                  <div class="paywall-address">
+                    <code>{{ paywall.order.depositAddress }}</code>
+                    <button
+                      type="button"
+                      class="paywall-icon-btn"
+                      :title="paywall.copied ? '已复制' : '复制充值地址'"
+                      :aria-label="paywall.copied ? '已复制' : '复制充值地址'"
+                      @click="copyOkxAddress"
+                    >
+                      <Icon :name="paywall.copied ? 'check' : 'copy'" />
+                    </button>
+                  </div>
+                  <p v-if="paywall.order.depositTag" class="paywall-meta">
+                    Memo / Tag：{{ paywall.order.depositTag }}
+                  </p>
+                  <p class="paywall-hint">{{ paywall.order.cashierHint }}</p>
+                  <form class="paywall-tx-form" @submit.prevent="submitOkxTxId">
+                    <input
+                      v-model.trim="paywall.txId"
+                      type="text"
+                      autocomplete="off"
+                      placeholder="付款后粘贴 TxID / 交易哈希"
+                      aria-label="OKX 充值交易 TxID"
+                    />
+                    <button
+                      type="submit"
+                      class="search-btn paywall-pay-btn"
+                      :disabled="paywall.paying || !paywall.txId"
+                    >
+                      <Icon :name="paywall.paying ? 'hourglass' : 'check'" />
+                      {{ paywall.paying ? '核验中…' : '提交并核验' }}
+                    </button>
+                  </form>
+                  <p v-if="paywall.polling" class="paywall-hint paywall-polling">
+                    <Icon name="hourglass" />
+                    {{ paywall.order.verificationStatus || '正在等待 OKX 确认到账…' }}
+                  </p>
+                </template>
+
                 <!-- 电脑网站支付：跳收银台，无需 App -->
-                <template v-if="paywall.order.payUrl">
+                <template v-else-if="paywall.order.payUrl">
                   <button type="button" class="search-btn paywall-pay-btn" @click="goToAlipayCashier">
                     前往支付宝收银台付款
                   </button>
@@ -267,7 +321,7 @@ const {
   currentQuestion, sceneOptions, activeDojoSceneName,
   paywall, practiceProfile, userProfile,
   startDojo, selectDojoScene, submitDojoAnswer, requestDojoHint, nextDojoQuestion,
-  closePaywall, goToAlipayCashier, simulatePaywallPay
+  closePaywall, goToAlipayCashier, copyOkxAddress, submitOkxTxId, simulatePaywallPay
 } = useDojo();
 
 const sceneIcon = (scene) => {
@@ -445,6 +499,62 @@ const scoreCopy = computed(() => {
   font-size: 0.72rem;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.paywall-network {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.paywall-address {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--field-bg);
+}
+
+.paywall-address code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.paywall-icon-btn {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+  background: var(--panel-bg);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.paywall-tx-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.paywall-tx-form input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  background: var(--field-bg);
+  color: var(--text-primary);
+  padding: 10px 12px;
+  font: inherit;
 }
 
 .paywall-qr {

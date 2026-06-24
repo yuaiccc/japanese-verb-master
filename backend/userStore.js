@@ -145,6 +145,12 @@ class LocalUserStore {
         amount TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'WAIT_BUYER_PAY',
         provider TEXT NOT NULL DEFAULT 'mock',
+        payment_currency TEXT NOT NULL DEFAULT '',
+        payment_chain TEXT NOT NULL DEFAULT '',
+        deposit_address TEXT NOT NULL DEFAULT '',
+        deposit_tag TEXT NOT NULL DEFAULT '',
+        tx_id TEXT,
+        provider_payload TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         paid_at TEXT
       );
@@ -155,6 +161,23 @@ class LocalUserStore {
         unlocked_at TEXT NOT NULL,
         PRIMARY KEY (user_id, key)
       );
+    `);
+    const paymentColumns = [
+      ['payment_currency', "TEXT NOT NULL DEFAULT ''"],
+      ['payment_chain', "TEXT NOT NULL DEFAULT ''"],
+      ['deposit_address', "TEXT NOT NULL DEFAULT ''"],
+      ['deposit_tag', "TEXT NOT NULL DEFAULT ''"],
+      ['tx_id', 'TEXT'],
+      ['provider_payload', "TEXT NOT NULL DEFAULT ''"]
+    ];
+    for (const [column, definition] of paymentColumns) {
+      if (!db.prepare('PRAGMA table_info(payment_orders)').all().some(item => item.name === column)) {
+        db.exec(`ALTER TABLE payment_orders ADD COLUMN ${column} ${definition}`);
+      }
+    }
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_orders_tx_id
+      ON payment_orders(tx_id) WHERE tx_id IS NOT NULL AND tx_id <> ''
     `);
   }
 
@@ -254,16 +277,36 @@ class LocalUserStore {
 
   async createPaymentOrder(order) {
     db.prepare(`
-      INSERT INTO payment_orders (out_trade_no, user_id, sku, subject, amount, status, provider, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO payment_orders (
+        out_trade_no, user_id, sku, subject, amount, status, provider,
+        payment_currency, payment_chain, deposit_address, deposit_tag,
+        tx_id, provider_payload, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       order.outTradeNo, uid(order.userId), order.sku, order.subject, order.amount,
-      order.status, order.provider, order.createdAt
+      order.status, order.provider, order.paymentCurrency || '', order.paymentChain || '',
+      order.depositAddress || '', order.depositTag || '', order.txId || null,
+      JSON.stringify(order.providerPayload || {}), order.createdAt
     );
   }
 
   async getPaymentOrder(outTradeNo) {
     return db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo) || null;
+  }
+
+  async updatePaymentOrder(outTradeNo, updates) {
+    const allowed = { status: 'status', txId: 'tx_id', providerPayload: 'provider_payload' };
+    const entries = Object.entries(updates || {}).filter(([key]) => allowed[key]);
+    if (!entries.length) return this.getPaymentOrder(outTradeNo);
+    const values = entries.map(([key, value]) =>
+      key === 'providerPayload' ? JSON.stringify(value || {}) : value
+    );
+    db.prepare(`
+      UPDATE payment_orders SET ${entries.map(([key]) => `${allowed[key]} = ?`).join(', ')}
+      WHERE out_trade_no = ?
+    `).run(...values, outTradeNo);
+    return this.getPaymentOrder(outTradeNo);
   }
 
   async settlePaymentOrder(outTradeNo, entitlement) {
@@ -459,9 +502,23 @@ class PostgresUserStore {
         amount TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'WAIT_BUYER_PAY',
         provider TEXT NOT NULL DEFAULT 'mock',
+        payment_currency TEXT NOT NULL DEFAULT '',
+        payment_chain TEXT NOT NULL DEFAULT '',
+        deposit_address TEXT NOT NULL DEFAULT '',
+        deposit_tag TEXT NOT NULL DEFAULT '',
+        tx_id TEXT,
+        provider_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL,
         paid_at TIMESTAMPTZ
       );
+      ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS payment_currency TEXT NOT NULL DEFAULT '';
+      ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS payment_chain TEXT NOT NULL DEFAULT '';
+      ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS deposit_address TEXT NOT NULL DEFAULT '';
+      ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS deposit_tag TEXT NOT NULL DEFAULT '';
+      ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS tx_id TEXT;
+      ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS provider_payload JSONB NOT NULL DEFAULT '{}'::jsonb;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_orders_tx_id
+      ON payment_orders(tx_id) WHERE tx_id IS NOT NULL AND tx_id <> '';
       CREATE TABLE IF NOT EXISTS entitlements (
         user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         key TEXT NOT NULL,
@@ -767,11 +824,18 @@ class PostgresUserStore {
   async createPaymentOrder(order) {
     await this.pool.query(`
       INSERT INTO payment_orders (
-        out_trade_no, user_id, sku, subject, amount, status, provider, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        out_trade_no, user_id, sku, subject, amount, status, provider,
+        payment_currency, payment_chain, deposit_address, deposit_tag,
+        tx_id, provider_payload, created_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10, $11, $12, $13, $14
+      )
     `, [
       order.outTradeNo, uid(order.userId), order.sku, order.subject,
-      order.amount, order.status, order.provider, order.createdAt
+      order.amount, order.status, order.provider, order.paymentCurrency || '',
+      order.paymentChain || '', order.depositAddress || '', order.depositTag || '',
+      order.txId || null, order.providerPayload || {}, order.createdAt
     ]);
   }
 
@@ -780,6 +844,21 @@ class PostgresUserStore {
       'SELECT * FROM payment_orders WHERE out_trade_no = $1',
       [outTradeNo]
     );
+    return rows[0] || null;
+  }
+
+  async updatePaymentOrder(outTradeNo, updates) {
+    const allowed = { status: 'status', txId: 'tx_id', providerPayload: 'provider_payload' };
+    const entries = Object.entries(updates || {}).filter(([key]) => allowed[key]);
+    if (!entries.length) return this.getPaymentOrder(outTradeNo);
+    const values = entries.map(([key, value]) => key === 'providerPayload' ? (value || {}) : value);
+    const assignments = entries.map(([key], index) => `${allowed[key]} = $${index + 1}`);
+    values.push(outTradeNo);
+    const { rows } = await this.pool.query(`
+      UPDATE payment_orders SET ${assignments.join(', ')}
+      WHERE out_trade_no = $${values.length}
+      RETURNING *
+    `, values);
     return rows[0] || null;
   }
 

@@ -149,6 +149,11 @@
       <path d="M8 19.5v-6h8v6"></path>
     </template>
 
+    <template v-else-if="name === 'copy'">
+      <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+    </template>
+
     <template v-else-if="name === 'lock'">
       <rect x="5.5" y="10" width="13" height="10" rx="2"></rect>
       <path d="M8.5 10V7.8a3.5 3.5 0 0 1 7 0V10"></path>

@@ -153,8 +153,8 @@ backend/
   knowledge/       RAG 构建、检索和评测
   payments/        支付 provider
   tests/           Node 测试
-  server.js        Express 与 Agent 入口
-  userStore.js     SQLite/PostgreSQL 存储适配
+  server.ts        Express 与 Agent 入口
+  userStore.ts     SQLite/PostgreSQL 存储适配
 frontend/
   src/components/  Vue 组件
   src/composables/ 前端状态与业务流程

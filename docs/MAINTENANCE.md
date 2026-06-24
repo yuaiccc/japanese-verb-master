@@ -60,7 +60,7 @@ flowchart TD
 
 ## 后端核心文件
 
-### `backend/server.js`
+### `backend/server.ts`
 
 目前过大，是主要混乱来源。它同时包含：
 
@@ -74,13 +74,13 @@ flowchart TD
 
 短期先不要盲目拆文件，避免破坏功能。下一次重构建议按下面顺序拆：
 
-1. `agent/graph.js`：`LearningAgentState` 和 `createLearningAgentGraph`
-2. `agent/tools.js`：`agentTools`、`executeAgentTool`
-3. `agent/sse.js`：`prepareSse`、`writeSse`、`emitAgentQueue`
-4. `llm/provider.js`：LLM Switch、OpenAI-compatible 调用和 Ollama 调用
-5. `routes/*.js`：按 memory、dojo、dictionary、agent 拆路由
+1. `agent/graph.ts`：`LearningAgentState` 和 `createLearningAgentGraph`
+2. `agent/tools.ts`：`agentTools`、`executeAgentTool`
+3. `agent/sse.ts`：`prepareSse`、`writeSse`、`emitAgentQueue`
+4. `llm/provider.ts`：LLM Switch、OpenAI-compatible 调用和 Ollama 调用
+5. `routes/*.ts`：按 memory、dojo、dictionary、agent 拆路由
 
-### `backend/db.js`
+### `backend/db.ts`
 
 负责 SQLite：
 
@@ -89,7 +89,7 @@ flowchart TD
 - 记忆参数
 - 相似词查询所需词库
 
-### `backend/sceneData.js`
+### `backend/sceneData.ts`
 
 维护场景练习分类，例如日常、点餐、学校、旅行、职场。
 
@@ -211,8 +211,8 @@ START -> planner -> researcher -> tutor -> memory_manager -> END
 3. `components/ToolTrace.vue`
 4. `components/MemoryQueue.vue`
 5. `components/DojoPanel.vue`
-6. `composables/useAgentStream.js`
-7. `composables/useMemoryCards.js`
+6. `composables/useAgentStream.ts`
+7. `composables/useMemoryCards.ts`
 
 ## 旧逻辑和新逻辑的关系
 
@@ -240,7 +240,7 @@ START -> planner -> researcher -> tutor -> memory_manager -> END
 
 ## 当前已知风险
 
-- `server.js` 和 `App.vue` 文件过大，后续维护成本高。
+- `server.ts` 和 `App.vue` 文件过大，后续维护成本高。
 - LangGraph 目前没有 checkpoint/thread 持久化。
 - Researcher 的工具选择目前是规则式 planned tools，不是 LLM 自主规划。
 - 外部搜索依赖第三方 API，速度和稳定性不可完全控。
@@ -252,7 +252,7 @@ START -> planner -> researcher -> tutor -> memory_manager -> END
 
 ```bash
 cd backend
-node --check server.js
+npx tsx --check server.ts
 
 cd ../frontend
 npm run build
@@ -312,7 +312,7 @@ curl -N -X POST http://localhost:3456/api/agent/stream \
 
 ### 最近验证
 
-- `node --check backend/server.js` 通过。
+- `npx tsx --check backend/server.ts` 通过。
 - `npm run build` 通过。
 - `/health` 正常。
 - `/api/conjugate` 正常。
@@ -323,7 +323,7 @@ curl -N -X POST http://localhost:3456/api/agent/stream \
 
 ## 下一步建议
 
-1. 先拆 `backend/server.js`，把 Agent 相关逻辑独立出去。
+1. 先拆 `backend/server.ts`，把 Agent 相关逻辑独立出去。
 2. 再拆 `frontend/src/App.vue`，把 Agent 和 Memory/Dojo 分离。
 3. 加一个最小 E2E：输入词语后断言出现 queue/tool/token/done。
 4. 引入 LangGraph checkpoint/thread，让学习会话可恢复。

@@ -60,9 +60,9 @@ Equivalent manual command:
 
 ```bash
 openclaw mcp add japanese-verb-master \
-  --command node \
+  --command npx tsx \
   --cwd /Users/xujunshan/Code/japanese-verb-master/backend \
-  --arg scripts/jvm-mcp-server.js \
+  --arg scripts/jvm-mcp-server.ts \
   --env JVM_AGENT_BASE_URL=http://127.0.0.1:3456
 ```
 
@@ -70,9 +70,9 @@ If the backend is not running yet, save without probing:
 
 ```bash
 openclaw mcp add japanese-verb-master \
-  --command node \
+  --command npx tsx \
   --cwd /Users/xujunshan/Code/japanese-verb-master/backend \
-  --arg scripts/jvm-mcp-server.js \
+  --arg scripts/jvm-mcp-server.ts \
   --env JVM_AGENT_BASE_URL=http://127.0.0.1:3456 \
   --no-probe
 ```

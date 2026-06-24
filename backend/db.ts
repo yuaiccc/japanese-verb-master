@@ -1,4 +1,3 @@
-// @ts-ignore - better-sqlite3 has no bundled type declarations
 import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';

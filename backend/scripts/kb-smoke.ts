@@ -6,7 +6,7 @@ import { createLocalRetriever } from '../knowledge/retriever';
 
 ensureKnowledgeSchema(db);
 
-const { chunks } = db.prepare('SELECT COUNT(*) AS chunks FROM knowledge_chunks').get();
+const { chunks } = db.prepare('SELECT COUNT(*) AS chunks FROM knowledge_chunks').get() as { chunks: number };
 if (chunks < 100) {
   console.error(`[kb:smoke] FAIL: 索引仅 ${chunks} 块（预期 ≥100），kb:build 可能未执行`);
   process.exit(1);

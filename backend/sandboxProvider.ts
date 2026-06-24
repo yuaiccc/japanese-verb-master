@@ -1,5 +1,5 @@
-import { getSubagentSandboxPolicy } from './sandboxPolicies.js';
-import type { SandboxPolicy } from './sandboxPolicies.js';
+import { getSubagentSandboxPolicy } from './sandboxPolicies';
+import type { SandboxPolicy } from './sandboxPolicies';
 
 function pickContextSlice(context: Record<string, any> = {}, exposedContextKeys: string[] = []): Record<string, any> {
   if (!context || exposedContextKeys.length === 0) return {};

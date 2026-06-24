@@ -6,8 +6,8 @@ Keep changes scoped, preserve unrelated user edits, and avoid repeating expensiv
 ## Repository Map
 
 - `frontend/`: Vue 3 + Vite client.
-- `backend/server.js`: Express routes and application bootstrap.
-- `backend/userStore.js`: SQLite/PostgreSQL user data adapters.
+- `backend/server.ts`: Express routes and application bootstrap.
+- `backend/userStore.ts`: SQLite/PostgreSQL user data adapters.
 - `backend/payments/`: payment providers.
 - `backend/knowledge/`: local RAG ingestion, retrieval, and evaluation.
 - `backend/tests/`: Node test suite.
@@ -35,8 +35,8 @@ again unless code changed after it passed.
 | --- | --- |
 | Markdown/docs only | `git diff --check` |
 | Vue/CSS only | `cd frontend && npm run build` |
-| One backend module | Relevant test file, then `node --check` for edited JS |
-| Payment/auth/storage | Relevant tests plus `backend/tests/user-store-isolation.test.js` |
+| One backend module | Relevant test file, then `npx tsc --noEmit` for edited JS |
+| Payment/auth/storage | Relevant tests plus `backend/tests/user-store-isolation.test.ts` |
 | Shared backend or cross-layer change | Full backend tests and frontend build |
 | Deployment configuration | Full backend tests, frontend build, then production smoke |
 
@@ -44,8 +44,8 @@ Useful commands:
 
 ```bash
 cd backend
-node --test tests/payments.test.js
-node --test tests/user-store-isolation.test.js
+npx tsx --test tests/payments.test.ts
+npx tsx --test tests/user-store-isolation.test.ts
 npm test
 
 cd ../frontend

@@ -5,9 +5,10 @@ JVM_BACKEND_DIR="/Users/xujunshan/Code/japanese-verb-master/backend"
 JVM_AGENT_BASE_URL="${JVM_AGENT_BASE_URL:-http://127.0.0.1:3456}"
 
 openclaw mcp add japanese-verb-master \
-  --command node \
+  --command npx \
   --cwd "$JVM_BACKEND_DIR" \
-  --arg scripts/jvm-mcp-server.js \
+  --arg tsx \
+  --arg scripts/jvm-mcp-server.ts \
   --env "JVM_AGENT_BASE_URL=$JVM_AGENT_BASE_URL" \
   --no-probe
 

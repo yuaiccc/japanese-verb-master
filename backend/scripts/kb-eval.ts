@@ -28,7 +28,7 @@ console.table(results);
 const sha = (() => {
   try { return execSync('git rev-parse --short HEAD', { cwd: __dirname }).toString().trim(); } catch { return 'unknown'; }
 })();
-const { chunks } = db.prepare('SELECT COUNT(*) AS chunks FROM knowledge_chunks').get();
+const { chunks } = db.prepare('SELECT COUNT(*) AS chunks FROM knowledge_chunks').get() as { chunks: number };
 const record = { ts: new Date().toISOString(), gitSha: sha, chunks, cases: cases.length, results };
 const historyPath = path.join(__dirname, '..', 'eval-history.jsonl');
 fs.appendFileSync(historyPath, JSON.stringify(record) + '\n');

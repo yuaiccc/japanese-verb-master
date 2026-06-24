@@ -4,7 +4,6 @@ import express from 'express';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-// @ts-ignore - better-sqlite3 has no bundled type declarations
 import Database from 'better-sqlite3';
 import { ensureKnowledgeSchema } from '../knowledge/schema';
 import { ingestKnowledge } from '../knowledge/ingest';

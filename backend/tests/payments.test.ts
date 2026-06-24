@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-// @ts-ignore - better-sqlite3 has no bundled type declarations
 import Database from 'better-sqlite3';
 import { createPaymentProvider, ensurePaymentSchema, hasEntitlement, SKUS } from '../payments/provider';
 

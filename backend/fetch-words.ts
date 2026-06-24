@@ -5,7 +5,7 @@
  */
 import https from 'https';
 import * as wanakana from 'wanakana';
-import { bulkInsert, getWordCount } from './db.js';
+import { bulkInsert, getWordCount } from './db';
 
 const args = process.argv.slice(2);
 const levelArg = args.find(a => a.startsWith('--levels='));

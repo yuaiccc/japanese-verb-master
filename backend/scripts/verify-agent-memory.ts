@@ -7,7 +7,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(__dirname, '..', 'dictionary.db');
 
-function streamAgent(message, { runId = `verify-${Date.now()}`, threadId = 'verify-thread' } = {}) {
+interface SseEvent {
+  event: string;
+  data: any;
+}
+
+function streamAgent(message: string, { runId = `verify-${Date.now()}`, threadId = 'verify-thread' } = {}): Promise<SseEvent[]> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({
       message,
@@ -23,9 +28,9 @@ function streamAgent(message, { runId = `verify-${Date.now()}`, threadId = 'veri
       }
     }, (res) => {
       let buf = '';
-      const events = [];
+      const events: SseEvent[] = [];
       res.setEncoding('utf8');
-      res.on('data', (chunk) => {
+      res.on('data', (chunk: string) => {
         buf += chunk;
         let idx;
         while ((idx = buf.indexOf('\n\n')) !== -1) {
@@ -46,14 +51,14 @@ function streamAgent(message, { runId = `verify-${Date.now()}`, threadId = 'veri
   });
 }
 
-function snapshotMemory() {
+function snapshotMemory(): any[] {
   const db = new Database(dbPath, { readonly: true });
   const rows = db.prepare('SELECT id, type, mkey, value, salience, source_run_id, updated_at FROM agent_memory ORDER BY id').all();
   db.close();
   return rows;
 }
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 async function main() {
   console.log('=== Baseline ===');
@@ -89,7 +94,6 @@ async function main() {
   const Q2 = 'よろしく 怎么用？';
   console.log('\n=== Round 2: 无关问题，验证 agentMemory 是否被注入到 userContent ===');
   console.log('Q:', Q2);
-  // 用 stderr 监听后端日志看不到 userContent；改为前端等响应后看抽取/注入侧效果
   const r2RunId = `verify-r2-${Date.now()}`;
   const events2 = await streamAgent(Q2, { runId: r2RunId, threadId: 'verify-thread-2' });
   const done2 = events2.find(e => e.event === 'done');

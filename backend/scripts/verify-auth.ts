@@ -45,7 +45,7 @@ const bCards = listMemoryCards(500, U_B).map((c: any) => c.word);
 db.prepare('DELETE FROM memory_cards WHERE word = ?').run('__shared_word__');
 upsertMemoryCard({ word: '__shared_word__', meaning: 'shared' }, U_A);
 upsertMemoryCard({ word: '__shared_word__', meaning: 'shared' }, U_B);
-const sharedCount = db.prepare('SELECT COUNT(*) AS n FROM memory_cards WHERE word = ?').get('__shared_word__').n;
+const sharedCount = (db.prepare('SELECT COUNT(*) AS n FROM memory_cards WHERE word = ?').get('__shared_word__') as { n: number }).n;
 sharedCount === 2 ? ok('同词跨用户共存') : bad('同词跨用户共存 应为2 实为 ' + sharedCount);
 
 // 4. 权益隔离

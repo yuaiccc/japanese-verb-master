@@ -13,8 +13,8 @@ import db, {
   scheduleReview,
   upsertMemoryCard as upsertLocalMemoryCard,
   writeAgentMemory as writeLocalAgentMemory
-} from './db.js';
-import { ensureAuthSchema } from './auth.js';
+} from './db';
+import { ensureAuthSchema } from './auth';
 import crypto from 'node:crypto';
 
 const DEFAULT_USER_ID = 1;

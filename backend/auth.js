@@ -5,7 +5,9 @@
 //   保证未登录与历史无主数据仍可用，不破坏现有功能）
 import crypto from 'node:crypto';
 
-const TOKEN_SECRET = process.env.AUTH_SECRET || 'dev-insecure-secret-change-me';
+const TOKEN_SECRET = process.env.AUTH_SECRET
+  || process.env.JVM_AUTH_SECRET
+  || 'dev-insecure-secret-change-me';
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 天
 export const DEFAULT_USER_ID = 1;
 

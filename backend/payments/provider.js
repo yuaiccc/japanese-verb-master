@@ -69,22 +69,65 @@ export function hasEntitlement(db, key, userId = 1) {
   return !!db.prepare('SELECT key FROM entitlements WHERE user_id = ? AND key = ?').get(Number(userId) || 1, key);
 }
 
-function grantEntitlement(db, key, outTradeNo, userId = 1) {
-  db.prepare(`
-    INSERT INTO entitlements (user_id, key, out_trade_no, unlocked_at) VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(user_id, key) DO NOTHING
-  `).run(Number(userId) || 1, key, outTradeNo);
+function createSqlitePaymentStore(db) {
+  ensurePaymentSchema(db);
+  return {
+    async hasEntitlement(key, userId = 1) {
+      return hasEntitlement(db, key, userId);
+    },
+    async createPaymentOrder(order) {
+      db.prepare(`
+        INSERT INTO payment_orders (out_trade_no, user_id, sku, subject, amount, status, provider, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        order.outTradeNo,
+        Number(order.userId) || 1,
+        order.sku,
+        order.subject,
+        order.amount,
+        order.status,
+        order.provider,
+        order.createdAt
+      );
+    },
+    async getPaymentOrder(outTradeNo) {
+      return db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo) || null;
+    },
+    async settlePaymentOrder(outTradeNo, entitlement) {
+      const row = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
+      if (!row) return null;
+      const paidAt = new Date().toISOString();
+      const tx = db.transaction(() => {
+        db.prepare("UPDATE payment_orders SET status = 'TRADE_SUCCESS', paid_at = ? WHERE out_trade_no = ?")
+          .run(paidAt, outTradeNo);
+        if (entitlement) {
+          db.prepare(`
+            INSERT INTO entitlements (user_id, key, out_trade_no, unlocked_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, key) DO NOTHING
+          `).run(row.user_id, entitlement, outTradeNo, paidAt);
+        }
+      });
+      tx();
+      return { ...row, status: 'TRADE_SUCCESS', paid_at: paidAt };
+    }
+  };
 }
 
-function createMockProvider({ db }) {
+function createMockProvider({ store }) {
   return {
     name: 'mock',
     async createOrder(skuDef, userId = 1) {
       const outTradeNo = `JVM${Date.now()}${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-      db.prepare(`
-        INSERT INTO payment_orders (out_trade_no, user_id, sku, subject, amount, status, provider, created_at)
-        VALUES (?, ?, ?, ?, ?, 'WAIT_BUYER_PAY', 'mock', datetime('now'))
-      `).run(outTradeNo, Number(userId) || 1, skuDef.sku, skuDef.subject, skuDef.amount);
+      await store.createPaymentOrder({
+        outTradeNo,
+        userId,
+        sku: skuDef.sku,
+        subject: skuDef.subject,
+        amount: skuDef.amount,
+        status: 'WAIT_BUYER_PAY',
+        provider: 'mock',
+        createdAt: new Date().toISOString()
+      });
       return {
         outTradeNo,
         subject: skuDef.subject,
@@ -96,19 +139,17 @@ function createMockProvider({ db }) {
       };
     },
     async queryOrder(outTradeNo) {
-      const row = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
+      const row = await store.getPaymentOrder(outTradeNo);
       if (!row) return null;
       return { outTradeNo: row.out_trade_no, sku: row.sku, status: row.status, paidAt: row.paid_at };
     },
     // 仅 mock 有：模拟「用户在支付宝完成扫码+密码确认」这一步
     async simulateBuyerConfirm(outTradeNo) {
-      const row = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
+      const row = await store.getPaymentOrder(outTradeNo);
       if (!row) return { ok: false, error: 'order not found' };
       if (row.status !== 'TRADE_SUCCESS') {
-        db.prepare("UPDATE payment_orders SET status = 'TRADE_SUCCESS', paid_at = datetime('now') WHERE out_trade_no = ?")
-          .run(outTradeNo);
         const skuDef = SKUS[row.sku];
-        if (skuDef) grantEntitlement(db, skuDef.entitlement, outTradeNo, row.user_id);
+        await store.settlePaymentOrder(outTradeNo, skuDef?.entitlement || '');
       }
       return { ok: true, status: 'TRADE_SUCCESS' };
     }
@@ -123,7 +164,7 @@ function newOutTradeNo() {
 //   createOrder → alipay.trade.precreate 生成二维码码串（qr_code）
 //   queryOrder  → 用户扫码付款后，商户轮询 alipay.trade.query 同步 trade_status
 // alipay-sdk / qrcode 用动态 import：未配置支付宝时根本不加载，CI 与 mock 不受影响。
-async function createAlipayProvider({ db }) {
+async function createAlipayProvider({ store }) {
   let AlipaySdk;
   let QRCode;
   try {
@@ -156,24 +197,28 @@ async function createAlipayProvider({ db }) {
   const returnUrl = process.env.ALIPAY_RETURN_URL || '';
 
   // 到账后落库 + 授予权益（幂等）
-  const settleIfPaid = (outTradeNo, tradeStatus) => {
+  const settleIfPaid = async (outTradeNo, tradeStatus) => {
     if (tradeStatus !== 'TRADE_SUCCESS' && tradeStatus !== 'TRADE_FINISHED') return;
-    const row = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
+    const row = await store.getPaymentOrder(outTradeNo);
     if (!row || row.status === 'TRADE_SUCCESS') return;
-    db.prepare("UPDATE payment_orders SET status = 'TRADE_SUCCESS', paid_at = datetime('now') WHERE out_trade_no = ?")
-      .run(outTradeNo);
     const skuDef = SKUS[row.sku];
-    if (skuDef) grantEntitlement(db, skuDef.entitlement, outTradeNo, row.user_id);
+    await store.settlePaymentOrder(outTradeNo, skuDef?.entitlement || '');
   };
 
   return {
     name: 'alipay',
     async createOrder(skuDef, userId = 1) {
       const outTradeNo = newOutTradeNo();
-      db.prepare(`
-        INSERT INTO payment_orders (out_trade_no, user_id, sku, subject, amount, status, provider, created_at)
-        VALUES (?, ?, ?, ?, ?, 'WAIT_BUYER_PAY', 'alipay', datetime('now'))
-      `).run(outTradeNo, Number(userId) || 1, skuDef.sku, skuDef.subject, skuDef.amount);
+      await store.createPaymentOrder({
+        outTradeNo,
+        userId,
+        sku: skuDef.sku,
+        subject: skuDef.subject,
+        amount: skuDef.amount,
+        status: 'WAIT_BUYER_PAY',
+        provider: 'alipay',
+        createdAt: new Date().toISOString()
+      });
 
       // 电脑网站支付：pageExecute 本地签名生成收银台 URL（不发网络请求）。
       // 浏览器打开 → 用沙箱买家账号登录付款，无需 App。到账靠 queryOrder 轮询。
@@ -215,39 +260,39 @@ async function createAlipayProvider({ db }) {
       };
     },
     async queryOrder(outTradeNo) {
-      const row = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
+      const row = await store.getPaymentOrder(outTradeNo);
       if (!row) return null;
       if (row.status !== 'TRADE_SUCCESS') {
         try {
           const res = await sdk.curl('POST', '/v3/alipay/trade/query', { body: { out_trade_no: outTradeNo } });
           const tradeStatus = res?.data?.tradeStatus || res?.data?.trade_status;
-          if (tradeStatus) settleIfPaid(outTradeNo, tradeStatus);
+          if (tradeStatus) await settleIfPaid(outTradeNo, tradeStatus);
         } catch {
           // 交易尚未创建完成等情况下 query 会报错，保持 WAIT_BUYER_PAY 即可
         }
       }
-      const fresh = db.prepare('SELECT * FROM payment_orders WHERE out_trade_no = ?').get(outTradeNo);
+      const fresh = await store.getPaymentOrder(outTradeNo);
       return { outTradeNo: fresh.out_trade_no, sku: fresh.sku, status: fresh.status, paidAt: fresh.paid_at };
     }
     // 注意：alipay provider 没有 simulateBuyerConfirm —— 付款只能由用户在支付宝完成
   };
 }
 
-export async function createPaymentProvider({ db }) {
-  ensurePaymentSchema(db);
+export async function createPaymentProvider({ store, db }) {
+  const paymentStore = store || createSqlitePaymentStore(db);
   const useAlipay = !!(process.env.ALIPAY_APP_ID && process.env.ALIPAY_PRIVATE_KEY);
   if (useAlipay) {
     try {
-      const provider = await createAlipayProvider({ db });
+      const provider = await createAlipayProvider({ store: paymentStore });
       const env = process.env.ALIPAY_ENDPOINT?.includes('sandbox') ? '沙箱' : '生产';
       console.log(`[payments] Alipay provider 已启用（${env}，APP_ID=${process.env.ALIPAY_APP_ID}）`);
       return provider;
     } catch (err) {
       // 半配置 / 缺依赖 / 密钥错不应让服务起不来：回退 mock 并告警
       console.warn(`[payments] Alipay 初始化失败，回退 mock provider：${err.message}`);
-      return createMockProvider({ db });
+      return createMockProvider({ store: paymentStore });
     }
   }
   console.log('[payments] 未配置 ALIPAY_* ，使用 mock provider（零资金演示）');
-  return createMockProvider({ db });
+  return createMockProvider({ store: paymentStore });
 }

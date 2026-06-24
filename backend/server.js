@@ -15,19 +15,6 @@ import {
   searchWords,
   findWord,
   bulkInsert,
-  insertPracticeRecord,
-  listRecentPracticeRecords,
-  listMemoryCards,
-  getMemoryCardByWord,
-  upsertMemoryCard,
-  deleteMemoryCard,
-  reviewMemoryCard,
-  getReviewQueue,
-  getDailyQuota,
-  retrieveAgentMemory,
-  writeAgentMemory,
-  listAgentMemory,
-  deleteAgentMemory,
   AGENT_MEMORY_TYPES,
   findSimilarWords,
   getMemorySettings,
@@ -52,15 +39,19 @@ import { ingestKnowledge } from './knowledge/ingest.js';
 import { registerKnowledgeRoutes } from './knowledge/routes.js';
 import { getKnowledgeEmbeddingSettings, saveKnowledgeEmbeddingSettings } from './knowledge/settings.js';
 import { setTokenizer as setKnowledgeTokenizer } from './knowledge/tokenize.js';
-import { createPaymentProvider, hasEntitlement, SKUS } from './payments/provider.js';
+import { createPaymentProvider, SKUS } from './payments/provider.js';
 import {
-  ensureAuthSchema,
   hashPassword,
   verifyPassword,
   signToken,
   authOptional,
   DEFAULT_USER_ID
 } from './auth.js';
+import {
+  buildDailyQuota,
+  buildStoreReviewQueue,
+  createUserStore
+} from './userStore.js';
 import { getSceneById, getSceneCatalog, getSceneIdsForVerb, getVerbsForScene } from './sceneData.js';
 import {
   extractJapaneseTerms,
@@ -725,7 +716,11 @@ async function executeAgentToolImpl(name, args = {}) {
         });
   }
   if (name === 'memory_status') {
-    const cards = listMemoryCards(500);
+    const userId = userRequestStore.getStore()?.userId || DEFAULT_USER_ID;
+    const [cards, records] = await Promise.all([
+      userStore.listMemoryCards(500, userId),
+      userStore.listPracticeRecords(2000, userId)
+    ]);
     return {
       settings: getMemorySettings(),
       memory: {
@@ -734,11 +729,12 @@ async function executeAgentToolImpl(name, args = {}) {
         mastered: cards.filter(card => card.intervalDays >= 7).length
       },
       dueCards: cards.filter(card => new Date(card.dueAt).getTime() <= Date.now()).slice(0, 10),
-      profile: buildPracticeProfile(listRecentPracticeRecords(2000))
+      profile: buildPracticeProfile(records)
     };
   }
   if (name === 'add_memory_card') {
-    upsertMemoryCard({
+    const userId = userRequestStore.getStore()?.userId || DEFAULT_USER_ID;
+    await userStore.upsertMemoryCard({
       word: args.word,
       reading: args.reading || '',
       meaning: args.meaning || '',
@@ -746,8 +742,8 @@ async function executeAgentToolImpl(name, args = {}) {
       verbType: args.verbType || '',
       sample: args.sample || '',
       source: 'agent-tool'
-    });
-    return { ok: true, cards: listMemoryCards(500).slice(0, 5) };
+    }, userId);
+    return { ok: true, cards: (await userStore.listMemoryCards(500, userId)).slice(0, 5) };
   }
   return { error: `Unknown tool: ${name}` };
 }
@@ -2300,6 +2296,7 @@ function lookupWordJisho(keyword) {
 
 // 初始化 Ollama
 const app = express();
+const userStore = await createUserStore();
 const PORT = process.env.PORT || 3456;
 // 容器环境（Render/Docker/Fly 等）必须监听 0.0.0.0 才能从外部访问；
 // 本地默认绑回环更安全。Render 自动注入 RENDER=true 让我们识别。
@@ -2333,13 +2330,16 @@ app.use((req, _res, next) => {
   llmRequestStore.run(override, () => next());
 });
 
-// 用户认证：建 users 表 + 默认用户；authOptional 给每个请求挂 req.userId
+// 用户认证：userStore 初始化 users 表 + 默认用户；authOptional 给每个请求挂 req.userId
 // （未登录或历史数据 fallback 到默认用户 1，保证向后兼容、不破坏现有功能）
-ensureAuthSchema(db);
 app.use(authOptional);
+const userRequestStore = new AsyncLocalStorage();
+app.use((req, _res, next) => {
+  userRequestStore.run({ userId: req.userId }, () => next());
+});
 
 // 注册：用户名 + 密码，scrypt 哈希
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
   if (username.length < 2 || username.length > 32) {
@@ -2351,32 +2351,47 @@ app.post('/api/auth/register', (req, res) => {
   if (username === '__default__') {
     return res.status(400).json({ error: '该用户名不可用' });
   }
-  const exists = db.prepare('SELECT 1 FROM users WHERE username = ?').get(username);
-  if (exists) {
-    return res.status(409).json({ error: '用户名已被占用' });
+  try {
+    const exists = await userStore.findUserByUsername(username);
+    if (exists) {
+      return res.status(409).json({ error: '用户名已被占用' });
+    }
+    const user = await userStore.createUser(username, hashPassword(password));
+    res.status(201).json({ token: signToken(user.id), user });
+  } catch (error) {
+    if (error?.code === '23505' || String(error?.message || '').includes('UNIQUE')) {
+      return res.status(409).json({ error: '用户名已被占用' });
+    }
+    console.error('[auth] register failed:', error);
+    res.status(500).json({ error: '注册失败，请稍后重试' });
   }
-  const info = db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
-    .run(username, hashPassword(password));
-  const userId = info.lastInsertRowid;
-  res.status(201).json({ token: signToken(userId), user: { id: userId, username } });
 });
 
 // 登录
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
-  const row = db.prepare('SELECT id, username, password_hash FROM users WHERE username = ?').get(username);
-  if (!row || !verifyPassword(password, row.password_hash)) {
-    return res.status(401).json({ error: '用户名或密码错误' });
+  try {
+    const row = await userStore.findUserByUsername(username);
+    if (!row || !verifyPassword(password, row.password_hash)) {
+      return res.status(401).json({ error: '用户名或密码错误' });
+    }
+    res.json({ token: signToken(row.id), user: { id: row.id, username: row.username } });
+  } catch (error) {
+    console.error('[auth] login failed:', error);
+    res.status(500).json({ error: '登录失败，请稍后重试' });
   }
-  res.json({ token: signToken(row.id), user: { id: row.id, username: row.username } });
 });
 
 // 当前用户：未登录返回 null（前端据此显示登录入口）
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
   if (!req.isAuthed) return res.json({ user: null });
-  const row = db.prepare('SELECT id, username FROM users WHERE id = ?').get(req.userId);
-  res.json({ user: row || null });
+  try {
+    const row = await userStore.findUserById(req.userId);
+    res.json({ user: row || null });
+  } catch (error) {
+    res.status(500).json({ error: '读取用户失败' });
+  }
 });
 
 // 初始化本地语法知识库（RAG）
@@ -2404,20 +2419,24 @@ app.get('/api/knowledge/metrics', (req, res) => {
 });
 
 // === 支付（A2A demo：应用发起订单，资金确认权在用户）===
-const paymentProvider = await createPaymentProvider({ db });
+const paymentProvider = await createPaymentProvider({ store: userStore });
 
-app.get('/api/entitlements', (req, res) => {
-  const entitlements = {};
-  for (const def of Object.values(SKUS)) {
-    entitlements[def.entitlement] = hasEntitlement(db, def.entitlement, req.userId);
+app.get('/api/entitlements', async (req, res) => {
+  try {
+    const entitlements = {};
+    for (const def of Object.values(SKUS)) {
+      entitlements[def.entitlement] = await userStore.hasEntitlement(def.entitlement, req.userId);
+    }
+    res.json({ provider: paymentProvider.name, entitlements });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load entitlements' });
   }
-  res.json({ provider: paymentProvider.name, entitlements });
 });
 
 app.post('/api/payments/orders', async (req, res) => {
   const skuDef = SKUS[req.body?.sku];
   if (!skuDef) return res.status(400).json({ error: 'Unknown sku' });
-  if (hasEntitlement(db, skuDef.entitlement, req.userId)) {
+  if (await userStore.hasEntitlement(skuDef.entitlement, req.userId)) {
     return res.status(409).json({ error: 'Already unlocked' });
   }
   try {
@@ -3316,20 +3335,20 @@ app.get('/api/scenes', (req, res) => {
 });
 
 // 练习画像 API
-app.get('/api/practice-profile', (req, res) => {
+app.get('/api/practice-profile', async (req, res) => {
   try {
-    const records = listRecentPracticeRecords(2000);
+    const records = await userStore.listPracticeRecords(2000, req.userId);
     res.json(buildPracticeProfile(records));
   } catch (error) {
     res.status(500).json({ error: 'Failed to build practice profile.' });
   }
 });
 
-app.get('/api/user-profile', (req, res) => {
+app.get('/api/user-profile', async (req, res) => {
   try {
-    const records = listRecentPracticeRecords(2000, req.userId);
+    const records = await userStore.listPracticeRecords(2000, req.userId);
     const practiceProfile = buildPracticeProfile(records);
-    const memoryCards = listMemoryCards(500, req.userId);
+    const memoryCards = await userStore.listMemoryCards(500, req.userId);
     res.json(buildUserProfile({ memoryCards, practiceProfile }));
   } catch (error) {
     res.status(500).json({ error: 'Failed to build user profile.' });
@@ -3337,7 +3356,7 @@ app.get('/api/user-profile', (req, res) => {
 });
 
 // 练习记录写入 API
-app.post('/api/practice-records', (req, res) => {
+app.post('/api/practice-records', async (req, res) => {
   try {
     const {
       verb,
@@ -3355,7 +3374,7 @@ app.post('/api/practice-records', (req, res) => {
       return res.status(400).json({ error: 'Missing required practice record fields.' });
     }
 
-    insertPracticeRecord({
+    await userStore.insertPracticeRecord({
       verb,
       formKey,
       sceneId,
@@ -3367,7 +3386,7 @@ app.post('/api/practice-records', (req, res) => {
       answeredAt
     }, req.userId);
 
-    const records = listRecentPracticeRecords(2000, req.userId);
+    const records = await userStore.listPracticeRecords(2000, req.userId);
     res.status(201).json(buildPracticeProfile(records));
   } catch (error) {
     res.status(500).json({ error: 'Failed to save practice record.' });
@@ -3376,11 +3395,11 @@ app.post('/api/practice-records', (req, res) => {
 
 // 把一次交互练习的结果反馈到长期记忆（间隔复习）系统。
 // 这是核心闭环：Agent 出的题 -> 用户作答 -> 结果驱动 SRS 调度，错题缩短间隔、对题拉长间隔。
-function recordAgentPracticeToMemory({ question, userAnswer, isCorrect, hintUsed }, userId = DEFAULT_USER_ID) {
+async function recordAgentPracticeToMemory({ question, userAnswer, isCorrect, hintUsed }, userId = DEFAULT_USER_ID) {
   // 答对且没用提示 = good；答对但用了提示 = hard；答错 = forgot。
   const grade = !isCorrect ? 'forgot' : hintUsed ? 'hard' : 'good';
 
-  insertPracticeRecord({
+  await userStore.insertPracticeRecord({
     verb: question.verb,
     formKey: question.formKey,
     sceneId: question.sceneId || 'agent-practice',
@@ -3392,11 +3411,11 @@ function recordAgentPracticeToMemory({ question, userAnswer, isCorrect, hintUsed
     answeredAt: new Date().toISOString()
   }, userId);
 
-  let card = getMemoryCardByWord(question.verb, userId);
+  let card = await userStore.getMemoryCardByWord(question.verb, userId);
   let created = false;
   if (!card) {
     // 练过的词若尚未进入记忆库，自动建卡，让它纳入复习队列。
-    upsertMemoryCard({
+    await userStore.upsertMemoryCard({
       word: question.verb,
       reading: question.reading || '',
       meaning: question.meaning || '',
@@ -3405,21 +3424,21 @@ function recordAgentPracticeToMemory({ question, userAnswer, isCorrect, hintUsed
       sample: '',
       source: 'agent-practice'
     }, userId);
-    card = getMemoryCardByWord(question.verb, userId);
+    card = await userStore.getMemoryCardByWord(question.verb, userId);
     created = true;
   }
 
   let updatedCard = null;
   if (card) {
-    updatedCard = reviewMemoryCard(card.id, grade, getMemorySettings(), userId);
+    updatedCard = await userStore.reviewMemoryCard(card.id, grade, getMemorySettings(), userId);
   }
 
   return {
     grade,
     created,
     card: updatedCard || card,
-    cards: listMemoryCards(500, userId),
-    profile: buildPracticeProfile(listRecentPracticeRecords(2000, userId))
+    cards: await userStore.listMemoryCards(500, userId),
+    profile: buildPracticeProfile(await userStore.listPracticeRecords(2000, userId))
   };
 }
 
@@ -3457,7 +3476,7 @@ app.post('/api/dojo-agent-turn', async (req, res) => {
     let memory = null;
     if (recordToMemory) {
       try {
-        memory = recordAgentPracticeToMemory({ question, userAnswer, isCorrect, hintUsed }, req.userId);
+        memory = await recordAgentPracticeToMemory({ question, userAnswer, isCorrect, hintUsed }, req.userId);
       } catch (memoryError) {
         console.error('Failed to record agent practice to memory:', memoryError);
       }
@@ -3477,62 +3496,64 @@ app.post('/api/dojo-agent-turn', async (req, res) => {
 });
 
 // 记忆卡片 API：间隔复习队列
-app.get('/api/memory-cards', (req, res) => {
+app.get('/api/memory-cards', async (req, res) => {
   try {
-    res.json(listMemoryCards(500, req.userId));
+    res.json(await userStore.listMemoryCards(500, req.userId));
   } catch (error) {
     res.status(500).json({ error: 'Failed to load memory cards.' });
   }
 });
 
-app.post('/api/memory-cards', (req, res) => {
+app.post('/api/memory-cards', async (req, res) => {
   try {
     const card = req.body || {};
     if (!card.word) {
       return res.status(400).json({ error: 'Missing required field: word.' });
     }
-    upsertMemoryCard(card, req.userId);
-    res.status(201).json(listMemoryCards(500, req.userId));
+    await userStore.upsertMemoryCard(card, req.userId);
+    res.status(201).json(await userStore.listMemoryCards(500, req.userId));
   } catch (error) {
     res.status(500).json({ error: 'Failed to save memory card.' });
   }
 });
 
-app.delete('/api/memory-cards/:id', (req, res) => {
+app.delete('/api/memory-cards/:id', async (req, res) => {
   try {
-    const removed = deleteMemoryCard(req.params.id, req.userId);
-    if (!removed.changes) {
+    const removed = await userStore.deleteMemoryCard(req.params.id, req.userId);
+    if (!removed) {
       return res.status(404).json({ error: 'Memory card not found.' });
     }
-    res.json(listMemoryCards(500, req.userId));
+    res.json(await userStore.listMemoryCards(500, req.userId));
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete memory card.' });
   }
 });
 
 // 限流后的当日复习队列 + 配额（newCardsPerDay / reviewLimitPerDay 在此生效）
-app.get('/api/memory-review-queue', (req, res) => {
+app.get('/api/memory-review-queue', async (req, res) => {
   try {
-    res.json(getReviewQueue(req.userId, getMemorySettings()));
+    res.json(await buildStoreReviewQueue(userStore, req.userId, getMemorySettings()));
   } catch (error) {
     res.status(500).json({ error: 'Failed to build review queue.' });
   }
 });
 
-app.post('/api/memory-cards/:id/review', (req, res) => {
+app.post('/api/memory-cards/:id/review', async (req, res) => {
   try {
     const { grade } = req.body || {};
     if (!['forgot', 'hard', 'good'].includes(grade)) {
       return res.status(400).json({ error: 'Invalid review grade.' });
     }
-    const updated = reviewMemoryCard(req.params.id, grade, getMemorySettings(), req.userId);
+    const settings = getMemorySettings();
+    const updated = await userStore.reviewMemoryCard(req.params.id, grade, settings, req.userId);
     if (!updated) {
       return res.status(404).json({ error: 'Memory card not found.' });
     }
+    const stats = await userStore.getDailyReviewStats(req.userId);
     res.json({
       updated,
-      cards: listMemoryCards(500, req.userId),
-      quota: getDailyQuota(req.userId, getMemorySettings())
+      cards: await userStore.listMemoryCards(500, req.userId),
+      quota: buildDailyQuota(stats, settings)
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to review memory card.' });
@@ -3552,21 +3573,21 @@ app.post('/api/memory-settings', (req, res) => {
 });
 
 // Agent Memory 管理：用户可查看/删除 Agent 记住的长期信息（透明可控）
-app.get('/api/agent-memory', (req, res) => {
+app.get('/api/agent-memory', async (req, res) => {
   try {
-    res.json(listAgentMemory(req.userId));
+    res.json(await userStore.listAgentMemory(req.userId));
   } catch (error) {
     res.status(500).json({ error: 'Failed to load agent memory.' });
   }
 });
 
-app.delete('/api/agent-memory/:id', (req, res) => {
+app.delete('/api/agent-memory/:id', async (req, res) => {
   try {
-    const removed = deleteAgentMemory(req.params.id, req.userId);
-    if (!removed.changes) {
+    const removed = await userStore.deleteAgentMemory(req.params.id, req.userId);
+    if (!removed) {
       return res.status(404).json({ error: 'Agent memory not found.' });
     }
-    res.json(listAgentMemory(req.userId));
+    res.json(await userStore.listAgentMemory(req.userId));
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete agent memory.' });
   }
@@ -3600,8 +3621,11 @@ app.post('/api/similar-words', (req, res) => {
 app.post('/api/agent/learning-plan', async (req, res) => {
   try {
     const lookup = extractLookupForAgent(req.body?.lookup || req.body || {});
-    const memoryCards = listMemoryCards(500);
-    const profile = buildPracticeProfile(listRecentPracticeRecords(2000));
+    const [memoryCards, practiceRecords] = await Promise.all([
+      userStore.listMemoryCards(500, req.userId),
+      userStore.listPracticeRecords(2000, req.userId)
+    ]);
+    const profile = buildPracticeProfile(practiceRecords);
     const similarWords = lookup.word
       ? (lookup.wordType === 'verb'
           ? buildVerbSimilarWords(lookup, 8)
@@ -3838,7 +3862,7 @@ app.post('/api/agent/stream', async (req, res) => {
     });
 
     // Agent Memory 注入（读路径）：检索 top-k 长期记忆，喂给编排器做个性化
-    const agentMemory = retrieveAgentMemory(req.userId, { limit: 8 })
+    const agentMemory = (await userStore.retrieveAgentMemory(req.userId, { limit: 8 }))
       .map(m => ({ type: m.type, value: m.value }));
 
     const userContent = JSON.stringify({
@@ -3997,7 +4021,8 @@ app.post('/api/agent/stream', async (req, res) => {
     const memUserId = req.userId;
     extractAgentMemoryCandidates({ message, finalAnswer: finalState.finalAnswer || '' })
       .then(candidates => {
-        if (candidates.length > 0) writeAgentMemory(candidates, memUserId, runId);
+        if (candidates.length > 0) return userStore.writeAgentMemory(candidates, memUserId, runId);
+        return 0;
       })
       .catch(err => console.error('Agent Memory 抽取失败', err?.message || err));
 
@@ -4402,7 +4427,7 @@ app.get('/api/verb-types', (req, res) => {
 });
 
 // Dojo (动词变形道场) 题库 API
-app.get('/api/dojo-quiz', (req, res) => {
+app.get('/api/dojo-quiz', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     const sceneId = typeof req.query.scene === 'string' ? req.query.scene.trim() : '';
@@ -4415,7 +4440,7 @@ app.get('/api/dojo-quiz', (req, res) => {
     if (sceneId && !isN1Pack && !selectedScene) {
       return res.status(400).json({ error: 'Invalid scene id.' });
     }
-    if (isN1Pack && !hasEntitlement(db, 'n1-pack', req.userId)) {
+    if (isN1Pack && !(await userStore.hasEntitlement('n1-pack', req.userId))) {
       // 与支付宝「AI 收」同款语义：资源对未付费访问回 402
       return res.status(402).json({ error: 'Payment required', sku: 'n1-pack' });
     }

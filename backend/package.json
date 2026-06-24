@@ -29,6 +29,7 @@
     "kuromoji": "^0.1.2",
     "langsmith": "^0.7.3",
     "ollama": "^0.6.3",
+    "pg": "^8.16.3",
     "qrcode": "^1.5.4",
     "sqlite-vec": "^0.1.9",
     "wanakana": "^5.3.1"

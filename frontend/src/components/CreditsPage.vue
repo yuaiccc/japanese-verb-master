@@ -46,7 +46,7 @@
   </section>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import Icon from './Icon.vue';
 
 // 开源致谢列表。icon 用 simpleicons.org CDN（自动品牌色 SVG）；
@@ -84,9 +84,9 @@ const creditsGroups = [
   }
 ];
 
-const brandIconUrl = (slug) => `https://cdn.simpleicons.org/${slug}`;
+const brandIconUrl = (slug: string) => `https://cdn.simpleicons.org/${slug}`;
 
-const repoTitle = (item) => {
+const repoTitle = (item: any) => {
   if (item.repo) return item.repo;
   try {
     const url = new URL(item.url);

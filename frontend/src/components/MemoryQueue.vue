@@ -182,9 +182,9 @@
     </section>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import Icon from './Icon.vue';
-import { useMemoryCards } from '../composables/useMemoryCards.js';
+import { useMemoryCards } from '../composables/useMemoryCards';
 const {
   memoryCards, reviewQueue, reviewQuota, memoryRevealed,
   memoryLibraryQuery, memoryLibraryFilter, agentMemoryList,

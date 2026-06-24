@@ -53,7 +53,7 @@
       </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import Icon from './Icon.vue';
 import TurnstileWidget from './TurnstileWidget.vue';
 

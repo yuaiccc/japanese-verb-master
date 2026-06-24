@@ -189,7 +189,7 @@
             :aria-checked="agentPracticeInput === option"
             @click="selectPracticeOption(option)"
           >
-            <span class="agent-practice-option__index">{{ optionLabels[idx] }}</span>
+            <span class="agent-practice-option__index">{{ optionLabels[Number(idx)] }}</span>
             <span class="agent-practice-option__text">{{ option }}</span>
             <Icon
               v-if="agentPracticeFeedback && option === agentPracticeFeedback.correctAnswer"
@@ -291,7 +291,7 @@
             @keydown.enter.prevent="toggleCitation(src.id)"
           >
             <div class="knowledge-citation-card__top">
-              <span class="knowledge-citation-card__index">{{ idx + 1 }}</span>
+              <span class="knowledge-citation-card__index">{{ Number(idx) + 1 }}</span>
               <strong class="knowledge-citation-card__title">{{ src.title }}</strong>
               <span class="knowledge-citation-card__caret" aria-hidden="true">▾</span>
             </div>
@@ -362,24 +362,34 @@
   </section>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import Icon from './Icon.vue';
 import AgentRuntime from './AgentRuntime.vue';
 import ToolTrace from './ToolTrace.vue';
-import { useAgentStream } from '../composables/useAgentStream.js';
-import { useSpeech } from '../composables/useSpeech.js';
+import { useAgentStream } from '../composables/useAgentStream';
+import { useSpeech } from '../composables/useSpeech';
 
-const props = defineProps({
-  loading: { type: Boolean, default: false },
-  error: { type: String, default: '' },
-  form: { type: Object, required: true },
-  suggestions: { type: Array, default: () => [] },
-  showDropdown: { type: Boolean, default: false },
-  showHistory: { type: Boolean, default: false },
-  history: { type: Array, default: () => [] },
-  isComposing: { type: Boolean, default: false },
-  verbTypeMap: { type: Object, default: () => ({}) },
-  wordTypeDisplayMap: { type: Object, default: () => ({}) },
+const props = withDefaults(defineProps<{
+  loading?: boolean;
+  error?: string;
+  form: Record<string, any>;
+  suggestions?: any[];
+  showDropdown?: boolean;
+  showHistory?: boolean;
+  history?: any[];
+  isComposing?: boolean;
+  verbTypeMap?: Record<string, any>;
+  wordTypeDisplayMap?: Record<string, any>;
+}>(), {
+  loading: false,
+  error: '',
+  suggestions: () => [],
+  showDropdown: false,
+  showHistory: false,
+  history: () => [],
+  isComposing: false,
+  verbTypeMap: () => ({}),
+  wordTypeDisplayMap: () => ({}),
 });
 
 const emit = defineEmits([

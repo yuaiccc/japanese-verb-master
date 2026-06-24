@@ -40,24 +40,28 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed } from 'vue';
 
-const props = defineProps({
-  runtimeNote: { type: String, default: '' },
-  subagentTasks: { type: Array, default: () => [] },
-  usageSummary: { type: Object, default: null }
+const props = withDefaults(defineProps<{
+  runtimeNote?: string;
+  subagentTasks?: any[];
+  usageSummary?: any;
+}>(), {
+  runtimeNote: '',
+  subagentTasks: () => [],
+  usageSummary: null,
 });
 
 const emit = defineEmits(['toggle-subagent']);
 
-const activeSubagentTaskId = ref('');
+const activeSubagentTaskId = ref<string>('');
 const activeSubagentTaskDetails = computed(
-  () => props.subagentTasks.find(task => task.taskId === activeSubagentTaskId.value) || null
+  () => props.subagentTasks.find((task: any) => task.taskId === activeSubagentTaskId.value) || null
 );
 
-const formatSubagentTaskStatus = (status = '') => {
-  const map = {
+const formatSubagentTaskStatus = (status: string = '') => {
+  const map: Record<string, string> = {
     pending: '排队中',
     running: '运行中',
     completed: '已完成',
@@ -68,7 +72,7 @@ const formatSubagentTaskStatus = (status = '') => {
   return map[status] || status || '运行中';
 };
 
-const toggleSubagentTask = (taskId) => {
+const toggleSubagentTask = (taskId: string) => {
   activeSubagentTaskId.value = activeSubagentTaskId.value === taskId ? '' : taskId;
   emit('toggle-subagent', taskId);
 };

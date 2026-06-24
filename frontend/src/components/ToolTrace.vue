@@ -60,14 +60,18 @@
   </div>
 </template>
 
-<script setup>
-const props = defineProps({
-  toolCalls: { type: Array, default: () => [] },
-  trace: { type: Array, default: () => [] },
-  isRunning: { type: Boolean, default: false }
+<script setup lang="ts">
+const props = withDefaults(defineProps<{
+  toolCalls?: any[];
+  trace?: any[];
+  isRunning?: boolean;
+}>(), {
+  toolCalls: () => [],
+  trace: () => [],
+  isRunning: false,
 });
 
-const formatToolArgs = (args = {}) => {
+const formatToolArgs = (args: any = {}) => {
   const parsedArgs = typeof args === 'string'
     ? (() => {
         try {
@@ -83,7 +87,7 @@ const formatToolArgs = (args = {}) => {
   return text.length > 80 ? `${text.slice(0, 80)}...` : text || '无参数';
 };
 
-const parseToolPayload = (payload) => {
+const parseToolPayload = (payload: any) => {
   if (!payload) return null;
   if (typeof payload !== 'string') return payload;
   try {
@@ -93,12 +97,12 @@ const parseToolPayload = (payload) => {
   }
 };
 
-const compactText = (text, limit = 120) => {
+const compactText = (text: any, limit: number = 120) => {
   const value = String(text || '').replace(/\s+/g, ' ').trim();
   return value.length > limit ? `${value.slice(0, limit)}...` : value;
 };
 
-const formatToolResult = (call = {}) => {
+const formatToolResult = (call: any = {}) => {
   const data = parseToolPayload(call.result);
   if (!data) return '';
 
@@ -125,14 +129,14 @@ const formatToolResult = (call = {}) => {
     const webCount = data.webResults?.length || 0;
     const dictCount = data.dictionaryResults?.length || 0;
     const sources = [
-      ...new Set((data.webResults || []).map(item => item.source).filter(Boolean))
+      ...new Set((data.webResults || []).map((item: any) => item.source).filter(Boolean))
     ].slice(0, 3).join(' / ');
     return `找到 ${webCount} 条网页资料、${dictCount} 条词典资料${sources ? ` · ${sources}` : ''}`;
   }
 
   if (call.name === 'recommend_similar') {
     const words = Array.isArray(data)
-      ? data.map(item => item.kanji || item.word).filter(Boolean).slice(0, 5)
+      ? data.map((item: any) => item.kanji || item.word).filter(Boolean).slice(0, 5)
       : [];
     return words.length ? `推荐：${words.join('、')}` : '没有找到足够相似词';
   }
@@ -150,14 +154,17 @@ const formatToolResult = (call = {}) => {
   return compactText(JSON.stringify(data));
 };
 
-const toolNameLabel = (name) => ({
+const toolNameLabel = (name: string): string => {
+  const map: Record<string, string> = {
   knowledge_search: '知识库检索',
   external_search: '外部搜索',
   lookup_word: '词典查询',
   recommend_similar: '相似词推荐',
   memory_status: '记忆状态',
   add_memory_card: '加入记忆卡'
-}[name] || name);
+  };
+  return map[name] || name;
+};
 </script>
 
 <style scoped>

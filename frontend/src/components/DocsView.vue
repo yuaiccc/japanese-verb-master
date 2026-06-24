@@ -94,7 +94,7 @@
     </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import Icon from './Icon.vue';
 // 纯静态文档：动词分类指南 + 活用形式说明（无响应式状态）
 </script>

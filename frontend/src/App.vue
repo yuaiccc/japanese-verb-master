@@ -259,7 +259,7 @@
 
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, watch, onMounted, computed, onUnmounted, nextTick } from 'vue';
 import axios from 'axios';
 import { marked } from 'marked';
@@ -275,8 +275,8 @@ import { useDojo } from './composables/useDojo';
 import AgentPanel from './components/AgentPanel.vue';
 import MemoryQueue from './components/MemoryQueue.vue';
 import DictPanel from './components/DictPanel.vue';
-import { useAgentStream } from './composables/useAgentStream.js';
-import { useMemoryCards } from './composables/useMemoryCards.js';
+import { useAgentStream } from './composables/useAgentStream';
+import { useMemoryCards } from './composables/useMemoryCards';
 
 // 认证：token 存 localStorage，拦截器给每个请求自动带上 Authorization
 const AUTH_TOKEN_KEY = 'jvm_auth_token';
@@ -291,7 +291,7 @@ const readLocalLlmSettings = () => {
   try { return JSON.parse(localStorage.getItem(LLM_SETTINGS_KEY) || '{}'); }
   catch { return {}; }
 };
-const writeLocalLlmSettings = (s) => {
+const writeLocalLlmSettings = (s: any) => {
   localStorage.setItem(LLM_SETTINGS_KEY, JSON.stringify({
     provider: s.provider || '', baseUrl: s.baseUrl || '', model: s.model || '', apiKey: s.apiKey || ''
   }));
@@ -309,7 +309,7 @@ const buildLlmHeaders = () => {
 
 // 拼接绝对 API 地址：生产构建 VITE_API_BASE=https://xxx，开发不设时退到相对路径走 Vite proxy。
 // 单平台部署（Express 同时托管前端）也走相对路径，不用设 VITE_API_BASE。
-const apiUrl = (path) => `${import.meta.env.VITE_API_BASE || ''}${path}`;
+const apiUrl = (path: string) => `${import.meta.env.VITE_API_BASE || ''}${path}`;
 
 axios.interceptors.request.use((config) => {
   config.headers = config.headers || {};
@@ -325,13 +325,13 @@ axios.interceptors.request.use((config) => {
 });
 
 // 全局模式
-const currentMode = ref('dict'); // 'dict' | 'credits'
-const authUser = ref(null); // 当前登录用户 { id, username }，null 表示未登录
-const authModal = ref({ open: false, mode: 'login', username: '', password: '', error: '', loading: false });
-const turnstileSiteKey = ref('');
-const turnstileToken = ref('');
-const workbenchSection = ref('dict'); // 'dict' | 'memory' | 'docs' | 'dojo'
-const isComposing = ref(false); // 跟踪输入法状态，防止回车键误触
+const currentMode = ref<string>('dict'); // 'dict' | 'credits'
+const authUser = ref<any>(null); // 当前登录用户 { id, username }，null 表示未登录
+const authModal = ref<any>({ open: false, mode: 'login', username: '', password: '', error: '', loading: false });
+const turnstileSiteKey = ref<string>('');
+const turnstileToken = ref<string>('');
+const workbenchSection = ref<string>('dict'); // 'dict' | 'memory' | 'docs' | 'dojo'
+const isComposing = ref<boolean>(false); // 跟踪输入法状态，防止回车键误触
 
 // 显示偏好（深色 / 无障碍）：逻辑见 composables/useDisplayPreferences
 const { darkMode, accessibilityMode, initDisplayPreferences } = useDisplayPreferences();
@@ -375,14 +375,14 @@ const loadTurnstileConfig = async () => {
   }
 };
 
-const setAuthMode = (mode) => {
+const setAuthMode = (mode: string) => {
   authModal.value.mode = mode;
   authModal.value.error = '';
   turnstileToken.value = '';
   if (mode === 'register') loadTurnstileConfig();
 };
 
-const openAuthModal = (mode = 'login') => {
+const openAuthModal = (mode: string = 'login') => {
   authModal.value = { open: true, mode, username: '', password: '', error: '', loading: false };
   turnstileToken.value = '';
   if (mode === 'register') loadTurnstileConfig();
@@ -412,7 +412,7 @@ const submitAuth = async () => {
     authModal.value.open = false;
     // 切换用户后刷新与用户绑定的数据
     await Promise.allSettled([loadMemoryCards?.(), loadUserProfile?.(), loadEntitlements?.()]);
-  } catch (e) {
+  } catch (e: any) {
     m.error = e.response?.data?.error || '操作失败，请重试';
   } finally {
     m.loading = false;
@@ -427,44 +427,44 @@ const logout = async () => {
 };
 
 // 词典模式状态
-const form = ref({
+const form = ref<any>({
   verb: ''
 });
 
-const result = ref(null);
-const aiRawExplanation = ref('');
-const verificationStatus = ref({});
-const aiExamples = ref([]);
-const loading = ref(false);
-const loadingAi = ref(false);
-const aiProgress = ref(0);
-let aiProgressInterval = null;
-let hotPlaceholderRefreshInterval = null;
-const error = ref('');
-const aiError = ref('');
-const showDropdown = ref(false);
-const suggestions = ref([]);
-const availableModels = ref([]);
-const selectedModel = ref('');
-const llmStatus = ref({ provider: 'ollama', model: '', apiKeySet: false });
-const llmSettings = ref({
+const result = ref<any>(null);
+const aiRawExplanation = ref<string>('');
+const verificationStatus = ref<any>({});
+const aiExamples = ref<any[]>([]);
+const loading = ref<boolean>(false);
+const loadingAi = ref<boolean>(false);
+const aiProgress = ref<number>(0);
+let aiProgressInterval: any = null;
+let hotPlaceholderRefreshInterval: any = null;
+const error = ref<string>('');
+const aiError = ref<string>('');
+const showDropdown = ref<boolean>(false);
+const suggestions = ref<any[]>([]);
+const availableModels = ref<any[]>([]);
+const selectedModel = ref<string>('');
+const llmStatus = ref<any>({ provider: 'ollama', model: '', apiKeySet: false });
+const llmSettings = ref<any>({
   provider: 'deepseek',
   model: 'deepseek-v4-flash',
   baseUrl: 'https://api.deepseek.com',
   apiKey: '',
   apiKeySet: false
 });
-const llmSaveStatus = ref('idle'); // idle | saving | saved | error
-const llmSaveMessage = ref('');
-let llmSaveMessageTimer = null;
-let suggestTimeout = null;
+const llmSaveStatus = ref<string>('idle'); // idle | saving | saved | error
+const llmSaveMessage = ref<string>('');
+let llmSaveMessageTimer: any = null;
+let suggestTimeout: any = null;
 
 // 查询历史
 const MAX_HISTORY = 20;
-const history = ref([]);
+const history = ref<any[]>([]);
 
-const showLlmSettings = ref(false);
-const llmProviderPresets = {
+const showLlmSettings = ref<boolean>(false);
+const llmProviderPresets: Record<string, any> = {
   deepseek: { baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-3.5-sonnet' },
@@ -481,8 +481,8 @@ const llmStatusLabel = computed(() => {
 
 // === Composable 初始化（模块级单例） ===
 // useAgentStream 和 useMemoryCards 互相依赖，使用延迟注入模式。
-const memDeps = {};
-const agentDeps = {};
+const memDeps: Record<string, any> = {};
+const agentDeps: Record<string, any> = {};
 
 const mem = useMemoryCards(memDeps);
 const agent = useAgentStream({
@@ -509,8 +509,8 @@ Object.assign(memDeps, {
   aiExamples,
   agentMemoryCandidates: agent.agentMemoryCandidates,
   loadUserProfile,
-  refreshAgentPlan: (lookup) => refreshAgentPlan(lookup),
-  searchAndConjugate: (verb) => { form.value.verb = verb; conjugate(); },
+  refreshAgentPlan: (lookup: any) => refreshAgentPlan(lookup),
+  searchAndConjugate: (verb: any) => { form.value.verb = verb; conjugate(); },
 });
 
 // 解构 composable 返回值到顶层变量（ref 解构后仍保持响应性）
@@ -582,15 +582,15 @@ const loadLlmSettings = async () => {
   llmStatus.value = { provider: local.provider || llmSettings.value.provider, model: local.model || llmSettings.value.model, apiKeySet: !!local.apiKey };
 };
 
-const embeddingSettings = ref({ provider: 'ollama', model: 'bge-m3', baseUrl: 'http://localhost:11434', apiKey: '', apiKeySet: false });
-const embeddingSaveStatus = ref('idle');
-const embeddingSaveMessage = ref('');
-let embeddingSaveMessageTimer = null;
+const embeddingSettings = ref<any>({ provider: 'ollama', model: 'bge-m3', baseUrl: 'http://localhost:11434', apiKey: '', apiKeySet: false });
+const embeddingSaveStatus = ref<string>('idle');
+const embeddingSaveMessage = ref<string>('');
+let embeddingSaveMessageTimer: any = null;
 
-const setTransientSaveMessage = (statusRef, messageRef, timerSetter, status, message, timeout = 2600) => {
+const setTransientSaveMessage = (statusRef: any, messageRef: any, timerSetter: any, status: string, message: string, timeout: number = 2600) => {
   statusRef.value = status;
   messageRef.value = message;
-  timerSetter((existingTimer) => {
+  timerSetter((existingTimer: any) => {
     if (existingTimer) window.clearTimeout(existingTimer);
     return window.setTimeout(() => {
       statusRef.value = 'idle';
@@ -600,22 +600,22 @@ const setTransientSaveMessage = (statusRef, messageRef, timerSetter, status, mes
   });
 };
 
-const setLlmSaveMessage = (status, message, timeout) => {
+const setLlmSaveMessage = (status: string, message: string, timeout?: number) => {
   setTransientSaveMessage(
     llmSaveStatus,
     llmSaveMessage,
-    (updater) => { llmSaveMessageTimer = updater(llmSaveMessageTimer); },
+    (updater: any) => { llmSaveMessageTimer = updater(llmSaveMessageTimer); },
     status,
     message,
     timeout
   );
 };
 
-const setEmbeddingSaveMessage = (status, message, timeout) => {
+const setEmbeddingSaveMessage = (status: string, message: string, timeout?: number) => {
   setTransientSaveMessage(
     embeddingSaveStatus,
     embeddingSaveMessage,
-    (updater) => { embeddingSaveMessageTimer = updater(embeddingSaveMessageTimer); },
+    (updater: any) => { embeddingSaveMessageTimer = updater(embeddingSaveMessageTimer); },
     status,
     message,
     timeout
@@ -632,7 +632,7 @@ const saveEmbeddingSettings = async () => {
   try {
     embeddingSettings.value = { ...embeddingSettings.value, ...(await axios.post('/api/knowledge/embedding-settings', payload)).data, apiKey: '' };
     setEmbeddingSaveMessage('saved', '检索配置已保存。');
-  } catch (e) {
+  } catch (e: any) {
     console.error('保存检索设置失败', e);
     setEmbeddingSaveMessage('error', e.response?.data?.error || '保存失败，请稍后重试。', 4200);
   }
@@ -684,7 +684,7 @@ const focusSearch = () => {
   nextTick(() => document.getElementById('agent-command')?.focus());
 };
 
-const refreshAgentPlan = async (lookup) => {
+const refreshAgentPlan = async (lookup: any) => {
   if (!lookup) return;
   agentLoading.value = true;
   try {
@@ -756,7 +756,7 @@ const onFocus = () => {
 };
 
 // 选择条目（历史或联想补全）
-const onSelectItem = (item) => {
+const onSelectItem = (item: any) => {
   if (showHistory.value) {
     agentInput.value = item.verb || '';
     error.value = '';
@@ -768,7 +768,7 @@ const onSelectItem = (item) => {
 };
 
 // 添加查询记录到历史顶部（去重）
-const addToHistory = (verbItem) => {
+const addToHistory = (verbItem: any) => {
   const verbName = verbItem.dictionaryForm || verbItem.word || verbItem.verb;
   const wordType = verbItem.wordType || 'verb';
   // 先移除相同单词的旧记录（去重）
@@ -828,7 +828,7 @@ onMounted(async () => {
     availableModels.value = modelsResult.value.data;
     if (modelsResult.value.data.length > 0) {
       selectedModel.value =
-        modelsResult.value.data.find(model => model === 'qwen2.5' || model === 'qwen2.5:7b') || modelsResult.value.data[0];
+        modelsResult.value.data.find((model: any) => model === 'qwen2.5' || model === 'qwen2.5:7b') || modelsResult.value.data[0];
     }
   } else {
     console.error('获取模型列表失败', modelsResult.reason);
@@ -854,7 +854,7 @@ onMounted(async () => {
 });
 
 // 提取日文文本中的假名部分（去掉汉字），用于模糊比较
-const extractKana = (text) => {
+const extractKana = (text: any) => {
   if (!text) return '';
   // 去掉标点、空格
   let cleaned = text.trim()
@@ -867,7 +867,7 @@ const extractKana = (text) => {
 };
 
 // 判断 AI 修正是否等价于原结果（只是写法不同，如汉字vs假名）
-const isEquivalentCorrection = (correction, original) => {
+const isEquivalentCorrection = (correction: any, original: any) => {
   if (!correction || !correction.trim()) return true;
   if (!original) return false;
   // 完全相同
@@ -882,14 +882,14 @@ const isEquivalentCorrection = (correction, original) => {
   return normA === normB;
 };
 
-const verbTypeMap = {
+const verbTypeMap: Record<string, string> = {
   GODAN: '五段动词',
   ICHIDAN: '一段动词',
   SURU: 'サ变动词',
   KURU: 'カ变动词'
 };
 
-const wordTypeDisplayMap = {
+const wordTypeDisplayMap: Record<string, string> = {
   'verb': '动词',
   'noun': '名词',
   'i-adjective': 'い形容词',
@@ -907,7 +907,7 @@ const isVerb = computed(() => {
 });
 
 // 调用后端 kuromoji 生成 furigana HTML
-const fetchFurigana = async (texts) => {
+const fetchFurigana = async (texts: any[]) => {
   try {
     const res = await axios.post('/api/furigana', { texts });
     return res.data.results;
@@ -919,10 +919,10 @@ const fetchFurigana = async (texts) => {
 };
 
 // 字典卡片 / 动词摘要的 furigana HTML
-const furiganaWord = ref('');
-const furiganaDict = ref('');
+const furiganaWord = ref<string>('');
+const furiganaDict = ref<string>('');
 // 例句的 furigana HTML
-const furiganaExamples = ref([]);
+const furiganaExamples = ref<any[]>([]);
 let latestFuriganaWordRequest = 0;
 let latestFuriganaExamplesRequest = 0;
 
@@ -974,7 +974,7 @@ watch(agentExamples, (examples) => {
 }, { deep: true });
 
 // 监听输入，双轨联想补全：先立即返回本地结果，再异步追加远程结果
-let remoteAbortController = null;
+let remoteAbortController: AbortController | null = null;
 
 watch(agentInput, (newVal) => {
   if (suggestTimeout) clearTimeout(suggestTimeout);
@@ -1013,7 +1013,7 @@ watch(agentInput, (newVal) => {
           if (agentInput.value === query) {
             suggestions.value = remoteRes.data;
           }
-        } catch (remoteErr) {
+        } catch (remoteErr: any) {
           if (remoteErr.name !== 'CanceledError' && remoteErr.code !== 'ERR_CANCELED') {
             console.error('远程联想失败', remoteErr);
           }
@@ -1030,7 +1030,7 @@ watch(agentInput, (newVal) => {
   }, 150);
 });
 
-const selectSuggestion = (item) => {
+const selectSuggestion = (item: any) => {
   agentInput.value = item.kanji || item.kana || '';
   showDropdown.value = false;
   nextTick(() => document.getElementById('agent-command')?.focus());
@@ -1118,7 +1118,7 @@ const conjugate = async () => {
 
     // 自动触发 AI 解析
     fetchAiExplanation();
-  } catch (err) {
+  } catch (err: any) {
     error.value = err.response?.data?.error || '请求失败，请检查输入';
     // 错误时重置结果状态
     result.value = null;
@@ -1131,7 +1131,7 @@ const conjugate = async () => {
   }
 };
 
-let aiAbortController = null;
+let aiAbortController: AbortController | null = null;
 
 const fetchAiExplanation = async () => {
   const wordName = result.value?.dictionaryForm || result.value?.word;
@@ -1167,7 +1167,7 @@ const fetchAiExplanation = async () => {
         'Content-Type': 'application/json',
         ...buildAuthHeaders(),
         ...buildLlmHeaders()
-      },
+      } as HeadersInit,
       signal: controller.signal,
       body: JSON.stringify(requestBody)
     });
@@ -1185,7 +1185,7 @@ const fetchAiExplanation = async () => {
       throw new Error(errBody?.error || '网络请求失败');
     }
 
-    const reader = response.body.getReader();
+    const reader = response.body!.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let fullAiText = '';
@@ -1248,7 +1248,7 @@ const fetchAiExplanation = async () => {
                   if (parsed.examples) {
                     aiExamples.value = parsed.examples;
                   }
-                  aiRawExplanation.value = fullAiText.substring(jsonMatch.index + jsonMatch[0].length).trim();
+                  aiRawExplanation.value = fullAiText.substring(jsonMatch.index! + jsonMatch[0].length).trim();
                 } catch (e) {
                   // JSON 解析失败说明还在流式输出 JSON，尝试用部分匹配提前点亮 ✅
                   const partialJson = jsonMatch[1];
@@ -1287,7 +1287,7 @@ const fetchAiExplanation = async () => {
         }
       }
     }
-  } catch (err) {
+  } catch (err: any) {
     if (err.name === 'AbortError') {
       completeProgress();
       return;

@@ -98,7 +98,7 @@
               </span>
             </h3>
             <div class="ai-actions">
-              <select :value="selectedModel" @change="$emit('update:selected-model', $event.target.value)" class="model-select" v-if="availableModels.length > 0">
+              <select :value="selectedModel" @change="onModelChange" class="model-select" v-if="availableModels.length > 0">
                 <option v-for="m in availableModels" :key="m" :value="m">{{ m }}</option>
               </select>
               <button v-if="(!loadingAi && result) || aiRawExplanation" @click="$emit('fetch-ai-explanation')" class="btn-secondary btn-secondary--with-icon" :disabled="loadingAi">
@@ -160,40 +160,63 @@
     </main>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import * as wanakana from 'wanakana';
 import Icon from './Icon.vue';
-import { useMemoryCards } from '../composables/useMemoryCards.js';
-import { useSpeech } from '../composables/useSpeech.js';
+import { useMemoryCards } from '../composables/useMemoryCards';
+import { useSpeech } from '../composables/useSpeech';
 
-const props = defineProps({
-  result: { type: Object, default: null },
-  loading: { type: Boolean, default: false },
-  loadingAi: { type: Boolean, default: false },
-  aiError: { type: String, default: '' },
-  aiProgress: { type: Number, default: 0 },
-  aiRawExplanation: { type: String, default: '' },
-  aiExplanation: { type: String, default: '' },
-  aiExamples: { type: Array, default: () => [] },
-  verificationStatus: { type: Object, default: () => ({}) },
-  selectedModel: { type: String, default: '' },
-  availableModels: { type: Array, default: () => [] },
-  furiganaDict: { type: String, default: '' },
-  furiganaWord: { type: String, default: '' },
-  furiganaExamples: { type: Array, default: () => [] },
-  isVerb: { type: Boolean, default: false },
-  conjugationItems: { type: Array, default: () => [] },
-  verbTypeMap: { type: Object, default: () => ({}) },
-  wordTypeDisplayMap: { type: Object, default: () => ({}) },
+const props = withDefaults(defineProps<{
+  result?: any;
+  loading?: boolean;
+  loadingAi?: boolean;
+  aiError?: string;
+  aiProgress?: number;
+  aiRawExplanation?: string;
+  aiExplanation?: string;
+  aiExamples?: any[];
+  verificationStatus?: Record<string, any>;
+  selectedModel?: string;
+  availableModels?: any[];
+  furiganaDict?: string;
+  furiganaWord?: string;
+  furiganaExamples?: any[];
+  isVerb?: boolean;
+  conjugationItems?: any[];
+  verbTypeMap?: Record<string, any>;
+  wordTypeDisplayMap?: Record<string, any>;
+}>(), {
+  result: null,
+  loading: false,
+  loadingAi: false,
+  aiError: '',
+  aiProgress: 0,
+  aiRawExplanation: '',
+  aiExplanation: '',
+  aiExamples: () => [],
+  verificationStatus: () => ({}),
+  selectedModel: '',
+  availableModels: () => [],
+  furiganaDict: '',
+  furiganaWord: '',
+  furiganaExamples: () => [],
+  isVerb: false,
+  conjugationItems: () => [],
+  verbTypeMap: () => ({}),
+  wordTypeDisplayMap: () => ({}),
 });
 
 const emit = defineEmits(['fetch-ai-explanation', 'update:selected-model']);
+
+const onModelChange = (event: Event) => {
+  emit('update:selected-model', (event.target as HTMLSelectElement).value);
+};
 
 const { isCurrentMemorized, addCurrentToMemory } = useMemoryCards();
 const { speak } = useSpeech();
 
 // 提取日文文本中的假名部分（去掉汉字），用于模糊比较
-const extractKana = (text) => {
+const extractKana = (text: any) => {
   if (!text) return '';
   // 去掉标点、空格
   let cleaned = text.trim()
@@ -206,7 +229,7 @@ const extractKana = (text) => {
 };
 
 // 判断 AI 修正是否等价于原结果（只是写法不同，如汉字vs假名）
-const isEquivalentCorrection = (correction, original) => {
+const isEquivalentCorrection = (correction: any, original: any) => {
   if (!correction || !correction.trim()) return true;
   if (!original) return false;
   // 完全相同

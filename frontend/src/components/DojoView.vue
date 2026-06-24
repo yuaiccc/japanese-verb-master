@@ -308,7 +308,7 @@
     </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { computed, onUnmounted } from 'vue';
 import Icon from './Icon.vue';
 import { useDojo } from '../composables/useDojo';
@@ -328,7 +328,7 @@ onUnmounted(() => {
   stopPaywallPolling();
 });
 
-const sceneIcon = (scene) => {
+const sceneIcon = (scene: any) => {
   if (scene.id === 'all') return 'sparkles';
   if (scene.id === 'n1') return 'star';
   if (/食|飲|買|店|餐|饭|咖啡|料理/.test(scene.name || scene.description || '')) return 'chat';

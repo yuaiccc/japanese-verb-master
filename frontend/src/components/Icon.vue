@@ -192,7 +192,7 @@
   </svg>
 </template>
 
-<script setup>
+<script setup lang="ts">
 defineOptions({ inheritAttrs: false });
 
 defineProps({

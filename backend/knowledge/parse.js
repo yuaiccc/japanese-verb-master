@@ -24,6 +24,19 @@ function splitLong(content) {
   const pieces = [];
   let current = '';
   for (const p of paragraphs) {
+    if (p.length > MAX_CHUNK) {
+      if (current) {
+        pieces.push(current);
+        current = '';
+      }
+      const step = MAX_CHUNK - OVERLAP;
+      for (let i = 0; i < p.length; i += step) {
+        const piece = p.slice(i, i + MAX_CHUNK);
+        if (piece.length > 0) pieces.push(piece);
+        if (i + MAX_CHUNK >= p.length) break;
+      }
+      continue;
+    }
     if (current && (current.length + p.length + 2) > MAX_CHUNK) {
       pieces.push(current);
       current = current.slice(-OVERLAP) + '\n\n' + p;

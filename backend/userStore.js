@@ -314,7 +314,7 @@ class LocalUserStore {
     if (!row) return null;
     const now = new Date().toISOString();
     const tx = db.transaction(() => {
-      db.prepare("UPDATE payment_orders SET status = 'TRADE_SUCCESS', paid_at = ? WHERE out_trade_no = ?")
+      db.prepare("UPDATE payment_orders SET status = 'TRADE_SUCCESS', paid_at = COALESCE(paid_at, ?) WHERE out_trade_no = ? AND status != 'TRADE_SUCCESS'")
         .run(now, outTradeNo);
       if (entitlement) {
         db.prepare(`
@@ -363,7 +363,7 @@ class LocalUserStore {
     const rows = db.prepare(`
       SELECT * FROM agent_runs WHERE user_id = ?
       ORDER BY datetime(updated_at) DESC, rowid DESC LIMIT ?
-    `).all(uid(userId), Math.max(1, Math.min(200, Number(limit) || 50))).map(normalizeAgentRun);
+    `).all(uid(userId), Math.max(1, Math.min(200, Number(limit) || 50)) * 3).map(normalizeAgentRun);
     return threadId
       ? rows.filter(run => String(run.metadata?.threadId || '') === String(threadId)).slice(0, limit)
       : rows;

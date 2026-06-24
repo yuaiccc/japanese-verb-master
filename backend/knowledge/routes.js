@@ -2,16 +2,20 @@ import { tokenizeForFts } from './tokenize.js';
 
 export function registerKnowledgeRoutes(app, { db, retriever, reindexQueue, getEmbeddingSettings }) {
   app.get('/api/knowledge/search', async (req, res) => {
-    const q = String(req.query.q || '').trim();
-    if (!q) return res.status(400).json({ error: 'q is required' });
-    const topK = Math.min(parseInt(req.query.topK) || 5, 20);
-    const { results, degraded } = await retriever.queryRelevantDocuments(q, {
-      topK,
-      level: String(req.query.level || ''),
-      category: String(req.query.category || ''),
-      resources: req.query.resources ? String(req.query.resources).split(',') : []
-    });
-    res.json({ query: q, degraded, results });
+    try {
+      const q = String(req.query.q || '').trim();
+      if (!q) return res.status(400).json({ error: 'q is required' });
+      const topK = Math.min(parseInt(req.query.topK) || 5, 20);
+      const { results, degraded } = await retriever.queryRelevantDocuments(q, {
+        topK,
+        level: String(req.query.level || ''),
+        category: String(req.query.category || ''),
+        resources: req.query.resources ? String(req.query.resources).split(',') : []
+      });
+      res.json({ query: q, degraded, results });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.get('/api/knowledge/stats', (req, res) => {
@@ -33,26 +37,47 @@ export function registerKnowledgeRoutes(app, { db, retriever, reindexQueue, getE
   });
 
   app.post('/api/knowledge/chunks', (req, res) => {
-    const { docId = 'custom', title = '', content = '', level = '', category = '', tags = [] } = req.body || {};
-    if (!title.trim() || !content.trim()) return res.status(400).json({ error: 'title and content are required' });
-    const { id } = db.prepare(`
-      INSERT INTO knowledge_chunks (doc_id, resource, title, content, level, category, tags, source, content_hash, has_embedding)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'api', '', 0) RETURNING id
-    `).get(docId, `kb://grammar/${docId}`, title.trim(), content.trim(), level, category, JSON.stringify(tags));
-    db.prepare('INSERT INTO knowledge_fts (title, content_tokens, chunk_id) VALUES (?, ?, ?)')
-      .run(tokenizeForFts(title), tokenizeForFts(content), id);
-    reindexQueue.schedule();
-    res.status(201).json({ id });
+    try {
+      const { docId = 'custom', title = '', content = '', level = '', category = '', tags = [] } = req.body || {};
+      if (!title.trim() || !content.trim()) return res.status(400).json({ error: 'title and content are required' });
+      const insertChunk = db.prepare(`
+        INSERT INTO knowledge_chunks (doc_id, resource, title, content, level, category, tags, source, content_hash, has_embedding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'api', '', 0) RETURNING id
+      `);
+      const insertFts = db.prepare('INSERT INTO knowledge_fts (title, content_tokens, chunk_id) VALUES (?, ?, ?)');
+      const { id } = db.transaction(() => {
+        const row = insertChunk.get(docId, `kb://grammar/${docId}`, title.trim(), content.trim(), level, category, JSON.stringify(tags));
+        insertFts.run(tokenizeForFts(title), tokenizeForFts(content), row.id);
+        return row;
+      })();
+      reindexQueue.schedule();
+      res.status(201).json({ id });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.delete('/api/knowledge/chunks/:id', (req, res) => {
-    const id = parseInt(req.params.id);
-    const info = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?').run(id);
-    db.prepare('DELETE FROM knowledge_fts WHERE chunk_id = ?').run(id);
-    if (db.prepare("SELECT name FROM sqlite_master WHERE name='knowledge_vec'").get()) {
-      db.prepare('DELETE FROM knowledge_vec WHERE chunk_id = ?').run(BigInt(id));
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id)) {
+        return res.status(400).json({ error: 'Invalid chunk id' });
+      }
+      const deleteChunk = db.prepare('DELETE FROM knowledge_chunks WHERE id = ?');
+      const deleteFts = db.prepare('DELETE FROM knowledge_fts WHERE chunk_id = ?');
+      const hasVec = !!db.prepare("SELECT name FROM sqlite_master WHERE name='knowledge_vec'").get();
+      const info = db.transaction(() => {
+        const result = deleteChunk.run(id);
+        deleteFts.run(id);
+        if (hasVec) {
+          db.prepare('DELETE FROM knowledge_vec WHERE chunk_id = ?').run(BigInt(id));
+        }
+        return result;
+      })();
+      reindexQueue.schedule();
+      res.status(info.changes ? 200 : 404).json({ deleted: info.changes > 0 });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
-    reindexQueue.schedule();
-    res.status(info.changes ? 200 : 404).json({ deleted: info.changes > 0 });
   });
 }

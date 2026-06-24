@@ -18,6 +18,9 @@ export async function verifyTurnstileToken({
 } = {}) {
   const secret = String(process.env.TURNSTILE_SECRET_KEY || '').trim();
   if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('WARNING: TURNSTILE_SECRET_KEY not set, bot protection disabled');
+    }
     return { success: true, skipped: true };
   }
   if (!token) {

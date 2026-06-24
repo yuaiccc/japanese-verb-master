@@ -32,13 +32,13 @@ export function createLocalRetriever({ db, embedder, mode = 'hybrid', reranker =
       if (filters.level && chunk.level !== filters.level) continue;
       if (filters.category && chunk.category !== filters.category) continue;
       if (filters.resources?.length && !filters.resources.includes(chunk.resource)) continue;
-      out.push({ ...chunk, docId: chunk.doc_id, score: row.score ?? 0 });
+      out.push({ ...chunk, docId: chunk.doc_id, score: row.score ?? 0, distance: row.distance ?? null });
     }
     return out;
   }
 
   function bm25Leg(query) {
-    const ftsQuery = tokenizeForFts(query).split(' ').filter(Boolean).map(t => `"${t}"`).join(' OR ');
+    const ftsQuery = tokenizeForFts(query).split(' ').filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
     if (!ftsQuery) return [];
     // 标题列权重 2.0：条目标题即语法点名称，命中标题的相关性高于命中正文
     //（65 题扫描：w=2~5 MRR +0.002，w=8 开始回落，取保守值）
@@ -80,12 +80,10 @@ export function createLocalRetriever({ db, embedder, mode = 'hybrid', reranker =
         bm25Hits = bm25Rows.length;
         legs.push(bm25Rows);
       }
-      let topVectorDistance = null;
       if (vecPromise) {
         const vecRows = await vecPromise;
         if (Array.isArray(vecRows)) {
           vectorHits = vecRows.length;
-          if (vecRows[0]) topVectorDistance = vecRows[0].distance; // 最近邻距离：abstain 的置信信号
           legs.push(vecRows);
         } else {
           degraded = true;
@@ -94,6 +92,9 @@ export function createLocalRetriever({ db, embedder, mode = 'hybrid', reranker =
 
       const fused = rrfFuse(legs, rrfK);
       const hydrated = hydrate(fused, filters);
+      const topVectorDistance = hydrated.length > 0
+        ? hydrated.reduce((min, r) => (r.distance != null ? Math.min(min ?? Infinity, r.distance) : min), null)
+        : null;
 
       // 第三段：LLM 精排（可选，默认关）。reranker 内部对任何失败都降级为融合顺序，
       // applied 如实反映精排是否真正生效。

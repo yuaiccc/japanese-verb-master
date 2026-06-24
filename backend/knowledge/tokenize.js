@@ -27,8 +27,23 @@ export function tokenizeForFts(text = '') {
     }
   }
   // 降级：CJK 连续段切 bigram，其余按空白切
-  return value
-    .split(/\s+/)
-    .flatMap(seg => (CJK_RE.test(seg) ? bigrams(seg) : [seg.toLowerCase()]))
-    .join(' ');
+  // Process CJK and non-CJK segments separately to avoid cross-boundary
+  // bigrams (e.g. "o世" from "hello世界").
+  const cjkRegex = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+/g;
+  const tokens = [];
+  let lastIndex = 0;
+  let match;
+  while ((match = cjkRegex.exec(value)) !== null) {
+    if (match.index > lastIndex) {
+      const words = value.slice(lastIndex, match.index).toLowerCase().split(/\s+/).filter(Boolean);
+      tokens.push(...words);
+    }
+    tokens.push(...bigrams(match[0]));
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < value.length) {
+    const words = value.slice(lastIndex).toLowerCase().split(/\s+/).filter(Boolean);
+    tokens.push(...words);
+  }
+  return tokens.join(' ');
 }

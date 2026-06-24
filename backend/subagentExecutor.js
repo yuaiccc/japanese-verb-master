@@ -51,12 +51,16 @@ export class SubagentExecutor {
 
   async withSandboxTimeout(sandbox, task) {
     const timeoutMs = sandbox.policy.timeoutMs || 15000;
+    const controller = new AbortController();
     let timer = null;
     try {
       return await Promise.race([
-        task(),
+        task(controller.signal),
         new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`${this.label} sandbox timeout after ${timeoutMs}ms`)), timeoutMs);
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error(`${this.label} sandbox timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
         })
       ]);
     } finally {
@@ -210,91 +214,110 @@ export class SubagentExecutor {
       `${title} 已进入独立沙盒，允许工具：${plannedTools.map(tool => tool.name).join('、') || '无'}`
     );
 
-    const basePatch = await this.runManagedTask({
-      title,
-      sandbox,
-      onStatus: statusEmitter,
-      run: async (task) => {
-        await this.withSandboxTimeout(sandbox, async () => {
-          for (const tool of plannedTools) {
-            if (this.closedRef.closed || task.cancelRequested) break;
-            this.writeSse(this.res, 'tool_start', {
-              ...tool,
-              agent: this.subagentId,
-              sandboxId: sandbox.id
-            });
+    try {
+      const basePatch = await this.runManagedTask({
+        title,
+        sandbox,
+        onStatus: statusEmitter,
+        run: async (task) => {
+          await this.withSandboxTimeout(sandbox, async (signal) => {
+            for (const tool of plannedTools) {
+              if (this.closedRef.closed || task.cancelRequested || signal?.aborted) break;
+              this.writeSse(this.res, 'tool_start', {
+                ...tool,
+                agent: this.subagentId,
+                sandboxId: sandbox.id
+              });
 
-            let result;
-            try {
-              result = await this.executeTool(tool.name, tool.arguments);
-            } catch (error) {
-              result = { error: error.message || `Tool ${tool.name} failed` };
+              let result;
+              try {
+                result = await this.executeTool(tool.name, tool.arguments);
+              } catch (error) {
+                result = { error: error.message || `Tool ${tool.name} failed` };
+              }
+
+              const summarized = sandbox.clampResult(this.summarizeToolResult(result));
+              const toolRecord = {
+                ...tool,
+                result: summarized,
+                error: !!result?.error,
+                agent: this.subagentId,
+                sandboxId: sandbox.id
+              };
+              sandbox.recordToolCall(toolRecord);
+              toolCalls.push(toolRecord);
+
+              appendBackgroundTaskEvent(task.taskId, {
+                type: 'tool',
+                message: `${tool.name} finished`,
+                tool: tool.name
+              });
+
+              if (!this.closedRef.closed) {
+                this.writeSse(this.res, 'tool_end', toolRecord);
+              }
+
+              const payload = {
+                tool,
+                toolRecord,
+                rawResult: result,
+                sandbox: sandbox.describe()
+              };
+              toolPayloads.push(payload);
+              onToolResult?.(payload);
             }
 
-            const summarized = sandbox.clampResult(this.summarizeToolResult(result));
-            const toolRecord = {
-              ...tool,
-              result: summarized,
-              error: !!result?.error,
-              agent: this.subagentId,
-              sandboxId: sandbox.id
-            };
-            sandbox.recordToolCall(toolRecord);
-            toolCalls.push(toolRecord);
-
-            appendBackgroundTaskEvent(task.taskId, {
-              type: 'tool',
-              message: `${tool.name} finished`,
-              tool: tool.name
-            });
-
-            if (!this.closedRef.closed) {
-              this.writeSse(this.res, 'tool_end', toolRecord);
+            if (this.closedRef.closed || task.cancelRequested || signal?.aborted) {
+              requestCancelBackgroundTask(task.taskId);
+              throw new Error(`${title} cancelled`);
             }
+          });
 
-            const payload = {
-              tool,
-              toolRecord,
-              rawResult: result,
-              sandbox: sandbox.describe()
-            };
-            toolPayloads.push(payload);
-            onToolResult?.(payload);
-          }
-
-          if (this.closedRef.closed || task.cancelRequested) {
-            requestCancelBackgroundTask(task.taskId);
-            throw new Error(`${title} cancelled`);
-          }
-        });
-
-        return buildStatePatch({
-          state,
-          brief,
-          sandbox,
-          toolCalls,
-          toolPayloads
-        });
-      }
-    });
-
-    return {
-      ...basePatch,
-      messages: [
-        ...(basePatch.messages || []),
-        ...toolPayloads.map(payload => buildToolMessage(payload)).filter(Boolean)
-      ],
-      subagentContexts: {
-        ...state.subagentContexts,
-        ...(basePatch.subagentContexts || {}),
-        [this.subagentId]: {
-          ...(basePatch.subagentContexts?.[this.subagentId] || {}),
-          sandbox: sandbox.describe(),
-          plannedTools: plannedTools.map(tool => tool.name)
+          return buildStatePatch({
+            state,
+            brief,
+            sandbox,
+            toolCalls,
+            toolPayloads
+          });
         }
-      },
-      completed: [...state.completed, this.subagentId]
-    };
+      });
+
+      return {
+        ...basePatch,
+        messages: [
+          ...(basePatch.messages || []),
+          ...toolPayloads.map(payload => buildToolMessage(payload)).filter(Boolean)
+        ],
+        subagentContexts: {
+          ...state.subagentContexts,
+          ...(basePatch.subagentContexts || {}),
+          [this.subagentId]: {
+            ...(basePatch.subagentContexts?.[this.subagentId] || {}),
+            sandbox: sandbox.describe(),
+            plannedTools: plannedTools.map(tool => tool.name)
+          }
+        },
+        completed: [...state.completed, this.subagentId]
+      };
+    } catch (err) {
+      console.error('[runToolSubagent] error:', err.message);
+      return {
+        messages: [...(state.messages || [])],
+        subagentContexts: {
+          ...state.subagentContexts,
+          [this.subagentId]: {
+            sandbox: sandbox.describe(),
+            plannedTools: plannedTools.map(tool => tool.name),
+            error: err.message
+          }
+        },
+        completed: [...state.completed, this.subagentId],
+        toolCalls,
+        toolPayloads,
+        error: err.message
+      };
+    }
   }
 
   async runTextSubagent({
@@ -345,15 +368,15 @@ export class SubagentExecutor {
         sandbox,
         onStatus: statusEmitter,
         run: async (task) => {
-          await this.withSandboxTimeout(sandbox, async () => {
-            if (task.cancelRequested) {
+          await this.withSandboxTimeout(sandbox, async (signal) => {
+            if (task.cancelRequested || signal?.aborted) {
               requestCancelBackgroundTask(task.taskId);
               throw new Error(`${title} cancelled`);
             }
             await streamText({
               messages,
               sandbox,
-              shouldCancel: () => this.closedRef.closed || task.cancelRequested,
+              shouldCancel: () => this.closedRef.closed || task.cancelRequested || signal?.aborted,
               onToken: (content) => {
                 if (this.closedRef.closed || task.cancelRequested) return;
                 finalAnswer += content;

@@ -1,5 +1,5 @@
 import { getLlmSettings } from '../db.js';
-import ollamaClient from 'ollama';
+import ollamaClient, { Ollama } from 'ollama';
 
 // knowledge 模块自带的轻量 chat 注入器：让 kb-eval 等独立脚本无需 import server.js
 // （后者一加载就会监听端口）即可调用与线上一致的 LLM provider。运行时仍优先注入 server.js
@@ -27,12 +27,19 @@ export function createKnowledgeChat({ fetchImpl = fetch } = {}) {
     const baseUrl = settings.baseUrl || defaults.baseUrl;
 
     if (provider === 'ollama') {
-      const response = await ollamaClient.chat({
-        model: targetModel || 'qwen2.5',
-        messages,
-        stream: false,
-        options: { temperature }
-      });
+      const ollama = settings.baseUrl ? new Ollama({ host: settings.baseUrl }) : ollamaClient;
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Ollama timeout')), timeoutMs)
+      );
+      const response = await Promise.race([
+        ollama.chat({
+          model: targetModel || 'qwen2.5',
+          messages,
+          stream: false,
+          options: { temperature, num_predict: maxTokens }
+        }),
+        timeoutPromise
+      ]);
       return response.message?.content || '';
     }
 

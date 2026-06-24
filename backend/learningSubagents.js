@@ -56,14 +56,26 @@ function extractLookupTargets(text = '') {
       if (!/[\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(item)) return item;
       const chars = [...item];
       const firstKanaIndex = chars.findIndex(char => /[\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(char));
-      const lastKanaIndex = chars.reduce((last, char, index) => (
-        /[\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(char) ? index : last
-      ), -1);
       const leadingKanji = firstKanaIndex > 0 && /[\p{Script=Han}]/u.test(chars[firstKanaIndex - 1])
         ? chars[firstKanaIndex - 1]
         : '';
       const prefix = leadingKanji === '的' ? '' : leadingKanji;
-      return `${prefix}${chars.slice(firstKanaIndex, lastKanaIndex + 1).join('')}`;
+      // 找到最后一个假名的位置
+      let lastKanaIndex = firstKanaIndex;
+      for (let i = chars.length - 1; i > firstKanaIndex; i--) {
+        if (/[\p{Script=Hiragana}\p{Script=Katakana}ー]/u.test(chars[i])) {
+          lastKanaIndex = i;
+          break;
+        }
+      }
+      // 保留尾部汉字（如「食べ物」的「物」），但排除中文功能字（如「が到底」的「到底」）
+      const chineseFn = /[到的底怎麼吗呢么什这那哪谁啥咋为没用说写读叫些着了过吧呀啊与跟或和及的个是有了在也都不就还又再把将被让叫请给对从向往由于虽然但是因为所以如果区分别意思时候地方问题样情况种类件]/;
+      let end = lastKanaIndex + 1;
+      for (let i = lastKanaIndex + 1; i < chars.length && i <= lastKanaIndex + 2; i++) {
+        if (chineseFn.test(chars[i])) break;
+        end = i + 1;
+      }
+      return `${prefix}${chars.slice(firstKanaIndex, end).join('')}`;
     })
     .filter(item => item && !stopWords.has(item))
     .slice(0, 4);

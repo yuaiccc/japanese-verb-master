@@ -67,7 +67,13 @@ export async function ingestKnowledge({ db, embedder, sourceDir }) {
       try {
         const vectors = await embedder.embed(batch.map(item => item.text));
         const dim = vectors[0]?.length;
-        if (!ensureVecTable(db, dim)) break;
+        if (!ensureVecTable(db, dim)) {
+          for (let j = i; j < toEmbed.length; j += EMBED_BATCH) {
+            const remainingBatch = toEmbed.slice(j, j + EMBED_BATCH);
+            report.failed.push({ ids: remainingBatch.map(b => b.id), error: 'ensureVecTable failed' });
+          }
+          break;
+        }
         // vec0 表在首次拿到维度后才建，故语句延迟到此处准备
         if (!deleteVec) deleteVec = db.prepare('DELETE FROM knowledge_vec WHERE chunk_id = ?');
         if (!insertVec) insertVec = db.prepare('INSERT INTO knowledge_vec (chunk_id, embedding) VALUES (?, ?)');

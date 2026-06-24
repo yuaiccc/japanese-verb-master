@@ -37,7 +37,11 @@ export function createEmbedder({
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
-      if (!res.ok) throw new Error(`embedding http ${res.status}`);
+      if (!res.ok) {
+        const err = new Error(`embedding http ${res.status}`);
+        err.status = res.status;
+        throw err;
+      }
       const data = await res.json();
       const vectors = isOllama
         ? data.embeddings
@@ -58,6 +62,9 @@ export function createEmbedder({
         return await callOnce(texts);
       } catch (error) {
         lastError = error;
+        if (error.status && error.status >= 400 && error.status < 500 && error.status !== 429) {
+          throw error;
+        }
         if (attempt < 2) await sleep(retryDelayMs * (attempt + 1));
       }
     }

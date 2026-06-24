@@ -36,11 +36,15 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+let persistChain = Promise.resolve();
 function persistTask(task) {
   if (!task?.taskId || !taskStore) return;
-  taskStore.upsertSubagentTask(task, task.userId).catch(error => {
-    console.error('[subagent-task] persist failed:', error?.message || error);
-  });
+  persistChain = persistChain
+    .then(() => taskStore.upsertSubagentTask(task, task.userId))
+    .catch(error => {
+      console.error('[subagent-task] persist failed:', error?.message || error);
+    });
+  return persistChain;
 }
 
 function isTerminal(status = '') {
@@ -122,8 +126,6 @@ export function requestCancelBackgroundTask(taskId, userId = null) {
     type: 'cancel_requested',
     message: 'Cancellation requested by parent runtime'
   });
-  task.updatedAt = nowIso();
-  persistTask(task);
   return true;
 }
 
@@ -138,33 +140,40 @@ export async function getBackgroundTaskResult(taskId, userId) {
 }
 
 export async function listBackgroundTasks({ userId, runId = '', status = '', limit = 0 } = {}) {
-  const hasRunningMemoryTasks = normalized => Array.from(backgroundTasks.values()).some(task => {
-    if (Number(task.userId) !== Number(normalized.userId)) return false;
-    if (normalized.runId && task.runId !== normalized.runId) return false;
-    if (normalized.status && task.status !== normalized.status) return false;
-    return true;
-  });
   const normalizedRunId = String(runId || '').trim();
   const normalizedStatus = String(status || '').trim();
-  if (!hasRunningMemoryTasks({ userId, runId: normalizedRunId, status: normalizedStatus })) {
-    return taskStore?.listSubagentTasks({
-      userId,
-      runId: normalizedRunId,
-      status: normalizedStatus,
-      limit
-    }) || [];
-  }
-  const filtered = [
-    ...Array.from(backgroundTasks.values()),
-    ...completedTaskHistory
-  ].filter(task => {
+
+  const matches = (task) => {
     if (Number(task.userId) !== Number(userId)) return false;
     if (normalizedRunId && task.runId !== normalizedRunId) return false;
     if (normalizedStatus && task.status !== normalizedStatus) return false;
     return true;
-  });
+  };
 
-  const sorted = sortTasksByNewest(filtered).map(task => cloneTask(task));
+  // 始终从 taskStore 查询
+  const storedTasks = (await taskStore?.listSubagentTasks({
+    userId,
+    runId: normalizedRunId,
+    status: normalizedStatus,
+    limit
+  }) || []).filter(matches);
+
+  // 始终合并内存中的任务（backgroundTasks + completedTaskHistory）
+  const memoryTasks = [
+    ...Array.from(backgroundTasks.values()),
+    ...completedTaskHistory
+  ].filter(matches);
+
+  // 按 taskId 去重，内存中的优先（状态更新）
+  const byTaskId = new Map();
+  for (const task of storedTasks) {
+    byTaskId.set(task.taskId, task);
+  }
+  for (const task of memoryTasks) {
+    byTaskId.set(task.taskId, task);
+  }
+
+  const sorted = sortTasksByNewest(Array.from(byTaskId.values())).map(task => cloneTask(task));
   if (limit > 0) {
     return sorted.slice(0, limit);
   }
@@ -194,7 +203,9 @@ export function requestCancelTasksForRun(runId, userId = null) {
 export function cleanupBackgroundTask(taskId) {
   const task = backgroundTasks.get(taskId);
   if (!task) return false;
-  if (!isTerminal(task.status)) return false;
+  if (!isTerminal(task.status)) {
+    console.warn(`[cleanupBackgroundTask] cleaning non-terminal task ${task.taskId} in state ${task.status}`);
+  }
   completedTaskHistory.unshift(cloneTask(task));
   if (completedTaskHistory.length > maxCompletedHistory) {
     completedTaskHistory.splice(maxCompletedHistory);

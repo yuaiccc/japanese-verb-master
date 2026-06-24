@@ -11,6 +11,10 @@ const TOKEN_SECRET = process.env.AUTH_SECRET
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 天
 export const DEFAULT_USER_ID = 1;
 
+if (process.env.NODE_ENV === 'production' && TOKEN_SECRET === 'dev-insecure-secret-change-me') {
+  console.error('FATAL: AUTH_SECRET is not set in production. Using insecure default.');
+}
+
 export function ensureAuthSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (

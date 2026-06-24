@@ -66,7 +66,7 @@ export function createFaithfulnessJudge({ chatFn } = {}) {
 
 // 把多题的单题结果聚合成报告。
 export function summarizeFaithfulness(rows) {
-  const answered = rows.filter(r => !r.abstained);
+  const answered = rows.filter(r => !r.abstained && !r.judgeError && !r.parseError);
   const abstained = rows.filter(r => r.abstained).length;
   const totalClaims = answered.reduce((s, r) => s + r.total, 0);
   const supported = answered.reduce((s, r) => s + r.supported, 0);

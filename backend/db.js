@@ -222,12 +222,13 @@ function columnExists(table, column) {
 const searchStmt = db.prepare(`
   SELECT kanji, kana, romaji, meaning, word_type AS wordType, jlpt, is_common AS isCommon
   FROM words
-  WHERE kanji LIKE ? OR kana LIKE ? OR romaji LIKE ? OR meaning LIKE ?
+  WHERE kanji LIKE ? ESCAPE '\\' OR kana LIKE ? ESCAPE '\\' OR romaji LIKE ? ESCAPE '\\' OR meaning LIKE ? ESCAPE '\\'
   LIMIT ?
 `);
 
 export function searchWords(query, limit = 8) {
-  const pattern = `%${query}%`;
+  const escaped = String(query).replace(/[%_]/g, m => '\\' + m);
+  const pattern = `%${escaped}%`;
   return searchStmt.all(pattern, pattern, pattern, pattern, limit);
 }
 
@@ -558,7 +559,7 @@ const reviewMemoryStmt = db.prepare(`
     lapses = lapses + ?,
     due_at = ?,
     updated_at = ?
-  WHERE id = ?
+  WHERE id = ? AND user_id = ?
 `);
 
 const deleteMemoryStmt = db.prepare(`
@@ -629,11 +630,14 @@ export function reviewMemoryCard(id, grade, settings = getMemorySettings(), user
   const wasNew = (Number(card.reviewCount) || 0) === 0 ? 1 : 0;
   const { ease, intervalDays, lapseDelta, dueAt } = scheduleReview(card, grade, settings, now);
 
-  reviewMemoryStmt.run(ease, intervalDays, lapseDelta, dueAt.toISOString(), now.toISOString(), id);
-  insertReviewLogStmt.run(
-    Number(userId) || 1, Number(id), grade, wasNew,
-    easeBefore, ease, intervalBefore, intervalDays, now.toISOString()
-  );
+  const tx = db.transaction(() => {
+    reviewMemoryStmt.run(ease, intervalDays, lapseDelta, dueAt.toISOString(), now.toISOString(), id, Number(userId) || 1);
+    insertReviewLogStmt.run(
+      Number(userId) || 1, Number(id), grade, wasNew,
+      easeBefore, ease, intervalBefore, intervalDays, now.toISOString()
+    );
+  });
+  tx();
   return listMemoryCards(500, Number(userId) || 1).find(item => item.id === Number(id));
 }
 
@@ -793,14 +797,15 @@ export function writeAgentMemory(candidates = [], userId = 1, sourceRunId = '') 
   return upserts.length;
 }
 
-const touchAgentMemoryStmt = db.prepare('UPDATE agent_memory SET last_used_at = ? WHERE id = ?');
+const touchAgentMemoryStmt = db.prepare('UPDATE agent_memory SET last_used_at = ? WHERE id = ? AND user_id = ?');
 
 // 检索注入用 top-k：排序后顺手标记 last_used_at（便于将来做使用频率衰减）。
 export function retrieveAgentMemory(userId = 1, { limit = 8 } = {}) {
   const ranked = rankAgentMemories(listAgentMemory(userId), { limit });
   const now = new Date().toISOString();
+  const uid = Number(userId) || 1;
   const tx = db.transaction((rows) => {
-    for (const r of rows) touchAgentMemoryStmt.run(now, r.id);
+    for (const r of rows) touchAgentMemoryStmt.run(now, r.id, uid);
   });
   tx(ranked);
   return ranked;

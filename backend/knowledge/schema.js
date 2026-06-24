@@ -45,9 +45,18 @@ export function ensureVecTable(db, dim) {
   if (!loadVecExtension(db)) return false;
   if (!Number.isInteger(dim) || dim <= 0) return false;
   const existing = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_vec'"
+    "SELECT name, sql FROM sqlite_master WHERE type='table' AND name='knowledge_vec'"
   ).get();
-  if (existing) return true;
+  if (existing) {
+    const match = String(existing.sql || '').match(/float\[(\d+)\]/);
+    const existingDim = match ? parseInt(match[1], 10) : null;
+    if (existingDim !== dim) {
+      console.warn(`[knowledge] knowledge_vec dimension mismatch (existing=${existingDim}, expected=${dim}), rebuilding table`);
+      dropVecTable(db);
+    } else {
+      return true;
+    }
+  }
   db.exec(`CREATE VIRTUAL TABLE knowledge_vec USING vec0(chunk_id INTEGER PRIMARY KEY, embedding float[${dim}])`);
   return true;
 }

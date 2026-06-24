@@ -257,7 +257,14 @@ const recordPractice = async ({ question, userAnswer, isCorrect, durationMs }) =
       durationMs,
       answeredAt: new Date().toISOString()
     });
-    practiceProfile.value = res.data;
+    practiceProfile.value = {
+      weakestForms: [],
+      sceneStats: [],
+      wrongBook: [],
+      recommendation: null,
+      ...practiceProfile.value,
+      ...res.data,
+    };
     await loadUserProfile();
   } catch (e) {
     console.error('保存练习记录失败', e);
@@ -289,7 +296,7 @@ const startDojo = async () => {
       // 付费内容未解锁 → 打开支付卡片（服务端是最终守门人，前端锁只是引导）
       await openPaywall();
     } else {
-      alert('加载题库失败，请稍后再试。');
+      dojoError.value = '加载题库失败，请稍后再试。';
       console.error(err);
     }
   } finally {
@@ -384,7 +391,7 @@ export function useDojo() {
   return {
     // 状态
     dojoState, dojoQuestions, dojoCurrentIndex, dojoScore, dojoFeedback,
-    dojoLoading, dojoInput, dojoCoachBusy, dojoCoachHint,
+    dojoLoading, dojoInput, dojoCoachBusy, dojoCoachHint, dojoError,
     scenes, selectedSceneId, practiceProfile, userProfile, entitlements, paywall,
     // 计算属性
     currentQuestion, sceneOptions, selectedSceneName, activeDojoSceneName,
@@ -392,7 +399,7 @@ export function useDojo() {
     startDojo, selectDojoScene, submitDojoAnswer, requestDojoHint, nextDojoQuestion,
     // 付费
     openPaywall, closePaywall, goToAlipayCashier, copyOkxAddress,
-    submitOkxTxId, simulatePaywallPay,
+    submitOkxTxId, simulatePaywallPay, stopPaywallPolling,
     // 数据加载（认证 / 首屏 / Agent 跨域复用）
     loadEntitlements, loadUserProfile, recordPractice, loadDojoBootstrap
   };

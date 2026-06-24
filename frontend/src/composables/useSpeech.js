@@ -46,6 +46,11 @@ export function useSpeech() {
   // 预缓存：文本一出现就提前构建好（嗓音已绑定），点击时零查找
   const prepareSpeech = (text) => {
     if (!text || !window.speechSynthesis || ttsUtteranceCache.has(text)) return;
+    // LRU 淘汰：超过 200 条时删除最早的缓存项
+    if (ttsUtteranceCache.size >= 200) {
+      const firstKey = ttsUtteranceCache.keys().next().value;
+      ttsUtteranceCache.delete(firstKey);
+    }
     ttsUtteranceCache.set(text, buildUtterance(text));
   };
 
@@ -91,6 +96,7 @@ export function useSpeech() {
 
   onUnmounted(() => {
     window.speechSynthesis?.removeEventListener?.('voiceschanged', refreshTtsVoice);
+    window.speechSynthesis?.cancel();
   });
 
   return { speak, prewarmSpeech, initTts, isSpeaking, ttsVoiceReady };

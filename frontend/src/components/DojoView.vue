@@ -25,6 +25,8 @@
             </button>
           </div>
 
+          <p v-if="dojoError" class="dojo-error-msg">{{ dojoError }}</p>
+
           <div v-if="paywall.visible" class="paywall-card" role="dialog" aria-label="解锁 N1 专项练习">
             <div class="paywall-head">
               <strong>解锁 N1 专项练习</strong>
@@ -307,19 +309,24 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, onUnmounted } from 'vue';
 import Icon from './Icon.vue';
 import { useDojo } from '../composables/useDojo';
 
 // 练习道场 + 付费解锁 + 学习画像：状态与逻辑见 composables/useDojo（单例，跨组件共享）
 const {
   dojoState, dojoQuestions, dojoCurrentIndex, dojoScore, dojoFeedback,
-  dojoCoachBusy, dojoCoachHint, dojoInput, selectedSceneId,
+  dojoCoachBusy, dojoCoachHint, dojoInput, dojoError, selectedSceneId,
   currentQuestion, sceneOptions, activeDojoSceneName,
   paywall, practiceProfile, userProfile,
   startDojo, selectDojoScene, submitDojoAnswer, requestDojoHint, nextDojoQuestion,
-  closePaywall, goToAlipayCashier, copyOkxAddress, submitOkxTxId, simulatePaywallPay
+  closePaywall, goToAlipayCashier, copyOkxAddress, submitOkxTxId, simulatePaywallPay,
+  stopPaywallPolling
 } = useDojo();
+
+onUnmounted(() => {
+  stopPaywallPolling();
+});
 
 const sceneIcon = (scene) => {
   if (scene.id === 'all') return 'sparkles';
@@ -579,6 +586,12 @@ const scoreCopy = computed(() => {
 .paywall-error {
   margin: 0;
   font-size: 0.8rem;
+  color: var(--danger);
+}
+
+.dojo-error-msg {
+  margin: 10px 0 0;
+  font-size: 0.88rem;
   color: var(--danger);
 }
 

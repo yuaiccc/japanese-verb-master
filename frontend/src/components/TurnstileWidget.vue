@@ -12,29 +12,37 @@ const emit = defineEmits(['token', 'error']);
 const container = ref(null);
 let widgetId = null;
 
-const loadTurnstile = () => new Promise((resolve, reject) => {
-  if (window.turnstile) {
-    resolve(window.turnstile);
-    return;
-  }
-  const existing = document.querySelector('script[data-jvm-turnstile]');
-  if (existing) {
-    existing.addEventListener('load', () => resolve(window.turnstile), { once: true });
-    existing.addEventListener('error', reject, { once: true });
-    return;
-  }
-  const script = document.createElement('script');
-  script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-  script.async = true;
-  script.defer = true;
-  script.dataset.jvmTurnstile = 'true';
-  script.addEventListener('load', () => resolve(window.turnstile), { once: true });
-  script.addEventListener('error', reject, { once: true });
-  document.head.appendChild(script);
-});
+const loadTurnstile = async () => {
+  if (window.turnstile) return window.turnstile;
 
+  const loadPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-jvm-turnstile]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(window.turnstile), { once: true });
+      existing.addEventListener('error', reject, { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    script.async = true;
+    script.defer = true;
+    script.dataset.jvmTurnstile = 'true';
+    script.addEventListener('load', () => resolve(window.turnstile), { once: true });
+    script.addEventListener('error', reject, { once: true });
+    document.head.appendChild(script);
+  });
+
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Turnstile load timeout')), 10000)
+  );
+  return Promise.race([loadPromise, timeoutPromise]);
+};
+
+let rendering = false;
 const renderWidget = async () => {
+  if (rendering || widgetId !== null) return;
   if (!props.siteKey || !container.value) return;
+  rendering = true;
   try {
     const turnstile = await loadTurnstile();
     await nextTick();
@@ -53,6 +61,8 @@ const renderWidget = async () => {
     });
   } catch {
     emit('error');
+  } finally {
+    rendering = false;
   }
 };
 

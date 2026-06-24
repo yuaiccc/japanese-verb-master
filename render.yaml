@@ -27,6 +27,10 @@ services:
         # Supabase / Neon 的 Postgres 连接串。留空时回退本地 SQLite（免费实例重启会丢用户数据）。
         # 在 Render Dashboard 中填写，不要提交真实连接串。
         sync: false
+      - key: TURNSTILE_SITE_KEY
+        sync: false
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
       # 注意：故意不在这里设默认 LLM API Key。
       # 自带 key（方案 A）：前端用户在设置面板填自己的 key → 存浏览器 localStorage →
       # 每次请求带 X-LLM-API-Key header → 后端 AsyncLocalStorage 注入当前请求。

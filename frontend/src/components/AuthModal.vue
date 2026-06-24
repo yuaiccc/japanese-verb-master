@@ -24,8 +24,18 @@
               placeholder="密码（至少 6 位）"
               :disabled="modal.loading"
             />
+            <TurnstileWidget
+              v-if="modal.mode === 'register' && siteKey"
+              :site-key="siteKey"
+              @token="$emit('captcha-token', $event)"
+              @error="$emit('captcha-error')"
+            />
             <p v-if="modal.error" class="auth-error">{{ modal.error }}</p>
-            <button type="submit" class="search-btn auth-submit" :disabled="modal.loading">
+            <button
+              type="submit"
+              class="search-btn auth-submit"
+              :disabled="modal.loading || (modal.mode === 'register' && siteKey && !captchaToken)"
+            >
               <span v-if="modal.loading" class="auth-spinner" aria-hidden="true"></span>
               <Icon v-else :name="modal.mode === 'register' ? 'plus' : 'login'" />
               {{ modal.loading ? '处理中…' : (modal.mode === 'register' ? '注册并登录' : '登录') }}
@@ -33,10 +43,10 @@
           </form>
           <p class="auth-switch">
             <template v-if="modal.mode === 'login'">
-              还没有账号？<button type="button" class="auth-link" @click="modal.mode = 'register'; modal.error = ''">去注册</button>
+              还没有账号？<button type="button" class="auth-link" @click="$emit('mode-change', 'register')">去注册</button>
             </template>
             <template v-else>
-              已有账号？<button type="button" class="auth-link" @click="modal.mode = 'login'; modal.error = ''">去登录</button>
+              已有账号？<button type="button" class="auth-link" @click="$emit('mode-change', 'login')">去登录</button>
             </template>
           </p>
           <p class="auth-note">未登录时数据归属访客账号；登录后记忆卡 / 练习记录 / 解锁权益按账号隔离。</p>
@@ -46,10 +56,15 @@
 
 <script setup>
 import Icon from './Icon.vue';
+import TurnstileWidget from './TurnstileWidget.vue';
 
 // 登录 / 注册弹窗（纯展示）：状态由父级 authModal 传入，提交/关闭通过事件回传
-defineProps({ modal: { type: Object, required: true } });
-defineEmits(['submit', 'close']);
+defineProps({
+  modal: { type: Object, required: true },
+  siteKey: { type: String, default: '' },
+  captchaToken: { type: String, default: '' }
+});
+defineEmits(['submit', 'close', 'mode-change', 'captcha-token', 'captcha-error']);
 </script>
 
 <style scoped>

@@ -52,6 +52,7 @@ import {
   buildStoreReviewQueue,
   createUserStore
 } from './userStore.js';
+import { getTurnstileConfig, verifyTurnstileToken } from './turnstile.js';
 import { getSceneById, getSceneCatalog, getSceneIdsForVerb, getVerbsForScene } from './sceneData.js';
 import {
   extractJapaneseTerms,
@@ -2339,6 +2340,10 @@ app.use((req, _res, next) => {
 });
 
 // 注册：用户名 + 密码，scrypt 哈希
+app.get('/api/auth/captcha-config', (_req, res) => {
+  res.json(getTurnstileConfig());
+});
+
 app.post('/api/auth/register', async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
@@ -2352,6 +2357,15 @@ app.post('/api/auth/register', async (req, res) => {
     return res.status(400).json({ error: '该用户名不可用' });
   }
   try {
+    const captcha = await verifyTurnstileToken({
+      token: req.body?.captchaToken,
+      remoteIp: req.ip,
+      expectedHostname: process.env.TURNSTILE_EXPECTED_HOSTNAME || req.hostname,
+      expectedAction: 'register'
+    });
+    if (!captcha.success) {
+      return res.status(403).json({ error: '人机验证失败，请刷新后重试', code: 'captcha_failed' });
+    }
     const exists = await userStore.findUserByUsername(username);
     if (exists) {
       return res.status(409).json({ error: '用户名已被占用' });

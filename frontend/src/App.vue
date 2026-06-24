@@ -58,7 +58,16 @@
         </div>
       </div>
 
-      <AuthModal :modal="authModal" @submit="submitAuth" @close="closeAuthModal" />
+      <AuthModal
+        :modal="authModal"
+        :site-key="turnstileSiteKey"
+        :captcha-token="turnstileToken"
+        @submit="submitAuth"
+        @close="closeAuthModal"
+        @mode-change="setAuthMode"
+        @captcha-token="turnstileToken = $event"
+        @captcha-error="authModal.error = '人机验证加载失败，请刷新后重试'"
+      />
 
       <div class="header-bottom">
         <div class="mode-switch" aria-label="功能模式">
@@ -1041,6 +1050,8 @@ axios.interceptors.request.use((config) => {
 const currentMode = ref('dict'); // 'dict' | 'credits'
 const authUser = ref(null); // 当前登录用户 { id, username }，null 表示未登录
 const authModal = ref({ open: false, mode: 'login', username: '', password: '', error: '', loading: false });
+const turnstileSiteKey = ref('');
+const turnstileToken = ref('');
 const workbenchSection = ref('dict'); // 'dict' | 'memory' | 'docs' | 'dojo'
 const isComposing = ref(false); // 跟踪输入法状态，防止回车键误触
 
@@ -1066,12 +1077,32 @@ const loadCurrentUser = async () => {
   }
 };
 
+const loadTurnstileConfig = async () => {
+  if (turnstileSiteKey.value) return;
+  try {
+    const { data } = await axios.get('/api/auth/captcha-config');
+    turnstileSiteKey.value = data.enabled ? String(data.siteKey || '') : '';
+  } catch {
+    turnstileSiteKey.value = '';
+  }
+};
+
+const setAuthMode = (mode) => {
+  authModal.value.mode = mode;
+  authModal.value.error = '';
+  turnstileToken.value = '';
+  if (mode === 'register') loadTurnstileConfig();
+};
+
 const openAuthModal = (mode = 'login') => {
   authModal.value = { open: true, mode, username: '', password: '', error: '', loading: false };
+  turnstileToken.value = '';
+  if (mode === 'register') loadTurnstileConfig();
 };
 
 const closeAuthModal = () => {
   authModal.value.open = false;
+  turnstileToken.value = '';
 };
 
 const submitAuth = async () => {
@@ -1083,7 +1114,11 @@ const submitAuth = async () => {
   m.error = '';
   try {
     const url = m.mode === 'register' ? '/api/auth/register' : '/api/auth/login';
-    const { data } = await axios.post(url, { username, password: m.password });
+    const { data } = await axios.post(url, {
+      username,
+      password: m.password,
+      ...(m.mode === 'register' ? { captchaToken: turnstileToken.value } : {})
+    });
     localStorage.setItem(AUTH_TOKEN_KEY, data.token);
     authUser.value = data.user;
     authModal.value.open = false;

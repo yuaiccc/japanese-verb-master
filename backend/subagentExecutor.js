@@ -15,6 +15,7 @@ export class SubagentExecutor {
     subagentId,
     label,
     runId = '',
+    userId = 1,
     executeTool,
     summarizeToolResult,
     writeSse,
@@ -25,6 +26,7 @@ export class SubagentExecutor {
     this.subagentId = subagentId;
     this.label = label;
     this.runId = runId;
+    this.userId = userId;
     this.executeTool = executeTool;
     this.summarizeToolResult = summarizeToolResult;
     this.writeSse = writeSse;
@@ -67,7 +69,8 @@ export class SubagentExecutor {
       subagentId: this.subagentId,
       title,
       sandbox: sandbox.describe(),
-      runId: this.runId
+      runId: this.runId,
+      userId: this.userId
     });
     startBackgroundTask(task.taskId);
     onStatus?.('started', task);

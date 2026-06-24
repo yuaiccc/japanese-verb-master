@@ -7,15 +7,14 @@ export const SubagentTaskStatus = {
   TIMED_OUT: 'timed_out'
 };
 
-import {
-  getSubagentTask,
-  listSubagentTasks as listPersistedSubagentTasks,
-  upsertSubagentTask
-} from './db.js';
-
 const backgroundTasks = new Map();
 const completedTaskHistory = [];
 const maxCompletedHistory = 120;
+let taskStore = null;
+
+export function configureSubagentTaskStore(store) {
+  taskStore = store;
+}
 
 function cloneTask(task) {
   return structuredClone(task);
@@ -38,8 +37,10 @@ function nowIso() {
 }
 
 function persistTask(task) {
-  if (!task?.taskId) return null;
-  return upsertSubagentTask(task);
+  if (!task?.taskId || !taskStore) return;
+  taskStore.upsertSubagentTask(task, task.userId).catch(error => {
+    console.error('[subagent-task] persist failed:', error?.message || error);
+  });
 }
 
 function isTerminal(status = '') {
@@ -51,10 +52,11 @@ function isTerminal(status = '') {
   ].includes(status);
 }
 
-export function createBackgroundTask({ subagentId, title, sandbox = null, runId = '' }) {
+export function createBackgroundTask({ subagentId, title, sandbox = null, runId = '', userId = 1 }) {
   const taskId = `subagent-${subagentId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const task = {
     taskId,
+    userId,
     runId,
     subagentId,
     title,
@@ -111,9 +113,10 @@ export function completeBackgroundTask(taskId, { status = SubagentTaskStatus.COM
   return task;
 }
 
-export function requestCancelBackgroundTask(taskId) {
+export function requestCancelBackgroundTask(taskId, userId = null) {
   const task = backgroundTasks.get(taskId);
   if (!task) return false;
+  if (userId !== null && Number(task.userId) !== Number(userId)) return false;
   task.cancelRequested = true;
   appendBackgroundTaskEvent(taskId, {
     type: 'cancel_requested',
@@ -128,31 +131,34 @@ export function isBackgroundTaskCancelRequested(taskId) {
   return !!backgroundTasks.get(taskId)?.cancelRequested;
 }
 
-export function getBackgroundTaskResult(taskId) {
+export async function getBackgroundTaskResult(taskId, userId) {
   const task = backgroundTasks.get(taskId) || completedTaskHistory.find(item => item.taskId === taskId);
-  if (task) return cloneTask(task);
-  return getSubagentTask(taskId);
+  if (task && Number(task.userId) === Number(userId)) return cloneTask(task);
+  return taskStore?.getSubagentTask(taskId, userId) || null;
 }
 
-export function listBackgroundTasks({ runId = '', status = '', limit = 0 } = {}) {
+export async function listBackgroundTasks({ userId, runId = '', status = '', limit = 0 } = {}) {
   const hasRunningMemoryTasks = normalized => Array.from(backgroundTasks.values()).some(task => {
+    if (Number(task.userId) !== Number(normalized.userId)) return false;
     if (normalized.runId && task.runId !== normalized.runId) return false;
     if (normalized.status && task.status !== normalized.status) return false;
     return true;
   });
   const normalizedRunId = String(runId || '').trim();
   const normalizedStatus = String(status || '').trim();
-  if (!hasRunningMemoryTasks({ runId: normalizedRunId, status: normalizedStatus })) {
-    return listPersistedSubagentTasks({
+  if (!hasRunningMemoryTasks({ userId, runId: normalizedRunId, status: normalizedStatus })) {
+    return taskStore?.listSubagentTasks({
+      userId,
       runId: normalizedRunId,
       status: normalizedStatus,
       limit
-    });
+    }) || [];
   }
   const filtered = [
     ...Array.from(backgroundTasks.values()),
     ...completedTaskHistory
   ].filter(task => {
+    if (Number(task.userId) !== Number(userId)) return false;
     if (normalizedRunId && task.runId !== normalizedRunId) return false;
     if (normalizedStatus && task.status !== normalizedStatus) return false;
     return true;
@@ -165,12 +171,13 @@ export function listBackgroundTasks({ runId = '', status = '', limit = 0 } = {})
   return sorted;
 }
 
-export function requestCancelTasksForRun(runId) {
+export function requestCancelTasksForRun(runId, userId = null) {
   const normalizedRunId = String(runId || '').trim();
   if (!normalizedRunId) return 0;
   let count = 0;
   for (const task of backgroundTasks.values()) {
     if (task.runId !== normalizedRunId) continue;
+    if (userId !== null && Number(task.userId) !== Number(userId)) continue;
     if (task.cancelRequested) continue;
     task.cancelRequested = true;
     appendBackgroundTaskEvent(task.taskId, {

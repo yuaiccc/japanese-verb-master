@@ -27,7 +27,7 @@ const h = hashPassword('secret123');
 verifyPassword('secret123', h) ? ok('verifyPassword 正确密码') : bad('verifyPassword 正确密码');
 !verifyPassword('wrong', h) ? ok('verifyPassword 错误密码拒绝') : bad('verifyPassword 错误密码应拒绝');
 const tok = signToken(4242);
-verifyToken(tok) === 4242 ? ok('token 签发/校验') : bad('token 签发/校验');
+verifyToken(tok)?.userId === 4242 ? ok('token 签发/校验') : bad('token 签发/校验');
 verifyToken(tok + 'x') === null ? ok('token 篡改拒绝') : bad('token 篡改应拒绝');
 
 // 3. 数据隔离：两个测试用户各自的记忆卡互不可见

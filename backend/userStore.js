@@ -15,6 +15,7 @@ import db, {
   writeAgentMemory as writeLocalAgentMemory
 } from './db.js';
 import { ensureAuthSchema } from './auth.js';
+import crypto from 'node:crypto';
 
 const DEFAULT_USER_ID = 1;
 
@@ -72,11 +73,69 @@ function normalizeAgentMemory(row) {
   };
 }
 
+function parseJson(value, fallback) {
+  if (value === null || value === undefined || value === '') return fallback;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeAgentRun(row) {
+  if (!row) return null;
+  return {
+    runId: row.run_id,
+    title: row.title,
+    question: row.question,
+    intentType: row.intent_type,
+    provider: row.provider,
+    model: row.model,
+    status: row.status,
+    summary: row.summary,
+    error: row.error,
+    metadata: parseJson(row.metadata, {}),
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null
+  };
+}
+
+function normalizeSubagentTask(row) {
+  if (!row) return null;
+  return {
+    taskId: row.task_id,
+    runId: row.run_id,
+    subagentId: row.subagent_id,
+    title: row.title,
+    status: row.status,
+    sandbox: parseJson(row.sandbox, {}),
+    result: parseJson(row.result, null),
+    error: row.error,
+    events: parseJson(row.events, []),
+    cancelRequested: !!row.cancel_requested,
+    createdAt: new Date(row.created_at).toISOString(),
+    startedAt: row.started_at ? new Date(row.started_at).toISOString() : null,
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+    updatedAt: new Date(row.updated_at).toISOString()
+  };
+}
+
 class LocalUserStore {
   provider = 'sqlite';
 
   async init() {
     ensureAuthSchema(db);
+    if (!db.prepare("PRAGMA table_info(users)").all().some(column => column.name === 'is_guest')) {
+      db.exec('ALTER TABLE users ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!db.prepare("PRAGMA table_info(agent_runs)").all().some(column => column.name === 'user_id')) {
+      db.exec('ALTER TABLE agent_runs ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1');
+    }
+    if (!db.prepare("PRAGMA table_info(subagent_tasks)").all().some(column => column.name === 'user_id')) {
+      db.exec('ALTER TABLE subagent_tasks ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1');
+    }
     db.exec(`
       CREATE TABLE IF NOT EXISTS payment_orders (
         out_trade_no TEXT PRIMARY KEY,
@@ -110,6 +169,22 @@ class LocalUserStore {
   async createUser(username, passwordHash) {
     const info = db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(username, passwordHash);
     return { id: Number(info.lastInsertRowid), username };
+  }
+
+  async createGuestUser() {
+    const username = `__guest__${crypto.randomUUID()}`;
+    const info = db.prepare('INSERT INTO users (username, password_hash, is_guest) VALUES (?, ?, 1)')
+      .run(username, '');
+    return { id: Number(info.lastInsertRowid), username, isGuest: true };
+  }
+
+  async claimGuestUser(userId, username, passwordHash) {
+    const info = db.prepare(`
+      UPDATE users SET username = ?, password_hash = ?, is_guest = 0
+      WHERE id = ? AND is_guest = 1
+    `).run(username, passwordHash, uid(userId));
+    if (!info.changes) return null;
+    return { id: uid(userId), username };
   }
 
   async insertPracticeRecord(record, userId) {
@@ -208,6 +283,89 @@ class LocalUserStore {
     tx();
     return { ...row, status: 'TRADE_SUCCESS', paid_at: now };
   }
+
+  async upsertAgentRun(record, userId) {
+    const now = new Date().toISOString();
+    const current = await this.getAgentRun(record.runId, userId);
+    const next = { ...current, ...record };
+    const completedAt = next.completedAt
+      || (['completed', 'failed', 'cancelled', 'timed_out'].includes(next.status) ? now : null);
+    db.prepare(`
+      INSERT INTO agent_runs (
+        run_id, user_id, title, question, intent_type, provider, model, status,
+        summary, error, metadata, created_at, updated_at, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(run_id) DO UPDATE SET
+        title = excluded.title, question = excluded.question, intent_type = excluded.intent_type,
+        provider = excluded.provider, model = excluded.model, status = excluded.status,
+        summary = excluded.summary, error = excluded.error, metadata = excluded.metadata,
+        updated_at = excluded.updated_at, completed_at = excluded.completed_at
+      WHERE agent_runs.user_id = excluded.user_id
+    `).run(
+      next.runId, uid(userId), next.title || '', next.question || '', next.intentType || 'lookup',
+      next.provider || '', next.model || '', next.status || 'running', next.summary || '',
+      next.error || '', JSON.stringify(next.metadata || {}), next.createdAt || now,
+      next.updatedAt || now, completedAt
+    );
+    return this.getAgentRun(next.runId, userId);
+  }
+
+  async getAgentRun(runId, userId) {
+    return normalizeAgentRun(db.prepare(
+      'SELECT * FROM agent_runs WHERE run_id = ? AND user_id = ?'
+    ).get(runId, uid(userId)));
+  }
+
+  async listAgentRuns({ userId, threadId = '', limit = 50 } = {}) {
+    const rows = db.prepare(`
+      SELECT * FROM agent_runs WHERE user_id = ?
+      ORDER BY datetime(updated_at) DESC, rowid DESC LIMIT ?
+    `).all(uid(userId), Math.max(1, Math.min(200, Number(limit) || 50))).map(normalizeAgentRun);
+    return threadId
+      ? rows.filter(run => String(run.metadata?.threadId || '') === String(threadId)).slice(0, limit)
+      : rows;
+  }
+
+  async upsertSubagentTask(task, userId) {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO subagent_tasks (
+        task_id, user_id, run_id, subagent_id, title, status, sandbox, result,
+        error, events, cancel_requested, created_at, started_at, completed_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET
+        status = excluded.status, sandbox = excluded.sandbox, result = excluded.result,
+        error = excluded.error, events = excluded.events,
+        cancel_requested = excluded.cancel_requested, started_at = excluded.started_at,
+        completed_at = excluded.completed_at, updated_at = excluded.updated_at
+      WHERE subagent_tasks.user_id = excluded.user_id
+    `).run(
+      task.taskId, uid(userId), task.runId || '', task.subagentId || '', task.title || '',
+      task.status || 'pending', JSON.stringify(task.sandbox || {}),
+      task.result === null || task.result === undefined ? null : JSON.stringify(task.result),
+      task.error || '', JSON.stringify(task.events || []), task.cancelRequested ? 1 : 0,
+      task.createdAt || now, task.startedAt || null, task.completedAt || null, task.updatedAt || now
+    );
+    return this.getSubagentTask(task.taskId, userId);
+  }
+
+  async getSubagentTask(taskId, userId) {
+    return normalizeSubagentTask(db.prepare(
+      'SELECT * FROM subagent_tasks WHERE task_id = ? AND user_id = ?'
+    ).get(taskId, uid(userId)));
+  }
+
+  async listSubagentTasks({ userId, runId = '', status = '', limit = 50 } = {}) {
+    const clauses = ['user_id = ?'];
+    const params = [uid(userId)];
+    if (runId) { clauses.push('run_id = ?'); params.push(runId); }
+    if (status) { clauses.push('status = ?'); params.push(status); }
+    params.push(Math.max(1, Math.min(500, Number(limit) || 50)));
+    return db.prepare(`
+      SELECT * FROM subagent_tasks WHERE ${clauses.join(' AND ')}
+      ORDER BY datetime(updated_at) DESC, rowid DESC LIMIT ?
+    `).all(...params).map(normalizeSubagentTask);
+  }
 }
 
 class PostgresUserStore {
@@ -229,6 +387,7 @@ class PostgresUserStore {
         id BIGSERIAL PRIMARY KEY,
         username TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
+        is_guest BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       CREATE TABLE IF NOT EXISTS practice_records (
@@ -310,7 +469,43 @@ class PostgresUserStore {
         unlocked_at TIMESTAMPTZ NOT NULL,
         PRIMARY KEY (user_id, key)
       );
+      CREATE TABLE IF NOT EXISTS agent_runs (
+        run_id TEXT PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL DEFAULT '',
+        question TEXT NOT NULL DEFAULT '',
+        intent_type TEXT NOT NULL DEFAULT 'lookup',
+        provider TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'running',
+        summary TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        completed_at TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_user_updated ON agent_runs(user_id, updated_at DESC);
+      CREATE TABLE IF NOT EXISTS subagent_tasks (
+        task_id TEXT PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL DEFAULT '',
+        subagent_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        sandbox JSONB NOT NULL DEFAULT '{}'::jsonb,
+        result JSONB,
+        error TEXT NOT NULL DEFAULT '',
+        events JSONB NOT NULL DEFAULT '[]'::jsonb,
+        cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL,
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_subagent_tasks_user_run ON subagent_tasks(user_id, run_id, updated_at DESC);
     `);
+    await this.pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_guest BOOLEAN NOT NULL DEFAULT FALSE');
     await this.pool.query(`
       INSERT INTO users (id, username, password_hash)
       VALUES (1, '__default__', '')
@@ -344,6 +539,24 @@ class PostgresUserStore {
       [username, passwordHash]
     );
     return { ...rows[0], id: Number(rows[0].id) };
+  }
+
+  async createGuestUser() {
+    const username = `__guest__${crypto.randomUUID()}`;
+    const { rows } = await this.pool.query(
+      'INSERT INTO users (username, password_hash, is_guest) VALUES ($1, $2, TRUE) RETURNING id, username',
+      [username, '']
+    );
+    return { id: Number(rows[0].id), username: rows[0].username, isGuest: true };
+  }
+
+  async claimGuestUser(userId, username, passwordHash) {
+    const { rows } = await this.pool.query(`
+      UPDATE users SET username = $1, password_hash = $2, is_guest = FALSE
+      WHERE id = $3 AND is_guest = TRUE
+      RETURNING id, username
+    `, [username, passwordHash, uid(userId)]);
+    return rows[0] ? { id: Number(rows[0].id), username: rows[0].username } : null;
   }
 
   async insertPracticeRecord(record, userId) {
@@ -603,6 +816,102 @@ class PostgresUserStore {
     } finally {
       client.release();
     }
+  }
+
+  async upsertAgentRun(record, userId) {
+    const now = new Date().toISOString();
+    const current = await this.getAgentRun(record.runId, userId);
+    const next = { ...current, ...record };
+    const completedAt = next.completedAt
+      || (['completed', 'failed', 'cancelled', 'timed_out'].includes(next.status) ? now : null);
+    const { rows } = await this.pool.query(`
+      INSERT INTO agent_runs (
+        run_id, user_id, title, question, intent_type, provider, model, status,
+        summary, error, metadata, created_at, updated_at, completed_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      ON CONFLICT(run_id) DO UPDATE SET
+        title=EXCLUDED.title, question=EXCLUDED.question, intent_type=EXCLUDED.intent_type,
+        provider=EXCLUDED.provider, model=EXCLUDED.model, status=EXCLUDED.status,
+        summary=EXCLUDED.summary, error=EXCLUDED.error, metadata=EXCLUDED.metadata,
+        updated_at=EXCLUDED.updated_at, completed_at=EXCLUDED.completed_at
+      WHERE agent_runs.user_id = EXCLUDED.user_id
+      RETURNING *
+    `, [
+      next.runId, uid(userId), next.title || '', next.question || '', next.intentType || 'lookup',
+      next.provider || '', next.model || '', next.status || 'running', next.summary || '',
+      next.error || '', JSON.stringify(next.metadata || {}), next.createdAt || now,
+      next.updatedAt || now, completedAt
+    ]);
+    return normalizeAgentRun(rows[0]);
+  }
+
+  async getAgentRun(runId, userId) {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM agent_runs WHERE run_id = $1 AND user_id = $2',
+      [runId, uid(userId)]
+    );
+    return normalizeAgentRun(rows[0]);
+  }
+
+  async listAgentRuns({ userId, threadId = '', limit = 50 } = {}) {
+    const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+    const params = [uid(userId)];
+    let where = 'user_id = $1';
+    if (threadId) {
+      params.push(String(threadId));
+      where += ` AND metadata->>'threadId' = $2`;
+    }
+    params.push(safeLimit);
+    const { rows } = await this.pool.query(`
+      SELECT * FROM agent_runs WHERE ${where}
+      ORDER BY updated_at DESC LIMIT $${params.length}
+    `, params);
+    return rows.map(normalizeAgentRun);
+  }
+
+  async upsertSubagentTask(task, userId) {
+    const now = new Date().toISOString();
+    const { rows } = await this.pool.query(`
+      INSERT INTO subagent_tasks (
+        task_id, user_id, run_id, subagent_id, title, status, sandbox, result,
+        error, events, cancel_requested, created_at, started_at, completed_at, updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      ON CONFLICT(task_id) DO UPDATE SET
+        status=EXCLUDED.status, sandbox=EXCLUDED.sandbox, result=EXCLUDED.result,
+        error=EXCLUDED.error, events=EXCLUDED.events,
+        cancel_requested=EXCLUDED.cancel_requested, started_at=EXCLUDED.started_at,
+        completed_at=EXCLUDED.completed_at, updated_at=EXCLUDED.updated_at
+      WHERE subagent_tasks.user_id = EXCLUDED.user_id
+      RETURNING *
+    `, [
+      task.taskId, uid(userId), task.runId || '', task.subagentId || '', task.title || '',
+      task.status || 'pending', JSON.stringify(task.sandbox || {}),
+      task.result === null || task.result === undefined ? null : JSON.stringify(task.result),
+      task.error || '', JSON.stringify(task.events || []), !!task.cancelRequested,
+      task.createdAt || now, task.startedAt || null, task.completedAt || null, task.updatedAt || now
+    ]);
+    return normalizeSubagentTask(rows[0]);
+  }
+
+  async getSubagentTask(taskId, userId) {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM subagent_tasks WHERE task_id = $1 AND user_id = $2',
+      [taskId, uid(userId)]
+    );
+    return normalizeSubagentTask(rows[0]);
+  }
+
+  async listSubagentTasks({ userId, runId = '', status = '', limit = 50 } = {}) {
+    const clauses = ['user_id = $1'];
+    const params = [uid(userId)];
+    if (runId) { params.push(runId); clauses.push(`run_id = $${params.length}`); }
+    if (status) { params.push(status); clauses.push(`status = $${params.length}`); }
+    params.push(Math.max(1, Math.min(500, Number(limit) || 50)));
+    const { rows } = await this.pool.query(`
+      SELECT * FROM subagent_tasks WHERE ${clauses.join(' AND ')}
+      ORDER BY updated_at DESC LIMIT $${params.length}
+    `, params);
+    return rows.map(normalizeSubagentTask);
   }
 }
 

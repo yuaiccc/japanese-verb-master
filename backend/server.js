@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import kuromoji from 'kuromoji';
 import * as wanakana from 'wanakana';
@@ -21,11 +22,6 @@ import {
   saveMemorySettings,
   getLlmSettings,
   saveLlmSettings,
-  createAgentRun,
-  updateAgentRun,
-  getAgentRun,
-  listAgentRuns,
-  listAgentRunsByThread
 } from './db.js';
 import db from './db.js';
 import { ensureKnowledgeSchema } from './knowledge/schema.js';
@@ -68,6 +64,7 @@ import { SubagentExecutor } from './subagentExecutor.js';
 import {
   getBackgroundTaskResult,
   listBackgroundTasks,
+  configureSubagentTaskStore,
   requestCancelBackgroundTask,
   requestCancelTasksForRun
 } from './subagentTaskRuntime.js';
@@ -1328,8 +1325,8 @@ function normalizeThreadTopic(topic = '') {
     .trim();
 }
 
-function buildThreadSummary({ currentRunId = '', threadId = '', limit = 10 } = {}) {
-  const runs = listAgentRunsByThread({ threadId, limit: limit + 2 })
+async function buildThreadSummary({ userId, currentRunId = '', threadId = '', limit = 10 } = {}) {
+  const runs = (await userStore.listAgentRuns({ userId, threadId, limit: limit + 2 }))
     .filter(run => run.runId !== currentRunId)
     .filter(run => ['completed', 'cancelled', 'failed'].includes(run.status))
     .slice(0, limit);
@@ -1407,8 +1404,8 @@ function buildRunCompactEntry({ message = '', intent = {}, context = {}, finalSt
   };
 }
 
-function buildPersistedCompactSummary({ currentRunId = '', threadId = '', conversation = [], model = '' } = {}) {
-  const threadSummary = buildThreadSummary({ currentRunId, threadId, limit: 8 });
+async function buildPersistedCompactSummary({ userId, currentRunId = '', threadId = '', conversation = [], model = '' } = {}) {
+  const threadSummary = await buildThreadSummary({ userId, currentRunId, threadId, limit: 8 });
   const conversationCompact = compactConversationTurns(conversation, 4);
   const rawConversation = Array.isArray(conversation) ? conversation : [];
   const rawConversationTokens = estimateChatTokens(
@@ -1719,7 +1716,7 @@ const LearningAgentState = Annotation.Root({
   usageReport: Annotation({ reducer: (x, y) => y ?? x, default: () => null })
 });
 
-function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits = [] }) {
+function createLearningAgentGraph({ res, closedRef, intent, runId, userId, knowledgeHits = [] }) {
   const specialistIds = selectSpecialistSubagents(intent);
   // 工具结果在 toolCalls 里会被摘要截断为字符串，无法回取结构化命中；
   // 这里包一层，把 knowledge_search 的原始命中收集到请求级数组，供 done 事件引用。
@@ -1734,6 +1731,7 @@ function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits
     subagentId: 'researcher',
     label: 'Researcher',
     runId,
+    userId,
     executeTool: executeToolWithKnowledge,
     summarizeToolResult,
     writeSse,
@@ -1745,6 +1743,7 @@ function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits
     subagentId: 'memory_manager',
     label: 'Memory Manager',
     runId,
+    userId,
     executeTool: executeAgentTool,
     summarizeToolResult,
     writeSse,
@@ -1756,6 +1755,7 @@ function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits
     subagentId: 'tutor',
     label: 'Tutor',
     runId,
+    userId,
     executeTool: executeAgentTool,
     summarizeToolResult,
     writeSse,
@@ -2006,6 +2006,7 @@ function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits
     graph = graph.addNode('example_designer', buildSpecialistNodeExecutor({
       specialistId: 'example_designer',
       runId,
+      userId,
       queueNote: '正在整理场景例句 brief',
       stateKey: 'example_designer',
       title: 'Example Coach',
@@ -2024,6 +2025,7 @@ function createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits
     graph = graph.addNode('practice_coach', buildSpecialistNodeExecutor({
       specialistId: 'practice_coach',
       runId,
+      userId,
       queueNote: '正在按画像整理练习 brief',
       stateKey: 'practice_coach',
       title: 'Practice Coach',
@@ -2298,6 +2300,7 @@ function lookupWordJisho(keyword) {
 // 初始化 Ollama
 const app = express();
 const userStore = await createUserStore();
+configureSubagentTaskStore(userStore);
 const PORT = process.env.PORT || 3456;
 // 容器环境（Render/Docker/Fly 等）必须监听 0.0.0.0 才能从外部访问；
 // 本地默认绑回环更安全。Render 自动注入 RENDER=true 让我们识别。
@@ -2315,6 +2318,40 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-LLM-API-Key', 'X-LLM-Provider', 'X-LLM-Base-Url', 'X-LLM-Model']
 }));
 app.use(express.json());
+app.set('trust proxy', 1);
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: '注册请求过于频繁，请稍后再试' }
+});
+const guestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: '访客身份创建过于频繁，请稍后再试' }
+});
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: '登录尝试过于频繁，请稍后再试' }
+});
+const agentLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: req => req.isAuthed || req.isGuest
+    ? `user:${req.userId}`
+    : `ip:${ipKeyGenerator(req.ip)}`,
+  message: { error: 'Agent 请求过于频繁，请稍后再试' }
+});
 
 // 请求级 LLM 配置覆盖：前端把用户的 key/配置放在 header 里，每请求独立、不入库；
 // getRuntimeLlmSettings 取此 store 作最高优先级，避免共享一把 key 被打爆额度。
@@ -2344,7 +2381,20 @@ app.get('/api/auth/captcha-config', (_req, res) => {
   res.json(getTurnstileConfig());
 });
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/guest', guestLimiter, async (req, res) => {
+  if (req.isAuthed || req.isGuest) {
+    return res.json({ token: req.headers.authorization?.slice(7) || '', guest: req.isGuest });
+  }
+  try {
+    const guest = await userStore.createGuestUser();
+    res.status(201).json({ token: signToken(guest.id, { guest: true }), guest: true });
+  } catch (error) {
+    console.error('[auth] guest identity failed:', error);
+    res.status(500).json({ error: '访客身份初始化失败' });
+  }
+});
+
+app.post('/api/auth/register', registerLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
   if (username.length < 2 || username.length > 32) {
@@ -2370,7 +2420,13 @@ app.post('/api/auth/register', async (req, res) => {
     if (exists) {
       return res.status(409).json({ error: '用户名已被占用' });
     }
-    const user = await userStore.createUser(username, hashPassword(password));
+    const passwordHash = hashPassword(password);
+    const user = req.isGuest
+      ? await userStore.claimGuestUser(req.userId, username, passwordHash)
+      : await userStore.createUser(username, passwordHash);
+    if (!user) {
+      return res.status(409).json({ error: '访客身份已失效，请刷新后重试' });
+    }
     res.status(201).json({ token: signToken(user.id), user });
   } catch (error) {
     if (error?.code === '23505' || String(error?.message || '').includes('UNIQUE')) {
@@ -2382,7 +2438,7 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // 登录
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
   try {
@@ -2399,6 +2455,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 // 当前用户：未登录返回 null（前端据此显示登录入口）
 app.get('/api/auth/me', async (req, res) => {
+  if (req.isGuest) return res.json({ user: null, guest: true });
   if (!req.isAuthed) return res.json({ user: null });
   try {
     const row = await userStore.findUserById(req.userId);
@@ -3257,17 +3314,18 @@ app.post('/api/integrations/feishu/webhook', (req, res) => {
   });
 });
 
-app.get('/api/subagent-tasks', (req, res) => {
+app.get('/api/subagent-tasks', async (req, res) => {
   const limit = Math.max(0, Number.parseInt(String(req.query.limit || '0'), 10) || 0);
-  res.json(listBackgroundTasks({
+  res.json(await listBackgroundTasks({
+    userId: req.userId,
     runId: String(req.query.runId || ''),
     status: String(req.query.status || ''),
     limit
   }));
 });
 
-app.get('/api/subagent-tasks/:taskId', (req, res) => {
-  const task = getBackgroundTaskResult(req.params.taskId);
+app.get('/api/subagent-tasks/:taskId', async (req, res) => {
+  const task = await getBackgroundTaskResult(req.params.taskId, req.userId);
   if (!task) {
     return res.status(404).json({ error: 'Task not found.' });
   }
@@ -3275,43 +3333,47 @@ app.get('/api/subagent-tasks/:taskId', (req, res) => {
 });
 
 app.post('/api/subagent-tasks/:taskId/cancel', (req, res) => {
-  const ok = requestCancelBackgroundTask(req.params.taskId);
+  const ok = requestCancelBackgroundTask(req.params.taskId, req.userId);
   if (!ok) {
     return res.status(404).json({ error: 'Task not found.' });
   }
   res.json({ ok: true, taskId: req.params.taskId });
 });
 
-app.get('/api/agent-runs', (req, res) => {
+app.get('/api/agent-runs', async (req, res) => {
   const limit = Math.max(1, Number.parseInt(String(req.query.limit || '30'), 10) || 30);
   const threadId = String(req.query.threadId || '');
-  res.json(threadId ? listAgentRunsByThread({ threadId, limit }) : listAgentRuns(limit));
+  res.json(await userStore.listAgentRuns({ userId: req.userId, threadId, limit }));
 });
 
-app.get('/api/agent-runs/:runId', (req, res) => {
-  const run = getAgentRun(req.params.runId);
+app.get('/api/agent-runs/:runId', async (req, res) => {
+  const run = await userStore.getAgentRun(req.params.runId, req.userId);
   if (!run) {
     return res.status(404).json({ error: 'Run not found.' });
   }
   res.json(run);
 });
 
-app.get('/api/agent-thread-summary', (req, res) => {
+app.get('/api/agent-thread-summary', async (req, res) => {
   const limit = Math.max(1, Number.parseInt(String(req.query.limit || '8'), 10) || 8);
-  res.json(buildThreadSummary({
+  res.json(await buildThreadSummary({
+    userId: req.userId,
     currentRunId: String(req.query.currentRunId || ''),
     threadId: String(req.query.threadId || ''),
     limit
   }));
 });
 
-app.post('/api/agent-runs/:runId/cancel', (req, res) => {
-  updateAgentRun(req.params.runId, {
+app.post('/api/agent-runs/:runId/cancel', async (req, res) => {
+  const existingRun = await userStore.getAgentRun(req.params.runId, req.userId);
+  if (!existingRun) return res.status(404).json({ error: 'Run not found.' });
+  const updated = await userStore.upsertAgentRun({
+    runId: req.params.runId,
     status: 'cancelled',
     error: 'Cancellation requested by user',
     summary: '运行被用户主动停止。'
-  });
-  const cancelled = requestCancelTasksForRun(req.params.runId);
+  }, req.userId);
+  const cancelled = requestCancelTasksForRun(req.params.runId, req.userId);
   res.json({ ok: true, runId: req.params.runId, cancelled });
 });
 
@@ -3791,7 +3853,7 @@ async function runToolCallingAgent({ message, context = {} }) {
 }
 
 // Tool-calling Agent：LLM 决策，后端执行工具，再汇总答案
-app.post('/api/agent/run', async (req, res) => {
+app.post('/api/agent/run', agentLimiter, async (req, res) => {
   try {
     const { message, context = {} } = req.body || {};
     if (!message || !message.trim()) {
@@ -3835,7 +3897,7 @@ app.post('/api/agent/run', async (req, res) => {
 });
 
 // LangGraph streaming multi-agent runtime：Planner -> Researcher(tools) -> Tutor(tokens) -> Memory Manager
-app.post('/api/agent/stream', async (req, res) => {
+app.post('/api/agent/stream', agentLimiter, async (req, res) => {
   prepareSse(res);
 
   try {
@@ -3857,7 +3919,7 @@ app.post('/api/agent/stream', async (req, res) => {
     const closedRef = { closed: false };
     res.on('close', () => {
       closedRef.closed = true;
-      requestCancelTasksForRun(runId);
+      requestCancelTasksForRun(runId, req.userId);
     });
 
     const systemPrompt = `你是 Japanese Word Master 的日语学习 Agent 编排器。
@@ -3868,7 +3930,8 @@ app.post('/api/agent/stream', async (req, res) => {
 3. 输出要适合日语学习者：对比表、例句、误用提醒、下一步练习。
 4. 若 context 里有 agentMemory（用户的长期目标/偏好/事实/任务），请据此个性化：贴合其学习目标与水平、遵守其偏好（如例句风格、解释详略），但不要生硬复述这些记忆。`;
 
-    const compactSummary = buildPersistedCompactSummary({
+    const compactSummary = await buildPersistedCompactSummary({
+      userId: req.userId,
       currentRunId: runId,
       threadId,
       conversation: context.conversation || [],
@@ -3892,7 +3955,7 @@ app.post('/api/agent/stream', async (req, res) => {
 
     const intent = detectLearningIntent(message);
     const agentQueue = getAgentQueue(intent);
-    createAgentRun({
+    await userStore.upsertAgentRun({
       runId,
       title: buildAgentRunTitle(message),
       question: message,
@@ -3907,7 +3970,7 @@ app.post('/api/agent/stream', async (req, res) => {
         threadId,
         compactSummary
       }
-    });
+    }, req.userId);
 
     writeSse(res, 'run_start', {
       id: runId,
@@ -3945,7 +4008,7 @@ app.post('/api/agent/stream', async (req, res) => {
     }
 
     const knowledgeHits = [];
-    const graph = createLearningAgentGraph({ res, closedRef, intent, runId, knowledgeHits });
+    const graph = createLearningAgentGraph({ res, closedRef, intent, runId, userId: req.userId, knowledgeHits });
     const finalState = await traceLangSmithRun({
       name: 'agent.stream',
       runType: 'chain',
@@ -4011,7 +4074,8 @@ app.post('/api/agent/stream', async (req, res) => {
     });
 
     emitAgentQueue(res, agentQueue, '', finalState.completed, '本轮 Agent 工作流完成');
-    updateAgentRun(runId, {
+    await userStore.upsertAgentRun({
+      runId,
       status: 'completed',
       summary: String(finalState.finalAnswer || '').slice(0, 500),
       metadata: {
@@ -4028,7 +4092,7 @@ app.post('/api/agent/stream', async (req, res) => {
           finalState
         })
       }
-    });
+    }, req.userId);
 
     // Agent Memory 抽取（写路径，fire-and-forget 不阻塞响应）：
     // 从本轮对话抽取值得长期记的用户目标/偏好/事实/任务 → 写入 agent_memory。
@@ -4059,25 +4123,27 @@ app.post('/api/agent/stream', async (req, res) => {
   } catch (error) {
     console.error('Streaming agent failed:', error);
     if (/cancelled/i.test(error?.message || '')) {
-      updateAgentRun(req.body?.runId || '', {
+      await userStore.upsertAgentRun({
+        runId: req.body?.runId || '',
         status: 'cancelled',
         error: error.message || 'Streaming agent cancelled.',
         summary: '运行已停止。'
-      });
+      }, req.userId);
       writeSse(res, 'cancelled', { message: error.message || 'Streaming agent cancelled.' });
     } else {
-      updateAgentRun(req.body?.runId || '', {
+      await userStore.upsertAgentRun({
+        runId: req.body?.runId || '',
         status: 'failed',
         error: error.message || 'Streaming agent failed.',
         summary: '运行失败，请检查日志。'
-      });
+      }, req.userId);
       writeSse(res, 'error', { message: error.message || 'Streaming agent failed.' });
     }
     res.end();
   }
 });
 
-app.post('/api/agent/follow-ups', async (req, res) => {
+app.post('/api/agent/follow-ups', agentLimiter, async (req, res) => {
   try {
     const { message = '', answer = '', context = {}, intent = null } = req.body || {};
     if (!message.trim()) {

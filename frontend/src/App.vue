@@ -1010,6 +1010,10 @@ import { useDojo } from './composables/useDojo';
 
 // 认证：token 存 localStorage，拦截器给每个请求自动带上 Authorization
 const AUTH_TOKEN_KEY = 'jvm_auth_token';
+const buildAuthHeaders = () => {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
 
 // 自带 LLM key（方案 A）：key 只存浏览器 localStorage，每请求带 header；不入库、不被他人共享。
 const LLM_SETTINGS_KEY = 'jvm_llm_settings';
@@ -1071,10 +1075,16 @@ const loadCurrentUser = async () => {
   try {
     const { data } = await axios.get('/api/auth/me');
     authUser.value = data.user || null;
-    if (!authUser.value) localStorage.removeItem(AUTH_TOKEN_KEY); // token 失效
+    if (!authUser.value && !data.guest) localStorage.removeItem(AUTH_TOKEN_KEY);
   } catch (e) {
     authUser.value = null;
   }
+};
+
+const ensureGuestIdentity = async () => {
+  if (localStorage.getItem(AUTH_TOKEN_KEY)) return;
+  const { data } = await axios.post('/api/auth/guest');
+  localStorage.setItem(AUTH_TOKEN_KEY, data.token);
 };
 
 const loadTurnstileConfig = async () => {
@@ -1134,6 +1144,7 @@ const submitAuth = async () => {
 const logout = async () => {
   localStorage.removeItem(AUTH_TOKEN_KEY);
   authUser.value = null;
+  await ensureGuestIdentity();
   await Promise.allSettled([loadMemoryCards?.(), loadUserProfile?.(), loadEntitlements?.()]);
 };
 
@@ -1583,7 +1594,8 @@ const cancelAgentRunTasks = async (runId = '') => {
   if (!runId) return;
   try {
     await fetch(`/api/agent-runs/${encodeURIComponent(runId)}/cancel`, {
-      method: 'POST'
+      method: 'POST',
+      headers: buildAuthHeaders()
     });
   } catch (error) {
     console.warn('Failed to cancel run tasks:', error);
@@ -1593,7 +1605,9 @@ const cancelAgentRunTasks = async (runId = '') => {
 const refreshRunTaskHistory = async (runId = '') => {
   if (!runId) return;
   try {
-    const response = await fetch(`/api/subagent-tasks?runId=${encodeURIComponent(runId)}&limit=24`);
+    const response = await fetch(`/api/subagent-tasks?runId=${encodeURIComponent(runId)}&limit=24`, {
+      headers: buildAuthHeaders()
+    });
     if (!response.ok) return;
     const tasks = await response.json();
     syncAgentRun(runId, {
@@ -1609,7 +1623,9 @@ const refreshRunTaskHistory = async (runId = '') => {
 const loadPersistedAgentRuns = async () => {
   try {
     const threadId = ensureAgentThreadId();
-    const response = await fetch(`/api/agent-runs?limit=16&threadId=${encodeURIComponent(threadId)}`);
+    const response = await fetch(`/api/agent-runs?limit=16&threadId=${encodeURIComponent(threadId)}`, {
+      headers: buildAuthHeaders()
+    });
     if (!response.ok) return;
     const runs = await response.json();
     if (!Array.isArray(runs) || runs.length === 0) return;
@@ -1639,7 +1655,7 @@ const loadAgentThreadSummary = async (currentRunId = '') => {
     const query = currentRunId
       ? `?limit=8&threadId=${encodeURIComponent(threadId)}&currentRunId=${encodeURIComponent(currentRunId)}`
       : `?limit=8&threadId=${encodeURIComponent(threadId)}`;
-    const response = await fetch(`/api/agent-thread-summary${query}`);
+    const response = await fetch(`/api/agent-thread-summary${query}`, { headers: buildAuthHeaders() });
     if (!response.ok) return;
     agentThreadSummary.value = await response.json();
   } catch (error) {
@@ -2596,7 +2612,7 @@ const runAgent = async () => {
     }, 60000);
     const response = await fetch(apiUrl('/api/agent/stream'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...buildLlmHeaders() },
+      headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(), ...buildLlmHeaders() },
       signal: controller.signal,
       body: JSON.stringify({
         runId,
@@ -3031,6 +3047,7 @@ const loadHotPlaceholderExamples = async (force = false) => {
 
 onMounted(async () => {
   ensureAgentThreadId();
+  await ensureGuestIdentity();
   await loadCurrentUser();
   initDisplayPreferences();
   startAgentPlaceholderAnimation();

@@ -43,8 +43,12 @@ export function verifyPassword(password, stored) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function signToken(userId) {
-  const payload = Buffer.from(JSON.stringify({ uid: userId, exp: Date.now() + TOKEN_TTL_MS })).toString('base64url');
+function signToken(userId, { guest = false } = {}) {
+  const payload = Buffer.from(JSON.stringify({
+    uid: userId,
+    guest: !!guest,
+    exp: Date.now() + TOKEN_TTL_MS
+  })).toString('base64url');
   const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
@@ -60,7 +64,7 @@ function verifyToken(token) {
   try {
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
     if (!data.exp || data.exp < Date.now()) return null;
-    return data.uid;
+    return { userId: data.uid, guest: !!data.guest };
   } catch {
     return null;
   }
@@ -72,9 +76,10 @@ export { signToken, verifyToken };
 export function authOptional(req, _res, next) {
   const header = req.headers?.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const uid = verifyToken(token);
-  req.userId = uid || DEFAULT_USER_ID;
-  req.isAuthed = !!uid;
+  const identity = verifyToken(token);
+  req.userId = identity?.userId || DEFAULT_USER_ID;
+  req.isAuthed = !!identity && !identity.guest;
+  req.isGuest = !!identity?.guest;
   next();
 }
 
@@ -82,11 +87,11 @@ export function authOptional(req, _res, next) {
 export function authRequired(req, res, next) {
   const header = req.headers?.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const uid = verifyToken(token);
-  if (!uid) {
+  const identity = verifyToken(token);
+  if (!identity || identity.guest) {
     return res.status(401).json({ error: '请先登录' });
   }
-  req.userId = uid;
+  req.userId = identity.userId;
   req.isAuthed = true;
   next();
 }

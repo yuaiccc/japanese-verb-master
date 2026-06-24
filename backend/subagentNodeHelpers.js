@@ -3,6 +3,7 @@ import { SubagentExecutor } from './subagentExecutor.js';
 export function buildSpecialistNodeExecutor({
   specialistId,
   runId = '',
+  userId = 1,
   queueNote,
   stateKey,
   title,
@@ -16,6 +17,7 @@ export function buildSpecialistNodeExecutor({
     subagentId: specialistId,
     label: title,
     runId,
+    userId,
     executeTool: async () => ({ ok: true }),
     summarizeToolResult: (result) => JSON.stringify(result),
     writeSse,
